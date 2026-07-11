@@ -228,3 +228,38 @@ storing TDF_Label objects as names instead of strings. Fixed to
   when clicking a face. The select callback receives a TopoDS_Shape
   but tries to iterate it (probably expecting a list).
 - Test fillet on L-bracket to verify shared instance update
+
+---
+
+## Session 3 fixes
+
+### Workplane on face working
+
+**Problem 1:** `'TopoDS_Shape' object is not iterable` in select callback.
+PythonOCC callbacks received `(shapeList, *args)` where shapeList is a
+list. OCP's `call_select_callbacks` was passing the shape directly.
+**Fix:** Wrap shape in a list: `shape_list = [shape] if shape else []`
+then call `cb(shape_list, *args)`.
+
+**Problem 2:** `Prs3d_LineAspect` constructor failing -- bare int `2`
+passed for `Aspect_TypeOfLine` argument.
+**Fix:** Import and use the enum:
+`Aspect_TypeOfLine.Aspect_TOL_DASH` instead of `2`.
+
+**Problem 3:** `gp_Dir::CrossCross() - zero norm` when picking two
+parallel faces. This is valid user error (faces must be non-parallel).
+No fix needed -- user must pick a face and a non-parallel face for U dir.
+
+**Result:** Workplane displays correctly with:
+- Cyan boundary rectangle
+- Magenta H/V construction lines
+- `wp1` entry in tree under WP node
+- Circle drawing working (tested 10mm radius at 0,0)
+
+**Known issue:** Intersection snap point not clickable at cline
+intersection. The clickable point marker is not appearing. To fix next.
+
+### Files changed this session
+- `koda_viewport.py` -- call_select_callbacks passes shapeList not shape
+- `mainwindow.py` -- Prs3d_LineAspect uses Aspect_TypeOfLine enum
+- `kodacad.py` -- wpOnFaceC debug prints removed

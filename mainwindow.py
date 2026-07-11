@@ -47,6 +47,7 @@ from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.CPnts import CPnts_AbscissaPoint
 from OCP.gp import gp_Vec
 from OCP.Prs3d import Prs3d_LineAspect
+from OCP.Aspect import Aspect_TypeOfLine
 from OCP.Quantity import (
     Quantity_Color,
     Quantity_NOC_GRAY,
@@ -775,7 +776,7 @@ class MainWindow(QMainWindow):
                 aisline.SetOwner(geomline)
                 drawer = aisline.Attributes()
                 # asp parameters: (color, type, width)
-                asp = Prs3d_LineAspect(clClr, 2, 1.0)
+                asp = Prs3d_LineAspect(clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
                 drawer.SetLineAspect(asp)
                 aisline.SetAttributes(drawer)
                 context.Display(aisline, False)  # (see comment below)
@@ -787,7 +788,7 @@ class MainWindow(QMainWindow):
                 aiscirc = AIS_Circle(wp.convert_circ_to_geomCirc(ccirc))
                 drawer = aisline.Attributes()
                 # asp parameters: (color, type, width)
-                asp = Prs3d_LineAspect(clClr, 2, 1.0)
+                asp = Prs3d_LineAspect(clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
                 drawer.SetLineAspect(asp)
                 aiscirc.SetAttributes(drawer)
                 context.Display(aiscirc, False)  # (see comment below)

@@ -138,8 +138,11 @@ def wpOnFaceC(shapeList, *args):
     if not shapeList:
         shapeList = []
     for shape in shapeList:
-        face = TopoDS.Face_s(shape)
-        win.faceStack.append(face)
+        try:
+            face = TopoDS.Face_s(shape)
+            win.faceStack.append(face)
+        except Exception as e:
+            print(f"[wpOnFaceC] TopoDS.Face_s failed: {e}")
     if len(win.faceStack) == 1:
         statusText = "Select face for workplane U direction."
         win.statusBar().showMessage(statusText)

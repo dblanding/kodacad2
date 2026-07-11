@@ -96,8 +96,11 @@ class DisplayShim:
 
     def call_select_callbacks(self, shape, *args):
         self.selected_shape = shape
+        # PythonOCC callbacks expected (shapeList, *args) where shapeList
+        # is a list of selected shapes. Wrap single shape in a list.
+        shape_list = [shape] if shape is not None else []
         for cb in self._select_callbacks:
-            try: cb(shape, *args)
+            try: cb(shape_list, *args)
             except Exception as e: print(f"Select callback error: {e}")
 
 
