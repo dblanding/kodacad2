@@ -428,9 +428,13 @@ def fillet(event=None):
             return
         edges = []
         # Test if edge(s) selected are in active part
+        # Use IsSame() instead of Python 'in' -- TopoDS shapes may be
+        # different Python objects but the same underlying geometry
         for edge in win.edgeStack:
             try:
-                if edge in topo.edges():
+                part_edges = list(topo.edges())
+                found = any(edge.IsSame(e) for e in part_edges)
+                if found:
                     edges.append(edge)
                 else:
                     print("Selected edge(s) must be in Active Part.")
@@ -448,12 +452,19 @@ def fillet(event=None):
             mkFillet.Add(fillet_r, edge)
         try:
             newPart = mkFillet.Shape()
+        except RuntimeError as e:
+            print(f"Unable to make Fillet shape. {e}")
+            win.clearCallback()
+            return
+        try:
             win.erase_shape(uid)
             dm.replace_shape(uid, newPart)
             win.draw_shape(uid)
             win.statusBar().showMessage("Fillet operation complete")
-        except RuntimeError as e:
-            print(f"Unable to make Fillet. {e}")
+        except Exception as e:
+            print(f"Unable to replace/draw shape. {e}")
+            # Try to redraw to recover
+            win.redraw()
         win.setActivePart(uid)
         win.clearCallback()
     else:
@@ -468,8 +479,16 @@ def filletC(shapeList, *args):
 
     win.lineEdit.setFocus()
     for shape in shapeList:
-        edge = TopoDS.Edge_s(shape)
-        win.edgeStack.append(edge)
+        try:
+            edge = TopoDS.Edge_s(shape)
+            win.edgeStack.append(edge)
+        except Exception:
+            win.statusBar().showMessage("Pick an edge (not a face or vertex).")
+            return
+    count = len(win.edgeStack)
+    if count:
+        win.statusBar().showMessage(
+            f"Edge {count} selected. Add more edges or enter radius + Enter.")
     if win.edgeStack and win.lineEditStack:
         fillet()
 

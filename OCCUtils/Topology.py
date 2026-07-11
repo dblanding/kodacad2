@@ -201,12 +201,10 @@ class Topo(object):
                 occ_seq.Append(current_item)
 
             self.topExp.Next()
-        # Convert occ_seq to python list
-        occ_iterator = occ_seq
-        while occ_iterator.More():
-            topo_to_add = self.topoFactory[topologyType](occ_iterator.Value())
+        # Convert occ_seq to python list (TopTools_ListOfShape is iterable in OCP)
+        for item in occ_seq:
+            topo_to_add = self.topoFactory[topologyType](item)
             seq.append(topo_to_add)
-            occ_iterator.Next()
 
         if self.ignore_orientation:
             # filter out those entities that share the same TShape

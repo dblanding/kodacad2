@@ -302,7 +302,7 @@ class DocModel:
         label = labels.Value(n)
         if self.part_dict[uid]['loc']:
             modshape.Move(self.part_dict[uid]['loc'].Inverted())
-        shape_tool.SetShape_s(label, modshape)
+        shape_tool.SetShape(label, modshape)
         color_tool.SetColor(modshape, color, XCAFDoc_ColorGen)
         shape_tool.UpdateAssemblies()
         self.parse_doc()

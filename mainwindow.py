@@ -329,8 +329,7 @@ class MainWindow(QMainWindow):
             # create node in tree view
             item_name = [str(name) if name else "", str(uid)]
             item = QTreeWidgetItem(parent_item, item_name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserTristate |
-                          Qt.ItemFlag.ItemIsUserCheckable)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             if uid in self.hide_list:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
             else:
@@ -377,11 +376,25 @@ class MainWindow(QMainWindow):
     #############################################
 
     def treeViewItemClicked(self, item):
-        """Called when treeView item is clicked"""
+        """Called when treeView item is clicked.
 
+        When a parent item is checked/unchecked, propagate the state
+        to all children (Qt6 removed automatic tristate propagation).
+        """
         self.itemClicked = item  # store item
+        # Propagate checkbox state to all children
+        state = item.checkState(0)
+        if state in (Qt.CheckState.Checked, Qt.CheckState.Unchecked):
+            self._set_children_check_state(item, state)
         if not self.inSync():  # click may have been on checkmark.
             self.adjust_draw_hide()
+
+    def _set_children_check_state(self, item, state):
+        """Recursively set all children to the same check state."""
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setCheckState(0, state)
+            self._set_children_check_state(child, state)
 
     def inSync(self):
         """Return True if unchecked items are in sync with hide_list."""
