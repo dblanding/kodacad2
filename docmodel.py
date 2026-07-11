@@ -318,7 +318,7 @@ class DocModel:
         except RuntimeError as e:
             print(e)
             return
-        component_label = shape_tool.AddComponent_s(root_label, shape, True)
+        component_label = shape_tool.AddComponent(root_label, shape, True)
         entry = get_label_entry(component_label)
         ref_label = TDF_Label()
         isRef = shape_tool.GetReferredShape_s(component_label, ref_label)
@@ -342,7 +342,7 @@ class DocModel:
         except RuntimeError as e:
             print(e)
             return
-        new_label = shape_tool.AddComponent_s(asyLabel, shape, True)
+        new_label = shape_tool.AddComponent(asyLabel, shape, True)
         entry = get_label_entry(new_label)
         ref_label = TDF_Label()
         isRef = shape_tool.GetReferredShape_s(new_label, ref_label)
@@ -543,13 +543,13 @@ def load_stp_undr_top(dm):
     target_shape = TopoDS_Compound()
     t_builder = BRep_Builder()
     t_builder.MakeCompound(target_shape)
-    target_proto = Prototype(target_shape, shape_tool.AddShape_s(target_shape, True))
+    target_proto = Prototype(target_shape, shape_tool.AddShape(target_shape, True))
 
     root_shape = TopoDS_Compound()
     r_builder = BRep_Builder()
     r_builder.MakeCompound(root_shape)
     r_builder.Add(root_shape, target_proto.shape)
-    root_proto = Prototype(root_shape, shape_tool.AddShape_s(root_shape, True))
+    root_proto = Prototype(root_shape, shape_tool.AddShape(root_shape, True))
     TDataStd_Name.Set_s(root_proto.label, TCollection_ExtendedString("Top"))
 
     step_file_name, step_doc, step_app = _load_step()

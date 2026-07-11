@@ -321,3 +321,92 @@ Key details for OCP:
 gesture -- `mouseReleaseEvent` is never called for RMB. Need to either
 override `FlushViewEvents` or use Qt `eventFilter` to intercept before
 `AIS_ViewController`. Deferred to future session.
+
+---
+
+## Session 5 fixes
+
+### Extrude / Create 3D part working
+
+**Problem:** `shape_tool.AddComponent_s()` and `shape_tool.AddShape_s()`
+don't exist -- these are instance methods, not static.
+**Fix:** Remove `_s` suffix: `shape_tool.AddComponent()`, `shape_tool.AddShape()`.
+
+**Result:** Full Create 3D workflow works end-to-end:
+  1. Place workplane on a face (two face picks)
+  2. Draw profile (circle, rectangle, etc.)
+  3. Extrude to create new part
+  4. New part appears in tree under active assembly
+  5. Shared instances: part appears in ALL instances of the active assembly
+
+### Load / Modify / Save Demo: COMPLETE
+
+All steps from `Load_Modify_Save_Demo.pdf` pass successfully:
+  - Load STEP at top
+  - Set active part, apply fillet (both L-brackets update simultaneously)
+  - Rename part (all shared instances update)
+  - Save to STEP
+  - Reload saved STEP -- modifications preserved
+
+**Known issues (pre-existing in original KodaCAD, not regressions):**
+
+1. **Color loss on STEP export:** Modified parts lose their color when
+   saved and reloaded. The STEP translator string changes from
+   "Open CASCADE STEP translator 7.41.2.4" (old KodaCAD/PythonOCC)
+   to "Open CASCADE STEP translator 7.91.2.4" (KodaCAD2/OCP) --
+   reflects newer OCCT version, not a bug.
+
+2. **New part position wrong (pre-existing KodaCAD issue):**
+   When a new part is created on a workplane inside a positioned assembly,
+   the part is placed in world coordinates but then gets transformed by
+   the containing assembly's location, moving it to the wrong position.
+   The fix (documented in `kodacad_assembly_structure.pdf`) is to apply
+   the INVERSE transform of the containing assembly before storing:
+   `modshape.Move(containing_assy_loc.Inverted())`
+   This was the unsolved problem when KodaCAD development paused, and
+   is the next major item for KodaCAD2 development.
+
+---
+
+## Future enhancements (to-do)
+
+### RMB FitAll (attempted, blocked)
+RMB click in viewport should call `view.FitAll()`. Attempted via
+`mouseReleaseEvent` but `AIS_ViewController` consumes RMB events
+entirely for its own pan gesture -- `mouseReleaseEvent` is never
+called for RMB. Need Qt `eventFilter` or `FlushViewEvents` override.
+
+### Workplane label in viewport
+Display "wp1", "wp2" etc. in the lower-left corner of each workplane
+rectangle so the user knows which workplane is active at a glance.
+Possible approach: `AIS_Text2d` or `AIS_TextLabel` displayed at the
+workplane origin, or a corner of the boundary rectangle.
+
+### AIS ViewCube
+Re-add the orientation ViewCube to the viewport corner (same as
+Basicad). In Basicad this was done with `AIS_ViewCube`:
+```python
+from OCP.AIS import AIS_ViewCube
+vc = AIS_ViewCube()
+vc.SetSize(55)
+vc.SetBoxColor(Quantity_Color(...))
+context.Display(vc, False)
+context.Deactivate(vc)
+```
+The ViewCube allows click-to-orient (top/front/right/isometric).
+In Basicad, clicking the ViewCube face triggers `view.SetProj()`
+via `AIS_ViewCubeOwner`. With `AIS_ViewController` this is handled
+automatically via `FlushViewEvents`.
+
+### Intersection snap point (workplane)
+When H and V construction lines are drawn, a clickable snap point
+should appear at their intersection. Currently the point marker
+is not displayed. In original KodaCAD this used
+`display.DisplayShape(gp_Pnt(...))` -- in KodaCAD2 this needs
+`BRepBuilderAPI_MakeVertex(pnt).Shape()` to convert the point
+to a `TopoDS_Vertex` before passing to `AIS_Shape`.
+
+### Inverse transform for new parts (PRIORITY)
+Fix the new-part placement so parts appear where the user drew them
+regardless of the containing assembly's world position. See
+`kodacad_assembly_structure.pdf` for the documented fix approach.
