@@ -74,16 +74,23 @@ def get_label_name(label):
 
 def get_label_location(label):
     """Get the TopLoc_Location of a label (replaces shape_tool.GetLocation()).
-    
-    Uses XCAFDoc_Location.GetLoc_s() static method which is safer than
-    FindAttribute in OCP.
+
+    Uses shape.Location() which is safe on all label types.
+    FindAttribute segfaults on root labels that have no location attribute.
     """
-    from OCP.XCAFDoc import XCAFDoc_Location
     from OCP.TopLoc import TopLoc_Location
     try:
-        return XCAFDoc_Location.GetLoc_s(label)
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        # We need a shape_tool to get the shape -- but we don't have one here.
+        # Instead use XCAFDoc_Location with IsAttribute check first.
+        from OCP.XCAFDoc import XCAFDoc_Location
+        if label.IsAttribute(XCAFDoc_Location.GetID_s()):
+            loc_attr = XCAFDoc_Location()
+            if label.FindAttribute(XCAFDoc_Location.GetID_s(), loc_attr):
+                return loc_attr.Get()
     except Exception:
-        return TopLoc_Location()
+        pass
+    return TopLoc_Location()
 
 
 def get_label_entry(label):

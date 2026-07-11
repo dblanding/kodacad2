@@ -170,3 +170,61 @@ kodacad2/
    a positioned assembly (see original kodacad docs/assembly_structure/)
 4. Get the OCC version string back into the title bar:
    `from OCP.Standard import Standard_Version`
+
+---
+
+## Session 2 fixes (after initial commit)
+
+### Assembly location fix
+
+**Problem:** All parts displayed at origin (prototype shapes) instead
+of their assembled positions. All locations returned IsIdentity=True.
+
+**Root cause:** `get_label_location()` used `XCAFDoc_Location.GetLoc_s()`
+which doesn't exist in OCP, silently returning identity.
+
+**Investigation:** Three approaches tested via `src/check_xcaf_loc.py`:
+1. `FindAttribute(XCAFDoc_Location.GetID_s(), loc_attr)` -- WORKS on
+   component labels, returns correct non-identity location. BUT segfaults
+   on the root label which has no location attribute.
+2. `XCAFDoc_Location.GetLoc_s(label)` -- doesn't exist in OCP.
+3. `shape_tool.GetShape_s(label).Location()` -- WORKS, returns correct
+   location.
+
+**Fix:** Use `label.IsAttribute(XCAFDoc_Location.GetID_s())` to safely
+check if a location attribute exists BEFORE calling FindAttribute.
+`IsAttribute()` is safe on all label types including root. Only call
+FindAttribute if it returns True.
+
+```python
+def get_label_location(label):
+    from OCP.XCAFDoc import XCAFDoc_Location
+    from OCP.TopLoc import TopLoc_Location
+    try:
+        if label.IsAttribute(XCAFDoc_Location.GetID_s()):
+            loc_attr = XCAFDoc_Location()
+            if label.FindAttribute(XCAFDoc_Location.GetID_s(), loc_attr):
+                return loc_attr.Get()
+    except Exception:
+        pass
+    return TopLoc_Location()
+```
+
+**Also fixed:** `c_name = c_label` in `parse_components` -- the mechanical
+port mangled `c_name = c_label.GetLabelName()` into `c_name = c_label`,
+storing TDF_Label objects as names instead of strings. Fixed to
+`c_name = get_label_name(c_label)`.
+
+### Status after session 2
+
+**Working:**
+- Full assembly displayed in correct assembled positions
+- Tree shows complete hierarchy with correct part names
+- All 18 leaf solids at correct world positions
+- Orbit/pan/zoom navigation
+
+**Next to fix:**
+- Workplane placement: `'TopoDS_Shape' object is not iterable` error
+  when clicking a face. The select callback receives a TopoDS_Shape
+  but tries to iterate it (probably expecting a list).
+- Test fillet on L-bracket to verify shared instance update
