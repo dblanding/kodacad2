@@ -1,0 +1,10 @@
+[project]
+name = "kodacad2"
+version = "0.1.0"
+description = "Kodacad ported to OCP + PySide6, using uv"
+requires-python = ">=3.11"
+dependencies = [
+    "ocp",
+    "build123d",
+    "pyside6",
+]
