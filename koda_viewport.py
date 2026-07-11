@@ -128,6 +128,7 @@ class KodaViewport(QWidget):
         self._press_pos = None
         self._drag_distance = 0.0
         self._drag_threshold = 4.0
+        self._rmb_press_pos = None
 
     def paintEngine(self):
         return None  # Required for WA_PaintOnScreen
@@ -207,9 +208,10 @@ class KodaViewport(QWidget):
         self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = event.position()
-            self._drag_distance = 0.0
+        self._press_pos = event.position()
+        self._drag_distance = 0.0
+        if event.button() == Qt.MouseButton.RightButton:
+            self._rmb_press_pos = event.position()
         pt = self._vec2i(event.position())
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
         self._flush()
@@ -227,10 +229,25 @@ class KodaViewport(QWidget):
         pt = self._vec2i(event.position())
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
         self._flush()
-        if (event.button() == Qt.MouseButton.LeftButton and
-                self._press_pos is not None and
-                self._drag_distance < self._drag_threshold):
-            self._on_click()
+        if event.button() == Qt.MouseButton.LeftButton:
+            if (self._press_pos is not None and
+                    self._drag_distance < self._drag_threshold):
+                self._on_click()
+        elif event.button() == Qt.MouseButton.RightButton:
+            if self._rmb_press_pos is not None:
+                dx = event.position().x() - self._rmb_press_pos.x()
+                dy = event.position().y() - self._rmb_press_pos.y()
+                rmb_dist = (dx**2 + dy**2) ** 0.5
+                print(f"[RMB] dist={rmb_dist:.1f} threshold={self._drag_threshold}")
+                if rmb_dist < self._drag_threshold:
+                    print("[RMB] FitAll!")
+                    if self.view is not None:
+                        self.view.FitAll()
+                        self.view.ZFitAll()
+                        self.update()
+            else:
+                print("[RMB] press_pos was None")
+            self._rmb_press_pos = None
         self._press_pos = None
         self._drag_distance = 0.0
 

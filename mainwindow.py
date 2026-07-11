@@ -829,6 +829,18 @@ class MainWindow(QMainWindow):
                     context.SetColor(aisShape, color, False)
                 if transp > 0:
                     context.SetTransparency(aisShape, transp, False)
+                # Black face boundary edges
+                from OCP.Aspect import Aspect_TypeOfLine
+                from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+                drawer = aisShape.Attributes()
+                drawer.SetFaceBoundaryDraw(True)
+                black = Quantity_Color(0.0, 0.0, 0.0,
+                    Quantity_TypeOfColor.Quantity_TOC_RGB)
+                drawer.FaceBoundaryAspect().SetColor(black)
+                drawer.FaceBoundaryAspect().SetWidth(1.0)
+                drawer.FaceBoundaryAspect().SetTypeOfLine(
+                    Aspect_TypeOfLine.Aspect_TOL_SOLID)
+                context.Redisplay(aisShape, False)
             except Exception as e:
                 print(f"draw_shape error for {uid}: {e}")
         context.UpdateCurrentViewer()

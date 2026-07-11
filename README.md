@@ -263,3 +263,61 @@ intersection. The clickable point marker is not appearing. To fix next.
 - `koda_viewport.py` -- call_select_callbacks passes shapeList not shape
 - `mainwindow.py` -- Prs3d_LineAspect uses Aspect_TypeOfLine enum
 - `kodacad.py` -- wpOnFaceC debug prints removed
+
+---
+
+## Session 4 fixes
+
+### Fillet working with shared instance update (KEY MILESTONE)
+
+**Problem 1:** `TopTools_ListOfShape` has no `.More()` method in OCP.
+`_loop_topo` in `OCCUtils/Topology.py` used the old PythonOCC
+iterator pattern. **Fix:** Replace `while occ_iterator.More():` with
+`for item in occ_seq:` -- `TopTools_ListOfShape` is directly iterable
+in OCP.
+
+**Problem 2:** `edge in topo.edges()` always returned False. Python's
+`in` operator uses `__eq__` which doesn't work correctly for
+`TopoDS_Edge` objects that are geometrically identical but different
+Python objects. **Fix:** Use `any(edge.IsSame(e) for e in part_edges)`.
+
+**Problem 3:** `shape_tool.SetShape_s()` doesn't exist -- it's an
+instance method, not static. **Fix:** `shape_tool.SetShape()`.
+
+**Result:** Fillet operation works end-to-end. Both L-brackets update
+simultaneously because `replace_shape()` modifies the root XDE label
+that both instances reference. This confirms the shared-instance
+architecture is working correctly -- the primary goal of KodaCAD2.
+
+**Edge pick feedback:** `filletC` now shows "Edge N selected. Add more
+edges or enter radius + Enter." in the status bar after each successful
+edge pick.
+
+### Checkbox parent/child propagation
+
+**Problem:** Qt6 removed automatic tristate checkbox propagation.
+`ItemIsUserTristate` caused checkboxes to cycle through 3 states
+instead of propagating to children.
+
+**Fix:**
+- Removed `Qt.ItemFlag.ItemIsUserTristate` from item flags
+- Added `_set_children_check_state(item, state)` which recursively
+  sets all children to the same checked/unchecked state when a parent
+  is clicked.
+
+### Black face boundary edges
+
+Added `SetFaceBoundaryDraw(True)` to `draw_shape()` in `mainwindow.py`.
+Key details for OCP:
+- Use explicit `Quantity_Color(0.0, 0.0, 0.0, Quantity_TOC_RGB)`
+  not `Quantity_Color(Quantity_NOC_BLACK)` (wrong constructor)
+- Use `Aspect_TypeOfLine.Aspect_TOL_SOLID` not bare int
+- Must call `context.Redisplay(aisShape, False)` after setting drawer
+  attributes -- OCCT does not apply drawer changes until recomputed
+
+### Known issue: RMB FitAll not working
+
+`AIS_ViewController` consumes RMB events entirely for its own pan
+gesture -- `mouseReleaseEvent` is never called for RMB. Need to either
+override `FlushViewEvents` or use Qt `eventFilter` to intercept before
+`AIS_ViewController`. Deferred to future session.
