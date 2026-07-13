@@ -410,3 +410,81 @@ to a `TopoDS_Vertex` before passing to `AIS_Shape`.
 Fix the new-part placement so parts appear where the user drew them
 regardless of the containing assembly's world position. See
 `kodacad_assembly_structure.pdf` for the documented fix approach.
+
+---
+
+## Session 6: Drag-and-drop reparent with shared instance propagation (MILESTONE)
+
+### The Creo workflow implemented
+
+Creo's approach to placing new parts in assemblies:
+1. Create new part at ROOT level in world position (no active assembly needed)
+2. Drag part in tree to target sub-assembly
+3. Creo computes inverse transform so part stays in world position
+4. Because both L-bracket assemblies share the same XDE root label,
+   BOTH instances automatically get the new part
+
+KodaCAD2 now implements this same workflow.
+
+### Implementation: reparent_component() in docmodel.py
+
+When a tree item is dragged to a new parent:
+1. Get part's world location from `part_dict[uid]['loc']`
+2. Get target assembly's world location from `label_dict[uid]['world_loc']`
+   (stored during `parse_components` by composing the assy_loc_stack)
+3. Compute: `new_local = parent_world.Inverted() x part_world`
+4. Find target assembly's REFERRED label (ref_entry) -- the shared root
+   label that both instances point to
+5. `shape_tool.AddComponent(target_label, ref_shape.Located(new_local))`
+6. `shape_tool.RemoveComponent(comp_label)` -- remove from old location
+7. `shape_tool.UpdateAssemblies()` then `parse_doc()`
+
+Key insight: adding to the REFERRED label (e.g. `0:1:1:5` for
+l-bracket-assembly) rather than the component label means ALL shared
+instances automatically get the new component.
+
+### world_loc stored in label_dict during parse_components
+
+Assembly nodes now store `world_loc` in label_dict:
+```python
+world_loc = compose(assy_loc_stack) x a_loc
+label_dict[c_uid]['world_loc'] = world_loc
+```
+This avoids the previous brittle approach of inferring world location
+from children.
+
+### _find_label_by_entry searches component labels recursively
+
+Component labels (depth 5+) are not returned by `shape_tool.GetShapes()`.
+Added `_search_children(label, entry)` which walks `TDF_ChildIterator`
+recursively to find labels at any depth.
+
+### Display refresh after reparent
+
+`moveSelection` in TreeView walks up the Qt parent chain to find
+MainWindow (direct `self.parent()` returns an intermediate container):
+```python
+main_win = self.parent()
+while main_win is not None and not hasattr(main_win, 'ais_shape_dict'):
+    main_win = main_win.parent()
+```
+Then clears AIS context and redraws from scratch:
+```python
+main_win.canvas._display.Context.RemoveAll(False)
+main_win.ais_shape_dict.clear()
+main_win.build_tree()
+main_win.redraw()
+```
+
+### doc_linter removed from reparent_component
+
+`doc_linter` (STEP save/reload cycle) was causing label entries to change
+and losing components. Removed entirely from reparent -- direct XDE
+manipulation + `parse_doc()` is sufficient.
+
+### Result
+
+Create button on right L-bracket top face → extrude → button appears
+at root under as1. Drag button to l-bracket-assembly_2 in tree →
+button appears under BOTH l-bracket-assembly_1 AND l-bracket-assembly_2
+in tree and viewport. Show/hide works correctly.

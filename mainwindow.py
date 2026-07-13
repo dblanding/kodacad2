@@ -108,11 +108,25 @@ class TreeView(QTreeWidget):
         return False
 
     def moveSelection(self, parent, position):
-        # save the selected items
+        # Get uid info BEFORE the visual move changes the tree
         selection = [QPersistentModelIndex(i) for i in self.selectedIndexes()]
         parent_index = self.indexFromItem(parent)
         if parent_index in selection:
             return False
+        # Capture uid and new parent uid for XDE reparenting after visual move
+        # Use both selectedIndexes() and currentItem() to catch the dragged item
+        drag_items = []
+        new_parent_uid = parent.text(1) if parent else None
+        # First try selectedIndexes
+        for index in selection:
+            item = self.itemFromIndex(QModelIndex(index))
+            if item is not None:
+                drag_items.append((item.text(1), new_parent_uid))
+        # Also try currentItem as fallback
+        if not drag_items:
+            current = self.currentItem()
+            if current is not None:
+                drag_items.append((current.text(1), new_parent_uid))
         # save the drop location in case it gets moved
         target = self.model().index(position, 0, parent_index).row()
         if target < 0:
@@ -143,6 +157,27 @@ class TreeView(QTreeWidget):
                     self.insertTopLevelItem(
                         min(target, self.topLevelItemCount()), taken.pop(0)
                     )
+        # After visual tree update, perform XDE reparent with inverse transform
+        for drag_uid, new_parent_uid in drag_items:
+            if drag_uid and new_parent_uid and drag_uid in dm.label_dict:
+                if new_parent_uid in dm.label_dict:
+                    try:
+                        dm.reparent_component(drag_uid, new_parent_uid)
+                        # Full reset: clear all AIS shapes and redraw from scratch
+                        # Walk up parent chain to find MainWindow
+                        main_win = self.parent()
+                        while main_win is not None and not hasattr(main_win, "ais_shape_dict"):
+                            main_win = main_win.parent()
+                        if main_win is not None and hasattr(main_win, "ais_shape_dict"):
+                            main_win.canvas._display.Context.RemoveAll(False)
+                            main_win.ais_shape_dict.clear()
+                            main_win.build_tree()
+                            main_win.redraw()
+
+                    except Exception as e:
+                        import traceback
+                        print(f"[reparent] failed: {e}")
+                        traceback.print_exc()
         return True
 
 

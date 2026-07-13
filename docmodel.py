@@ -236,7 +236,19 @@ class DocModel:
                     self.label_dict[c_uid].update({'is_assy': True})
                     a_loc = get_label_location(c_label)
                     inv_loc = a_loc.Inverted()
-                    self.label_dict[c_uid].update({'inv_loc': inv_loc})
+                    # Compute world location of this assembly by composing
+                    # the current stack with this assembly's local loc
+                    temp_stack = list(self.assy_loc_stack)
+                    if temp_stack:
+                        world_loc = temp_stack[0]
+                        for l in temp_stack[1:]:
+                            world_loc = world_loc.Multiplied(l)
+                        world_loc = world_loc.Multiplied(a_loc)
+                    else:
+                        world_loc = a_loc
+                    self.label_dict[c_uid].update({
+                        'inv_loc': inv_loc,
+                        'world_loc': world_loc})
                     self.assy_loc_stack.append(a_loc)
                     self.assy_entry_stack.append(ref_entry)
                     self.parent_uid_stack.append(c_uid)
@@ -250,6 +262,116 @@ class DocModel:
         self.assy_entry_stack.pop()
         self.assy_loc_stack.pop()
         self.parent_uid_stack.pop()
+
+
+    def reparent_component(self, uid, new_parent_uid):
+        """Move a component to a new parent assembly in the XDE document.
+
+        Preserves world position by applying the inverse of the new parent's
+        world transform: new_local = parent_world.Inverted() x part_world
+
+        Adds the part to the TARGET assembly's root (referred) label so that
+        ALL shared instances of that assembly receive the new component.
+        """
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TopLoc import TopLoc_Location
+
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
+
+        # Get the part's world location and color
+        part_world_loc = self.part_dict.get(uid, {}).get('loc', TopLoc_Location())
+        part_color = self.part_dict.get(uid, {}).get('color')
+
+        # Get world location of target assembly from label_dict
+        parent_world_loc = self.label_dict.get(
+            new_parent_uid, {}).get('world_loc', TopLoc_Location())
+
+        # Compute new local transform: parent_world.Inverted() x part_world
+        if not parent_world_loc.IsIdentity():
+            new_local = parent_world_loc.Inverted().Multiplied(part_world_loc)
+        else:
+            new_local = part_world_loc
+
+        # Find the referred shape (root geometry) for the part being moved
+        comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+        if comp_label is None:
+            print(f"[reparent] Could not find component label for {uid}")
+            return
+
+        ref_label_entry = self.label_dict[uid].get('ref_entry')
+        ref_label = self._find_label_by_entry(ref_label_entry) if ref_label_entry else None
+        if ref_label is None:
+            print(f"[reparent] Could not find ref label for {uid}")
+            return
+
+        ref_shape = shape_tool.GetShape_s(ref_label)
+
+        # Find target assembly's ROOT label (ref_entry) so both shared
+        # instances of the target assembly receive the new component
+        new_parent_info = self.label_dict[new_parent_uid]
+        target_entry = new_parent_info.get('ref_entry') or new_parent_info['entry']
+        target_label = self._find_label_by_entry(target_entry)
+        if target_label is None:
+            print(f"[reparent] Could not find target label")
+            return
+
+        # Add component to target with correct local transform
+        located_shape = ref_shape.Located(new_local)
+        new_comp = shape_tool.AddComponent(target_label, located_shape, True)
+        set_label_name(new_comp, self.label_dict[uid]['name'])
+
+        # Set color on the new component's referred shape
+        if part_color:
+            from OCP.XCAFDoc import XCAFDoc_ColorGen
+            color_tool.SetColor(ref_shape, part_color, XCAFDoc_ColorGen)
+
+        # Remove from old parent (root level under as1)
+        shape_tool.RemoveComponent(comp_label)
+
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+
+
+    def _find_label_by_entry(self, entry):
+        """Find a TDF_Label by its entry string.
+
+        Searches both root shape labels AND component labels (depth 5+)
+        by walking the full document tree.
+        """
+        if not entry:
+            return None
+        from OCP.TDF import TDF_LabelSequence, TDF_ChildIterator
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+
+        # First try root shapes
+        labels = TDF_LabelSequence()
+        shape_tool.GetShapes(labels)
+        for i in range(1, labels.Length() + 1):
+            lbl = labels.Value(i)
+            if get_label_entry(lbl) == entry:
+                return lbl
+            # Search component labels (children of root shape labels)
+            result = self._search_children(lbl, entry)
+            if result is not None:
+                return result
+        return None
+
+    def _search_children(self, label, entry):
+        """Recursively search child labels for matching entry."""
+        from OCP.TDF import TDF_ChildIterator
+        itr = TDF_ChildIterator(label, False)
+        while itr.More():
+            child = itr.Value()
+            if get_label_entry(child) == entry:
+                return child
+            result = self._search_children(child, entry)
+            if result is not None:
+                return result
+            itr.Next()
+        return None
 
     def save_step_doc(self):
         """Export self.doc to STEP file."""
