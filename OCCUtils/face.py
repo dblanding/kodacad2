@@ -317,7 +317,7 @@ class Face(TopoDS_Face, BaseObject):
 
         """
         if isinstance(pnt, TopoDS_Vertex):
-            pnt = BRep_Tool.Pnt(pnt)
+            pnt = BRep_Tool.Pnt_s(pnt)
 
         proj = GeomAPI_ProjectPointOnSurf(pnt, self.surface, tol)
         uv = proj.LowerDistanceParameters()

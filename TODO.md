@@ -7,14 +7,6 @@ Both developer and user contributions welcome.
 
 ## 1. Broken (should work but doesn't)
 
-### Intersection snap point not clickable on workplane
-When H and V construction lines are drawn on a workplane, a yellow dot
-marker should appear at their intersection and be clickable as a snap
-point. The marker is not currently displayed because `DisplayShape(gp_Pnt)`
-fails -- `AIS_Shape` requires a `TopoDS_Shape`, not a `gp_Pnt`.
-**Fix:** convert via `BRepBuilderAPI_MakeVertex(pnt).Vertex()` before
-passing to `DisplayShape`.
-
 ### RMB FitAll not working in viewport
 Right-click in the viewport should call `view.FitAll()`. The
 `AIS_ViewController` consumes RMB events entirely for its own pan
@@ -42,6 +34,8 @@ correctly to the whole assembly, but the preview is misleading.
 After using Dynamic move to mis-align a part, picking faces for
 Mate/Align is not registered, leaving the dialog waiting
 indefinitely.
+
+### Shelling L-brkt in as1-oc-214.stp fails
 
 ---
 

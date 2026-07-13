@@ -566,7 +566,7 @@ def vertex2pnt(vertex):
     """returns a gp_Pnt from a TopoDS_Vertex"""
     from OCP.Core.BRep import BRep_Tool
 
-    return BRep_Tool.Pnt(vertex)
+    return BRep_Tool.Pnt_s(vertex)
 
 
 def adapt_edge_to_curve(edg):

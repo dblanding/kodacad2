@@ -840,7 +840,13 @@ class MainWindow(QMainWindow):
                 # 'False' above enables 'context' mode display & selection
             pntlist = wp.intersectPts()  # type <gp_Pnt>
             for point in pntlist:
-                self.canvas._display.DisplayShape(point)
+                ais_pnt = self.canvas._display.DisplayShape(point)
+                if ais_pnt is not None:
+                    # Activate vertex selection mode on snap point AIS shape
+                    from OCP.TopAbs import TopAbs_VERTEX
+                    from OCP.AIS import AIS_Shape as _AIS_Shape
+                    mode = _AIS_Shape.SelectionMode_s(TopAbs_VERTEX)
+                    context.Activate(ais_pnt, mode)
             for ccirc in wp.ccircs:
                 aiscirc = AIS_Circle(wp.convert_circ_to_geomCirc(ccirc))
                 drawer = aisline.Attributes()
@@ -942,7 +948,7 @@ class MainWindow(QMainWindow):
         logger.debug("args: %s", args)  # args = x, y mouse coords
         for shape in shapeList:
             vrtx = TopoDS.Vertex_s(shape)
-            gpPt = BRep_Tool.Pnt(vrtx)  # convert vertex to gp_Pnt
+            gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
             self.ptStack.append(gpPt)
         if len(self.ptStack) == 2:
             self.distPtPt()

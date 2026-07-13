@@ -45,6 +45,11 @@ class DisplayShim:
 
     def DisplayShape(self, shape, color=None, transparency=None, update=False):
         try:
+            # Convert gp_Pnt to TopoDS_Vertex if needed
+            from OCP.gp import gp_Pnt
+            if isinstance(shape, gp_Pnt):
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+                shape = BRepBuilderAPI_MakeVertex(shape).Vertex()
             ais = AIS_Shape(shape)
             self.Context.Display(ais, False)
             if color:

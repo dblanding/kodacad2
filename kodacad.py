@@ -101,7 +101,7 @@ def wpBy3PtsC(shapeList, *args):
 
     for shape in shapeList:
         vrtx = TopoDS.Vertex_s(shape)
-        gpPt = BRep_Tool.Pnt(vrtx)  # convert vertex to gp_Pnt
+        gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
         win.ptStack.append(gpPt)
     if len(win.ptStack) == 1:
         statusText = "Now select point 2 (wp origin)."
@@ -271,7 +271,7 @@ def revolveC(shapeList, *args):
 
     for shape in shapeList:
         vrtx = TopoDS.Vertex_s(shape)
-        gpPt = BRep_Tool.Pnt(vrtx)  # convert vertex to gp_Pnt
+        gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
         win.ptStack.append(gpPt)
     if len(win.ptStack) == 1:
         statusText = "Select 2nd point on revolve axis."

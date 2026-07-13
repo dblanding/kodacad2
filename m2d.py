@@ -40,18 +40,26 @@ class M2D:
     #############################################
 
     def add_vertex_to_xyPtStack(self, shapeList):
-        """Helper function to convert vertex to gp_Pnt and put on ptStack."""
+        """Helper function to convert vertex to gp_Pnt and put on ptStack.
+
+        Accepts TopoDS_Vertex or any TopoDS_Shape that can be cast to a vertex
+        (e.g. the snap point markers returned by context.SelectedShape()).
+        """
         wp = self.win.activeWp
         for shape in shapeList:
-            if isinstance(shape, TopoDS_Vertex):  # Guard against wrong type
+            try:
+                # Try to get a vertex -- works for both TopoDS_Vertex and
+                # TopoDS_Shape wrapping a vertex (from context.SelectedShape)
+                if not isinstance(shape, TopoDS_Vertex):
+                    shape = TopoDS.Vertex_s(shape)
                 vrtx = TopoDS.Vertex_s(shape)
-                pnt = BRep_Tool.Pnt(vrtx)  # convert vertex to type <gp_Pnt>
+                pnt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to type <gp_Pnt>
                 trsf = wp.Trsf.Inverted()  # New transform. Don't invert wp.Trsf
                 pnt.Transform(trsf)
                 pt2d = (pnt.X(), pnt.Y())  # 2d point
                 self.win.xyPtStack.append(pt2d)
-            else:
-                print(f"(Unwanted) shape type: {type(shape)}")
+            except Exception as e:
+                print(f"(Unwanted) shape type: {type(shape)}: {e}")
 
     def processLineEdit(self):
         """pop value from lineEditStack and place on floatStack or ptStack."""
