@@ -179,24 +179,17 @@ def display_new_active_wp(prev_uid, new_uid):
 def get_tag_of_active_asy():
     """Get tag of active assy, if any, else top assembly"""
 
-    tag = 1  # value of tag for first label at root (default)
-    act_asy_uid = win.activeAsyUID
-    if act_asy_uid:
-        if dm.label_dict[act_asy_uid]["is_assy"]:
-            ref_entry = dm.label_dict[act_asy_uid]["ref_entry"]
-            if ref_entry:
-                tag = int(ref_entry.split(':')[-1])
-    return tag
+    # New parts always go to root level (tag=1 = as1).
+    # User then drags to target assembly (Creo workflow).
+    # The active assembly concept is not used for part creation.
+    return 1
 
 
 def get_inv_loc_of_active_asy():
     """Get inverse location vector, if any, of active assembly"""
 
-    loc = TopLoc_Location()
-    act_asy_uid = win.activeAsyUID
-    if act_asy_uid:
-        loc = dm.label_dict[act_asy_uid]["inv_loc"]
-    return loc
+    # New parts always created at root -- no inverse transform needed.
+    return TopLoc_Location()
 
 
 def extrude():
@@ -219,10 +212,9 @@ def extrude():
             myFaceProfile.Shape(), aPrismVec).Shape()
         loc_new_part = BRepBuilderAPI_Transform(
             new_part, loc.Transformation()).Shape()
-        uid = dm.add_component_to_asy(loc_new_part, name, DEFAULT_COLOR, tag)
+        uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
         win.build_tree()
-        win.setActivePart(uid)
-        win.draw_shape(uid)
+        win.redraw()
         win.syncUncheckedToHideList()
         win.statusBar().showMessage("New part created.")
         win.clearCallback()
@@ -245,8 +237,6 @@ def revolve():
     """Revolve profile on active WP to create a new part.
     Add new part to active assembly, if any, else to Top"""
 
-    tag = get_tag_of_active_asy()
-    loc = get_inv_loc_of_active_asy()
     wp = win.activeWp
     if win.lineEditStack and len(win.ptStack) == 2:
         p2 = win.ptStack.pop()
@@ -262,10 +252,9 @@ def revolve():
         new_part = BRepPrimAPI_MakeRevol(face, revolve_axis).Shape()
         loc_new_part = BRepBuilderAPI_Transform(
             new_part, loc.Transformation()).Shape()
-        uid = dm.add_component_to_asy(loc_new_part, name, DEFAULT_COLOR, tag)
+        uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
         win.build_tree()
-        win.setActivePart(uid)
-        win.draw_shape(uid)
+        win.redraw()
         win.syncUncheckedToHideList()
         win.statusBar().showMessage("New part created.")
         win.clearCallback()
@@ -576,10 +565,14 @@ def save_doc():
     dm.save_doc()
 
 
-def load_stp_at_top():
-    """Load STEP file and assign it to self.doc
-    This effectively allows step to be a surrogate for file save/load."""
+def load_session():
+    """Load a previously saved session from STEP file.
 
+    Replaces the entire document with the loaded file.
+    The '/' root is preserved -- if the loaded file has its own root
+    assembly it appears under '/'. Repeated save/load cycles do not
+    accumulate extra '/' levels (same fix as Basicad item 30).
+    """
     win.setActivePart(0)
     win.setActiveAsy(0)
     docmodel.load_stp_at_top(dm)
@@ -588,19 +581,13 @@ def load_stp_at_top():
     win.fitAll()
 
 
-def load_stp_cmpnt():
-    """Load root level shape(s) in step file as component(s) under top."""
+def import_step():
+    """Import a STEP file as a new component under '/'.
 
+    The imported assembly appears at root level, ready to be
+    positioned and dragged into a sub-assembly.
+    """
     docmodel.load_stp_cmpnt(dm)
-    win.build_tree()
-    win.redraw()
-    win.fitAll()
-
-
-def load_stp_undr_top():
-    """Copy root label (with located components) of step file under top."""
-
-    docmodel.load_stp_undr_top(dm)
     win.build_tree()
     win.redraw()
     win.fitAll()
@@ -706,13 +693,10 @@ if __name__ == "__main__":
     win = MainWindow()
     menu = win.menuBar()
     file_menu = win.add_menu("File")
-    win.add_function_to_menu("File", "Open File", open_doc)
-    win.add_function_to_menu("File", "Save File", save_doc)
+    win.add_function_to_menu("File", "Load Session", load_session)
+    win.add_function_to_menu("File", "Save Session", dm.save_step_doc)
     file_menu.addSeparator()
-    win.add_function_to_menu("File", "Load STEP At Top", load_stp_at_top)
-    win.add_function_to_menu("File", "Load STEP Under Top", load_stp_undr_top)
-    win.add_function_to_menu("File", "Load STEP Component", load_stp_cmpnt)
-    win.add_function_to_menu("File", "Save STEP (Top)", dm.save_step_doc)
+    win.add_function_to_menu("File", "Import STEP", import_step)
     win.add_menu("Workplane")
     win.add_function_to_menu("Workplane", "At Origin, XY Plane", makeWP)
     win.add_function_to_menu("Workplane", "On face", wpOnFace)

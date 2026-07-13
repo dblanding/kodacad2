@@ -384,15 +384,24 @@ class MainWindow(QMainWindow):
         self.repopulate_2D_tree_view()
 
     def create_root_items(self):
-        """Create '2D' & '3D' root items in treeView."""
-        root_item = ["/", "0"]  # [name, uid]
-        tree_view_root = QTreeWidgetItem(self.treeView, root_item)
-        self.treeView.expandItem(tree_view_root)
-        wp_root = QTreeWidgetItem(tree_view_root, ["WP", "wp0"])
+        """Create root items in treeView.
+
+        Tree structure mirrors CoCreate:
+            WP          <- workplanes (outside 3D hierarchy)
+              wp1
+            3D          <- 3D container
+              /         <- root of 3D assembly hierarchy
+                as1     <- top assembly
+                  ...
+        """
+        wp_root = QTreeWidgetItem(self.treeView, ["WP", "wp0"])
         self.treeView.expandItem(wp_root)
-        ay_root = QTreeWidgetItem(tree_view_root, ["3D", "0:1:1.0"])
-        self.treeView.expandItem(ay_root)
-        return (ay_root, wp_root)
+        node_3d = QTreeWidgetItem(self.treeView, ["3D", "3d0"])
+        self.treeView.expandItem(node_3d)
+        slash_root = QTreeWidgetItem(node_3d, ["/", "0"])
+        self.treeView.expandItem(slash_root)
+        # Assemblies go under slash_root
+        return (slash_root, wp_root)
 
     def repopulate_2D_tree_view(self):
         """Add all workplanes to 2D section of tree view."""

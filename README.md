@@ -488,3 +488,67 @@ Create button on right L-bracket top face → extrude → button appears
 at root under as1. Drag button to l-bracket-assembly_2 in tree →
 button appears under BOTH l-bracket-assembly_1 AND l-bracket-assembly_2
 in tree and viewport. Show/hide works correctly.
+
+---
+
+## Session 7: Full Creo-style workflow + UI cleanup (MILESTONE)
+
+### Tree structure now matches CoCreate/Creo
+```
+WP
+  wp1
+3D
+  /
+    as1
+      rod-assembly_1
+      ...
+    button   <- new parts appear here, ready to drag
+```
+The `'3D'` intermediate node contains `'/'` which is the root of the
+3D assembly hierarchy. New parts and imported STEP files appear as
+direct children of `'/'`, not nested under `as1`.
+
+### New part creation workflow (Creo-style)
+1. Place workplane on target face
+2. Draw profile, extrude → new part appears under `'/'`
+3. Drag new part to target assembly in tree
+4. Both shared instances of target assembly receive the part
+
+### Key fixes
+
+**`add_component` uses `AddShape` not `AddComponent`:**
+New parts are added as free root-level shapes (siblings of `as1`),
+not as components under `as1`. This places them correctly under `'/'`.
+
+**`parse_doc` includes free root shapes:**
+After the main assembly parse, `GetFreeShapes()` is called to find
+standalone shapes at root level. Only non-assembly free shapes are
+included (prototype shapes like nut/bolt are referenced by components
+so they don't appear as free shapes).
+
+**`reparent_component` handles free root shapes:**
+Free shapes (depth 4) use `RemoveShape()` after drag.
+Component labels (depth 5) use `RemoveComponent()`.
+Previously both used `RemoveComponent` which silently failed for
+free shapes, leaving the ghost button at root level.
+
+**Name preserved on drag:**
+After `AddComponent`, the referred shape label is also named
+so instances show the correct name (not 'SOLID') in all viewers
+including CAD Assistant.
+
+**File menu simplified:**
+- `Load Session` — replaces entire doc (save/load surrogate)
+- `Save Session` — saves to STEP
+- `Import STEP` — adds component under `'/'`
+Removed: "Load STEP Under Top", "Load STEP Component",
+"Open File", "Save File" (native .xbf format -- unused).
+
+**`doc_linter` removed from `add_component` and `add_component_to_asy`:**
+The STEP save/reload cycle was scrambling label entries and causing
+stale UIDs. Direct XDE manipulation + `parse_doc()` is sufficient.
+
+### Round-trip STEP verified in CAD Assistant
+- Button color preserved ✓
+- Button name 'button' shown correctly in both shared instances ✓
+- Assembly structure preserved ✓

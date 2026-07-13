@@ -187,6 +187,34 @@ class DocModel:
         else:
             print("Something went wrong while parsing document.")
 
+        # Also include FREE simple shapes at root level that are not
+        # referred to by any component.
+        free_labels = TDF_LabelSequence()
+        shape_tool.GetFreeShapes(free_labels)
+        for i in range(1, free_labels.Length() + 1):
+            lbl = free_labels.Value(i)
+            lbl_entry = get_label_entry(lbl)
+            is_simple = shape_tool.IsSimpleShape_s(lbl)
+            is_assy = shape_tool.IsAssembly_s(lbl)
+            if not is_assy:  # include any non-assembly free shape
+                uid = lbl_entry + '.0'
+                if uid not in self.part_dict:
+                    lbl_name = get_label_name(lbl)
+                    lbl_shape = shape_tool.GetShape_s(lbl)
+                    color = Quantity_Color()
+                    color_tool.GetColor(lbl_shape, XCAFDoc_ColorSurf, color)
+                    self.part_dict[uid] = {
+                        'shape': lbl_shape,
+                        'color': color,
+                        'name': lbl_name,
+                        'loc': lbl_shape.Location()}
+                    self.label_dict[uid] = {
+                        'entry': lbl_entry,
+                        'name': lbl_name,
+                        'parent_uid': None,
+                        'ref_entry': None,
+                        'is_assy': False}
+
     def parse_components(self, comps, shape_tool, color_tool):
         """Parse components from comps (LabelSequence)."""
         for j in range(comps.Length()):
@@ -300,7 +328,11 @@ class DocModel:
             return
 
         ref_label_entry = self.label_dict[uid].get('ref_entry')
-        ref_label = self._find_label_by_entry(ref_label_entry) if ref_label_entry else None
+        if ref_label_entry:
+            ref_label = self._find_label_by_entry(ref_label_entry)
+        else:
+            # Free root shape: the component label IS the shape label
+            ref_label = comp_label
         if ref_label is None:
             print(f"[reparent] Could not find ref label for {uid}")
             return
@@ -319,15 +351,28 @@ class DocModel:
         # Add component to target with correct local transform
         located_shape = ref_shape.Located(new_local)
         new_comp = shape_tool.AddComponent(target_label, located_shape, True)
-        set_label_name(new_comp, self.label_dict[uid]['name'])
+        part_name = self.label_dict[uid]['name']
+        set_label_name(new_comp, part_name)
+        # Also name the referred shape so it shows correctly in all viewers
+        new_ref = TDF_Label()
+        if shape_tool.GetReferredShape_s(new_comp, new_ref):
+            set_label_name(new_ref, part_name)
 
         # Set color on the new component's referred shape
         if part_color:
             from OCP.XCAFDoc import XCAFDoc_ColorGen
             color_tool.SetColor(ref_shape, part_color, XCAFDoc_ColorGen)
+            if not new_ref.IsNull():
+                color_tool.SetColor(new_ref, part_color, XCAFDoc_ColorGen)
 
-        # Remove from old parent (root level under as1)
-        shape_tool.RemoveComponent(comp_label)
+        # Remove from old location
+        current_parent_uid = self.label_dict[uid].get('parent_uid')
+        if current_parent_uid:
+            # It's a component under an assembly -- use RemoveComponent
+            shape_tool.RemoveComponent(comp_label)
+        else:
+            # It's a free root shape -- use RemoveShape
+            shape_tool.RemoveShape(comp_label, True)
 
         shape_tool.UpdateAssemblies()
         self.parse_doc()
@@ -430,25 +475,21 @@ class DocModel:
         self.parse_doc()
 
     def add_component(self, shape, name, color):
-        """Add new shape to top assembly of self.doc & return uid"""
-        labels = TDF_LabelSequence()
+        """Add new shape at document root level (sibling of as1, under '/').
+
+        Uses AddShape (not AddComponent) so the new part appears at the
+        same level as as1 in the XDE document -- directly under '/' in
+        the tree. User then drags it to the target assembly (Creo workflow).
+        """
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
         color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
-        shape_tool.GetShapes(labels)
-        try:
-            root_label = labels.Value(1)
-        except RuntimeError as e:
-            print(e)
-            return
-        component_label = shape_tool.AddComponent(root_label, shape, True)
-        entry = get_label_entry(component_label)
-        ref_label = TDF_Label()
-        isRef = shape_tool.GetReferredShape_s(component_label, ref_label)
-        if isRef:
-            color_tool.SetColor(ref_label, color, XCAFDoc_ColorGen)
-        set_label_name(component_label, name)
+
+        # AddShape adds at document root (not under any assembly)
+        new_label = shape_tool.AddShape(shape, True)
+        entry = get_label_entry(new_label)
+        set_label_name(new_label, name)
+        color_tool.SetColor(new_label, color, XCAFDoc_ColorGen)
         shape_tool.UpdateAssemblies()
-        self.doc = doc_linter(self.doc)
         self.parse_doc()
         uid = self.get_uid_from_entry(entry)
         return uid
@@ -472,7 +513,6 @@ class DocModel:
             color_tool.SetColor(ref_label, color, XCAFDoc_ColorGen)
         set_label_name(new_label, name)
         shape_tool.UpdateAssemblies()
-        self.doc = doc_linter(self.doc)
         self.parse_doc()
         uid = entry + '.0'
         return uid
