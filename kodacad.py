@@ -523,8 +523,9 @@ def shell(event=None):
         workPart = win.activePart
         uid = win.activePartUID
         shellT = float(text) * win.unitscale
-        newPart = BRepOffsetAPI_MakeThickSolid(
-            workPart, faces, -shellT, 1.0e-3).Shape()
+        mkShell = BRepOffsetAPI_MakeThickSolid()
+        mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
+        newPart = mkShell.Shape()
         win.erase_shape(uid)
         dm.replace_shape(uid, newPart)
         win.draw_shape(uid)
@@ -543,8 +544,14 @@ def shellC(shapeList, *args):
 
     win.lineEdit.setFocus()
     for shape in shapeList:
-        face = TopoDS.Face_s(shape)
-        win.faceStack.append(face)
+        try:
+            face = TopoDS.Face_s(shape)
+            win.faceStack.append(face)
+            count = len(win.faceStack)
+            win.statusBar().showMessage(
+                f"Face {count} selected. Add more faces or enter thickness + Enter.")
+        except Exception as e:
+            print(f"[shellC] not a face: {e}")
     if win.faceStack and win.lineEditStack:
         shell()
 

@@ -554,14 +554,16 @@ class MainWindow(QMainWindow):
                     )
 
     def setClickedActive(self):
-        """Set item clicked in treeView Active."""
-        item = self.itemClicked
+        """Set item clicked in treeView Active.
+        Falls back to currentItem() so RMB works without prior left-click.
+        """
+        item = self.itemClicked or self.treeView.currentItem()
         if item:
             self.setItemActive(item)
             self.treeView.clearSelection()
             self.itemClicked = None
         else:
-            print("No item selected. Try first left clicking item then right clicking.")
+            print("No item selected.")
 
     def setItemActive(self, item):
         """Set (part, wp or assy) represented by treeView item to be active."""
@@ -711,13 +713,13 @@ class MainWindow(QMainWindow):
 
     def setActivePart(self, uid):
         """Change active part status in a coordinated manner."""
-        # modify status in self
         self.activePartUID = uid
-        if uid:
+        if uid and uid in dm.part_dict:
             self.activePart = dm.part_dict[uid]["shape"]
-            # show as active in treeView
             self.showItemActive(uid)
         else:
+            if uid and uid not in dm.part_dict:
+                print(f"[setActivePart] uid {uid} not in part_dict")
             self.activePart = None
 
     def setActiveWp(self, uid):

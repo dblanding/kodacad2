@@ -567,3 +567,149 @@ stale UIDs. Direct XDE manipulation + `parse_doc()` is sufficient.
 - Button color preserved ✓
 - Button name 'button' shown correctly in both shared instances ✓
 - Assembly structure preserved ✓
+
+---
+
+## Session 8: Free root shapes vs. component labels -- the key architectural lesson
+
+### The problem that consumed most of this session
+
+After implementing the Creo-style workflow (create part at root, drag to
+assembly), new parts were created as **free root shapes** via
+`shape_tool.AddShape()`. This placed them correctly under `/` in the tree
+visually, but broke fillet, shell, and all modify operations.
+
+The symptom: `win.activePart` was always `None` after setting a newly
+created part active, even though `setActivePart` appeared to be called
+correctly.
+
+### Root cause: two fundamentally different label types in XDE
+
+XDE has two distinct kinds of shape labels:
+
+**1. Free root shapes (depth 4):**
+```
+0:1:1:1   as1          <- added via AddShape, free shape
+0:1:1:2   rod-assembly  <- prototype, also free shape
+0:1:1:10  button        <- newly created part via AddShape
+```
+- Returned by `shape_tool.GetFreeShapes()`
+- Have no `ref_entry` (`ref_entry = None` in `label_dict`)
+- Are NOT components of any assembly
+- `replace_shape()` crashed because it did `ref_entry.split(':')` on None
+
+**2. Component labels (depth 5):**
+```
+0:1:1:1:1  rod-assembly_1  => 0:1:1:2   <- component of as1
+0:1:1:1:2  l-bracket-assembly_1 => 0:1:1:5
+```
+- Returned by `shape_tool.GetComponents_s(root, comps)`
+- Have `ref_entry` pointing to their prototype shape
+- `replace_shape()` modifies the prototype → all instances update
+- All modify operations (fillet, shell, mill) work correctly
+
+### Why free root shapes broke modify operations
+
+`replace_shape()` used `ref_entry.split(':')[-1]` to find the label
+index. For free root shapes, `ref_entry` is `None` → crash.
+
+`win.activePart` was being set to `None` because `setActivePart` had
+no guard: if `uid not in dm.part_dict`, it silently set `activePart=None`.
+Free root shapes WERE in `part_dict` (added by the free shapes scan), but
+after `parse_doc()` ran during the modify operation, label entries changed
+and the uid became stale.
+
+### The fix: '/' is a REAL XDE assembly, not just visual
+
+The correct solution: **new parts must be added as components, not free
+shapes.** This means `/` must be a real XDE assembly label that contains
+new parts as components.
+
+`add_component()` was changed from `AddShape` to `AddComponent`:
+
+```python
+# WRONG: creates free root shape (depth 4, ref_entry=None)
+new_label = shape_tool.AddShape(shape, True)
+
+# CORRECT: creates component under '/' root (depth 5, has ref_entry)
+root_label = free_labels.Value(1)  # '/' is first free shape
+component_label = shape_tool.AddComponent(root_label, shape, True)
+```
+
+When the document is empty (no `/` root yet), `add_component` creates one:
+```python
+if free_labels.Length() == 0:
+    root_shape = TopoDS_Compound()
+    BRep_Builder().MakeCompound(root_shape)
+    root_label = shape_tool.AddShape(root_shape, True)
+    set_label_name(root_label, "/")
+```
+
+### What this means for the document structure
+
+When a user creates a new part from scratch:
+```
+/ (0:1:1:1)              <- created automatically if needed
+  can (0:1:1:1:1)        <- component, ref_entry='0:1:1:2'
+  bottle (0:1:1:1:2)     <- component, ref_entry='0:1:1:3'
+```
+
+When a user loads a STEP file (e.g. as1-oc-214.stp):
+```
+as1 (0:1:1:1)            <- the STEP file's own root assembly
+  rod-assembly_1 ...
+```
+In this case, `as1` IS the root free shape. New parts added via
+`add_component` find `as1` as `free_labels.Value(1)` and become
+components of it -- which is correct.
+
+### The drag-and-drop reparent also benefits
+
+`reparent_component` already used `RemoveComponent` for components and
+`RemoveShape` for free root shapes. Now that all new parts are components,
+`RemoveComponent` is always used -- simpler and more reliable.
+
+### Other fixes in this session
+
+**`replace_shape` for free root shapes:**
+Added fallback: use `label_dict[uid]['entry']` when `ref_entry` is None.
+```python
+target_entry = ref_entry if ref_entry else self.label_dict[uid]['entry']
+```
+
+**`setActivePart` guard:**
+```python
+if uid and uid in dm.part_dict:
+    self.activePart = dm.part_dict[uid]["shape"]
+else:
+    self.activePart = None  # was crashing silently before
+```
+
+**`setClickedActive` RMB fix:**
+```python
+item = self.itemClicked or self.treeView.currentItem()
+```
+RMB now works without requiring a prior left-click.
+
+**`BRepOffsetAPI_MakeThickSolid` OCP API change:**
+```python
+# PythonOCC:
+newPart = BRepOffsetAPI_MakeThickSolid(workPart, faces, -shellT, 1e-3).Shape()
+
+# OCP (builder pattern):
+mkShell = BRepOffsetAPI_MakeThickSolid()
+mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1e-3)
+newPart = mkShell.Shape()
+```
+
+### Lesson for future development
+
+**Any shape that needs to be modified (fillet, shell, cut, pull, fuse)
+must be a component label (depth 5) with a valid `ref_entry`, NOT a
+free root shape (depth 4).** Always add new shapes via `AddComponent`
+under an assembly, never via `AddShape` directly at document root.
+
+The only shapes that should be free root shapes are:
+- Assembly containers (created via `AddShape` with a Compound)
+- Prototype shapes (automatically created by XDE when AddComponent
+  is called -- XDE stores the geometry at root and creates an instance)

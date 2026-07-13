@@ -20,11 +20,6 @@ saved to STEP and reloaded. Part names inside assemblies show as
 the OCCT translator string instead of the user-assigned name.
 This was a known issue in the original KodaCAD 0.2.x.
 
-### Part selection sometimes requires left-click before RMB
-The context menu (Set Active, Item Info, etc.) only works if the
-item was first left-clicked to select it. RMB on an unselected
-item shows "No item selected." This is mildly annoying.
-
 ### Dynamic move (AIS Manipulator) moves only active part
 When using Dynamic move on a sub-assembly, only the active part
 moves visually during the drag. Clicking Done applies the move
@@ -35,7 +30,14 @@ After using Dynamic move to mis-align a part, picking faces for
 Mate/Align is not registered, leaving the dialog waiting
 indefinitely.
 
-### Shelling L-brkt in as1-oc-214.stp fails
+### Double part created on extrude
+When extruding, pressing Enter once for the length and once for
+the name sometimes creates two copies of the part. Needs investigation.
+
+### Decorative '/' still showing in tree
+The visual '/' node from create_root_items() still appears above
+the real XDE '/' node. The fix was applied to mainwindow.py but
+doesn't seem to be taking effect. Low priority -- cosmetic only.
 
 ---
 

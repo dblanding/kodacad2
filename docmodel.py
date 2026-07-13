@@ -184,36 +184,10 @@ class DocModel:
         shape_tool.GetComponents_s(root_label, top_comps, subchilds)
         if top_comps.Length():
             self.parse_components(top_comps, shape_tool, color_tool)
-        else:
-            print("Something went wrong while parsing document.")
+        # If no components found, free shapes at root will be picked up below
 
-        # Also include FREE simple shapes at root level that are not
-        # referred to by any component.
-        free_labels = TDF_LabelSequence()
-        shape_tool.GetFreeShapes(free_labels)
-        for i in range(1, free_labels.Length() + 1):
-            lbl = free_labels.Value(i)
-            lbl_entry = get_label_entry(lbl)
-            is_simple = shape_tool.IsSimpleShape_s(lbl)
-            is_assy = shape_tool.IsAssembly_s(lbl)
-            if not is_assy:  # include any non-assembly free shape
-                uid = lbl_entry + '.0'
-                if uid not in self.part_dict:
-                    lbl_name = get_label_name(lbl)
-                    lbl_shape = shape_tool.GetShape_s(lbl)
-                    color = Quantity_Color()
-                    color_tool.GetColor(lbl_shape, XCAFDoc_ColorSurf, color)
-                    self.part_dict[uid] = {
-                        'shape': lbl_shape,
-                        'color': color,
-                        'name': lbl_name,
-                        'loc': lbl_shape.Location()}
-                    self.label_dict[uid] = {
-                        'entry': lbl_entry,
-                        'name': lbl_name,
-                        'parent_uid': None,
-                        'ref_entry': None,
-                        'is_assy': False}
+        # Free shapes at root are now all assemblies (/, as1, etc.)
+        # New parts are added as components, so parse_components handles them.
 
     def parse_components(self, comps, shape_tool, color_tool):
         """Parse components from comps (LabelSequence)."""
@@ -475,20 +449,38 @@ class DocModel:
         self.parse_doc()
 
     def add_component(self, shape, name, color):
-        """Add new shape at document root level (sibling of as1, under '/').
+        """Add new part as a component directly under '/' (the top assembly).
 
-        Uses AddShape (not AddComponent) so the new part appears at the
-        same level as as1 in the XDE document -- directly under '/' in
-        the tree. User then drags it to the target assembly (Creo workflow).
+        '/' is the first free shape (GetFreeShapes label 1), which is the
+        top-level assembly. Adding as a component gives the part a proper
+        ref_entry, making fillet/shell/modify operations work correctly.
         """
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
         color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
 
-        # AddShape adds at document root (not under any assembly)
-        new_label = shape_tool.AddShape(shape, True)
-        entry = get_label_entry(new_label)
-        set_label_name(new_label, name)
-        color_tool.SetColor(new_label, color, XCAFDoc_ColorGen)
+        # Get the '/' root assembly label (first free shape)
+        # If none exists (empty session), create one
+        free_labels = TDF_LabelSequence()
+        shape_tool.GetFreeShapes(free_labels)
+        if free_labels.Length() == 0:
+            # Create a root '/' assembly
+            from OCP.TopoDS import TopoDS_Compound
+            from OCP.BRep import BRep_Builder
+            root_shape = TopoDS_Compound()
+            BRep_Builder().MakeCompound(root_shape)
+            root_label = shape_tool.AddShape(root_shape, True)
+            set_label_name(root_label, "/")
+            shape_tool.GetFreeShapes(free_labels)
+        root_label = free_labels.Value(1)
+
+        # Add as component under '/' root
+        component_label = shape_tool.AddComponent(root_label, shape, True)
+        entry = get_label_entry(component_label)
+        set_label_name(component_label, name)
+        ref_label = TDF_Label()
+        if shape_tool.GetReferredShape_s(component_label, ref_label):
+            color_tool.SetColor(ref_label, color, XCAFDoc_ColorGen)
+            set_label_name(ref_label, name)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
         uid = self.get_uid_from_entry(entry)
@@ -680,22 +672,26 @@ def load_stp_at_top(dm):
 
 
 def load_stp_cmpnt(dm):
-    """Get OCAF document from STEP file and add (as component) to doc root."""
+    """Import a STEP file and add it as a component under '/' root.
+
+    Works for both simple shapes and assemblies. The imported shape
+    appears under '/' in the tree, ready to be positioned and dragged
+    into a sub-assembly.
+    """
     f_name, doc, app = _load_step()
     if doc is None:
         return
-    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    step_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    step_color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
     labels = TDF_LabelSequence()
-    shape_tool.GetFreeShapes(labels)
+    step_shape_tool.GetFreeShapes(labels)
     for j in range(labels.Length()):
         label = labels.Value(j+1)
-        shape = shape_tool.GetShape_s(label)
+        shape = step_shape_tool.GetShape_s(label)
         color = Quantity_Color()
-        name = label
-        color_tool.GetColor(shape, XCAFDoc_ColorSurf, color)
-        if shape_tool.IsSimpleShape_s(label):
-            dm.add_component(shape, name, color)
+        name = get_label_name(label) or f_name or "import"
+        step_color_tool.GetColor(shape, XCAFDoc_ColorSurf, color)
+        dm.add_component(shape, name, color)
 
 
 def load_stp_undr_top(dm):
