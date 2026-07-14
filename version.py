@@ -1,5 +1,5 @@
-APP_VERSION = "3.0.0"
-# 3.0.0 - 2026: Ported to OCP + PySide6 + uv. Creo-style workflow.
+APP_VERSION = "1.0.0"
+# 1.0.0 - 7/2026: Ported to OCP + PySide6 + uv. Creo-style workflow.
 #               Drag-to-assembly with shared instance propagation.
 #               No Conda required.
 # 0.2.2 - 4/20/2020: Incremental draw/hide of shapes, use hide_list.
