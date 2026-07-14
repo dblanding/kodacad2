@@ -20,16 +20,6 @@ saved to STEP and reloaded. Part names inside assemblies show as
 the OCCT translator string instead of the user-assigned name.
 This was a known issue in the original KodaCAD 0.2.x.
 
-### Dynamic move (AIS Manipulator) moves only active part
-When using Dynamic move on a sub-assembly, only the active part
-moves visually during the drag. Clicking Done applies the move
-correctly to the whole assembly, but the preview is misleading.
-
-### Mate/Align fails after Dynamic move
-After using Dynamic move to mis-align a part, picking faces for
-Mate/Align is not registered, leaving the dialog waiting
-indefinitely.
-
 ### Double part created on extrude
 When extruding, pressing Enter once for the length and once for
 the name sometimes creates two copies of the part. Needs investigation.
@@ -42,12 +32,6 @@ doesn't seem to be taking effect. Low priority -- cosmetic only.
 ---
 
 ## 2. Known limitations (by design, not bugs)
-
-### Modifying a shared instance in Basicad breaks sharing
-This is specific to Basicad (the companion project using build123d).
-`import_step()` collapses XDE references into independent Python
-objects, so modifying one instance makes it a copy. KodaCAD does
-NOT have this limitation -- it modifies the XDE prototype directly.
 
 ### New part position may be wrong if created in wrong context
 When creating a part via workplane → extrude, the part's world
@@ -71,12 +55,6 @@ In Basicad this was implemented using `AIS_ViewCube` with
 Display "wp1", "wp2" etc. in the lower-left corner of each
 workplane boundary rectangle so the active workplane is always
 identifiable. Possible approach: `AIS_TextLabel` at workplane origin.
-
-### Align Axis -- missing DOF steps
-The Align Axis section in the positioning dialog only aligns the
-axis direction (4 DOF). It needs two more steps:
-- Axial position (slide along the axis)
-- Radial/angular position (spin around the axis)
 
 ### Copy part/assembly
 Add "Duplicate" to the RMB context menu. Should create an
