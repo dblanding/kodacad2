@@ -102,6 +102,20 @@ def get_label_entry(label):
     return entry.ToCString()
 
 
+def get_last_component(shape_tool, assembly_label):
+    """Return the most-recently-added component label of assembly_label.
+
+    XCAFDoc_Editor.Extract_s() (unlike shape_tool.AddComponent()) only
+    returns True/False for success -- it doesn't hand back the label it
+    just created. OCAF assigns child tags in increasing order and
+    GetComponents_s returns them in that order, so the newest component
+    is reliably the last one in the sequence.
+    """
+    comps = TDF_LabelSequence()
+    shape_tool.GetComponents_s(assembly_label, comps, False)
+    return comps.Value(comps.Length())
+
+
 def create_doc():
     """Create (and return) XCAF doc and app
 
@@ -493,11 +507,19 @@ class DocModel:
         add_component() only carries a bare TopoDS_Shape into the
         session, which loses any names of nested sub-assemblies/parts
         because raw geometry has no attached XCAF label structure.
-        This method instead deep-copies the complete label subtree
-        (shape, name, color and every child component) from the
-        source document, so the names of all parts inside an imported
-        assembly are preserved in the tree view.
+        This method instead clones the complete label subtree (shape,
+        name, color and every child component) from the source
+        document using XCAFDoc_Editor.Extract -- OCCT's dedicated tool
+        for cross-document XCAF copies -- so the names of all parts
+        inside an imported assembly are preserved in the tree view.
+
+        (Earlier versions of this codebase used TDocStd_XLinkTool.Copy
+        followed by a STEP export/import round-trip (doc_linter) to
+        work around known XLinkTool inconsistencies in shape-managing
+        documents -- see docs/DEVELOPMENT_LOG.md, Session 10. Using
+        XCAFDoc_Editor.Extract directly avoids the round-trip.)
         """
+        from OCP.XCAFDoc import XCAFDoc_Editor
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
 
         # Get (or create) the '/' root assembly label (first free shape)
@@ -511,33 +533,20 @@ class DocModel:
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 
-        # Register an empty placeholder shape as a free top-level shape,
-        # then add THAT SAME shape object as a component of '/'. Because
-        # it's the identical shape instance, XCAF recognizes it as
-        # already-registered and creates a reference (not a duplicate),
-        # exactly as load_stp_undr_top does with target_proto/root_proto.
-        placeholder_shape = TopoDS_Compound()
-        BRep_Builder().MakeCompound(placeholder_shape)
-        ref_label = shape_tool.AddShape(placeholder_shape, True)
-        component_label = shape_tool.AddComponent(
-            root_label, placeholder_shape, True)
-
-        # Now deep-copy the imported label's full subtree (shape, name,
-        # color, and every child component) into the placeholder label.
-        # Since component_label refers to ref_label, this populates the
-        # component with the imported content while preserving the
-        # original names of every nested sub-part.
-        copy_label(source_label, ref_label)
-
+        # Extract_s returns True/False (success), NOT the new label --
+        # it adds the copied content as a new (last) component of
+        # root_label, so find it by comparing children before/after.
+        ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
+        if not ok:
+            print("[add_component_from_label] XCAFDoc_Editor.Extract failed")
+            return None
+        component_label = get_last_component(shape_tool, root_label)
+        entry = get_label_entry(component_label)
         set_label_name(component_label, name)
         shape_tool.UpdateAssemblies()
-
-        # Round-trip through STEP (as load_stp_undr_top also does after
-        # a cross-document copy_label) to normalize the document before
-        # re-parsing. Note: this replaces self.doc, so any label/entry
-        # captured above should not be relied on afterward.
-        self.doc = doc_linter(self.doc)
         self.parse_doc()
+        uid = self.get_uid_from_entry(entry)
+        return uid
 
     def add_component_to_asy(self, shape, name, color, tag=1):
         """Add new shape to label at root with tag & return uid"""
@@ -637,28 +646,6 @@ def set_name_from_uid(doc, uid, name):
         print(f"Index out of range {e}")
 
 
-def doc_linter(doc):
-    """Clean doc by cycling through a STEP save/load cycle."""
-    fname = "deleteme.step"
-    WS = XSControl_WorkSession()
-    step_writer = STEPCAFControl_Writer(WS, False)
-    step_writer.Transfer(doc, STEPControl_AsIs)
-    status = step_writer.Write(fname)
-    assert status == IFSelect_RetDone
-
-    temp_doc, app = create_doc()
-    step_reader = STEPCAFControl_Reader()
-    step_reader.SetColorMode(True)
-    step_reader.SetLayerMode(True)
-    step_reader.SetNameMode(True)
-    step_reader.SetMatMode(True)
-    status = step_reader.ReadFile(fname)
-    if status == IFSelect_RetDone:
-        step_reader.Transfer(temp_doc)
-        os.remove(fname)
-    return temp_doc
-
-
 def copy_label_within_doc(source_label, target_label):
     """Intra-document copy (within a document)"""
     cp_label = TDF_CopyLabel()
@@ -748,19 +735,13 @@ def load_stp_cmpnt(dm):
 
 def load_stp_undr_top(dm):
     """Add step file as a component under Top (root) label of dm.doc"""
+    from OCP.XCAFDoc import XCAFDoc_Editor
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(dm.doc.Main())
 
-    target_shape = TopoDS_Compound()
-    t_builder = BRep_Builder()
-    t_builder.MakeCompound(target_shape)
-    target_proto = Prototype(target_shape, shape_tool.AddShape(target_shape, True))
-
     root_shape = TopoDS_Compound()
-    r_builder = BRep_Builder()
-    r_builder.MakeCompound(root_shape)
-    r_builder.Add(root_shape, target_proto.shape)
-    root_proto = Prototype(root_shape, shape_tool.AddShape(root_shape, True))
-    TDataStd_Name.Set_s(root_proto.label, TCollection_ExtendedString("Top"))
+    BRep_Builder().MakeCompound(root_shape)
+    root_label = shape_tool.AddShape(root_shape, True)
+    set_label_name(root_label, "Top")
 
     step_file_name, step_doc, step_app = _load_step()
     if step_doc is None:
@@ -770,14 +751,12 @@ def load_stp_undr_top(dm):
     step_shape_tool.GetShapes(step_labels)
     step_root_label = step_labels.Value(1)
 
-    copy_label(step_root_label, target_proto.label)
+    ok = XCAFDoc_Editor.Extract_s(step_root_label, root_label)
+    if not ok:
+        print("[load_stp_undr_top] XCAFDoc_Editor.Extract failed")
+        return
+    component_label = get_last_component(shape_tool, root_label)
+    set_label_name(component_label, step_file_name)
 
-    itr = TDF_ChildIterator(root_proto.label, False)
-    while itr.More():
-        component_label = itr.Value()
-        TDataStd_Name.Set_s(component_label,
-                            TCollection_ExtendedString(step_file_name))
-        itr.Next()
     shape_tool.UpdateAssemblies()
-    dm.doc = doc_linter(dm.doc)
     dm.parse_doc()

@@ -768,19 +768,185 @@ self.parse_doc()
 it's still correct for parts created at runtime (extrude, etc.) that
 have no pre-existing label structure to preserve.
 
-**Caveat:** because `doc_linter()` replaces `self.doc` via a STEP
-save/load round-trip, any label/entry captured *before* that call is
-stale afterward -- so `add_component_from_label()` does not return a
-uid (the previous `add_component()`-style return value would have
-been wrong).
+**Note:** the original version of this fix used a placeholder-shape +
+`copy_label()` + `doc_linter()` STEP round-trip. That was replaced in
+Session 10 (below) with a single `XCAFDoc_Editor.Extract_s()` call,
+once the round-trip turned out to be compensating for a specific,
+documented gap in `TDocStd_XLinkTool.Copy` rather than being required
+in general.
 
 ### Lesson for future development
 
 **Any time content crosses from one XCAF document into another
-(imported STEP, pasted assembly, etc.), copy the label subtree via
-`copy_label()` / `TDocStd_XLinkTool`, never `GetShape_s()` +
-re-add-as-new-shape.** `GetShape_s()` is fine for geometry you're
-about to modify (fillet/shell/boolean) within a document you already
-control, but it silently discards names, colors and structure the
-moment it crosses a document boundary.
+(imported STEP, pasted assembly, etc.), copy the label subtree rather
+than calling `GetShape_s()` + re-add-as-new-shape.** `GetShape_s()` is
+fine for geometry you're about to modify (fillet/shell/boolean) within
+a document you already control, but it silently discards names,
+colors and structure the moment it crosses a document boundary. (See
+Session 10 for the specific tool to use for the cross-document copy
+itself.)
 
+
+## Session 10: doc_linter -- what it was actually fixing, and removing it
+
+**Background:** `doc_linter()` did a full STEP export/import round-trip
+on the document (write to a temp `.step` file, read it back into a
+fresh doc). It was called after every cross-document label copy
+(`copy_label()`, i.e. `TDocStd_XLinkTool.Copy`) as a "just in case"
+cleanup step, going all the way back to the initial port. It was
+already removed from `add_component`, `add_component_to_asy` and
+`reparent_component` in Sessions 6-7 ("direct XDE + parse_doc
+sufficient") -- those are single-document operations. It survived only
+in `load_stp_undr_top` and (as of Session 9) `add_component_from_label`
+-- the two operations that copy a label subtree **between two XCAF
+documents**.
+
+### Was it fixing something real?
+
+Yes. `copy_label()` used `TDocStd_XLinkTool::Copy`, and OCCT's own
+class reference for that method carries an explicit warning easy to
+miss:
+
+> "If the document manages shapes use the next way: `xlinktool.Copy
+> (L,XL); TopTools_DataMapOfShapeShape M; TNaming::ChangeShapes
+> (target,M);`"
+
+i.e. plain `XLinkTool::Copy` is documented as **insufficient for
+XCAF/XDE documents** (documents that manage shapes) -- it needs an
+extra bookkeeping step that `copy_label()` never performed. This is
+independently confirmed on the OCCT forum: a user hit the identical
+symptom (`Copy`/`CopyWithLink` "not working" on an XCAF document) and
+an OCCT team member's answer was: *"OCAF does not know anything about
+XCAF. It is better to use a special tool to copy"* -- pointing at
+`XCAFDoc_Editor`, a class OCCT added (~7.6) specifically for correct
+cross-document XCAF copies.
+
+So `doc_linter`'s STEP round-trip wasn't superstition: it was a real
+(if expensive) fix. Serializing to STEP and reading it back forces
+OCCT's STEP importer -- which *is* XCAF-aware and does the bookkeeping
+correctly -- to rebuild the whole document from scratch, papering
+over whatever `XLinkTool::Copy` left inconsistent.
+
+### The fix at the source
+
+Replaced the `copy_label()` + `doc_linter()` combination with
+`XCAFDoc_Editor.Extract_s(source_label, dest_assembly_label)`, which
+clones a label's full structure (shape, name, color, children)
+*directly as a new component of the destination assembly*, correctly,
+in one in-memory call:
+
+```python
+# OLD: placeholder shape + copy_label + doc_linter round-trip
+placeholder_shape = TopoDS_Compound()
+BRep_Builder().MakeCompound(placeholder_shape)
+ref_label = shape_tool.AddShape(placeholder_shape, True)
+component_label = shape_tool.AddComponent(root_label, placeholder_shape, True)
+copy_label(source_label, ref_label)
+set_label_name(component_label, name)
+shape_tool.UpdateAssemblies()
+self.doc = doc_linter(self.doc)   # full STEP write+read, replaces self.doc
+self.parse_doc()
+
+# NEW: one call, no round-trip
+component_label = XCAFDoc_Editor.Extract_s(source_label, root_label)
+set_label_name(component_label, name)
+shape_tool.UpdateAssemblies()
+self.parse_doc()
+```
+
+Applied to both `add_component_from_label()` (Session 9) and
+`load_stp_undr_top()`. The latter also lost its `Prototype`
+placeholder-shape dance entirely -- `Extract_s` makes the whole
+"register an empty compound, then overwrite it" trick unnecessary.
+
+`doc_linter()` itself has been deleted (nothing calls it anymore).
+`copy_label()`/`copy_label_within_doc()` were left in place as
+general-purpose OCAF utilities, though nothing currently calls them
+either.
+
+**Caveat:** `XCAFDoc_Editor` requires a reasonably recent OCCT
+(~7.6+); `uv.lock` currently pins `cadquery-ocp` 7.9.3.1.1, so this
+should be fine, but I could not run OCCT in the environment I made
+this change in to verify `Extract_s` behaves exactly as documented --
+test the Import STEP menu item (including a STEP file with a nested
+multi-part assembly) and the fillet/shell/reparent operations on an
+imported part before trusting this in production.
+
+### Lesson for future development
+
+**A slow workaround that "seems to fix something" is a signal to ask
+*why*, not a reason to leave it alone.** `doc_linter` earned its
+keep for years because nobody had traced *which specific API call*
+it was compensating for. Once traced (cross-document `XLinkTool.Copy`
+on XCAF documents), OCCT's own docs and forum pointed straight at the
+purpose-built replacement. When a defensive round-trip/retry/re-parse
+step is added and nobody's sure why, write down what it's *actually*
+covering for as soon as you find out -- even if you don't fix it
+immediately -- so it doesn't outlive its reason five sessions later.
+
+### Correction (same session, found on first real run)
+
+`XCAFDoc_Editor::Extract` returns `Standard_Boolean` (success/failure),
+**not** the new component's `TDF_Label` -- unlike `AddComponent`,
+which does return the label it creates. First pass at this fix wrongly
+did `component_label = XCAFDoc_Editor.Extract_s(...)`, which crashed
+downstream (`TDF_Tool.Entry_s` called with a bool where a label was
+expected) the moment it hit a real STEP import.
+
+Fix: call `Extract_s` for its side effect (it adds the copied content
+as the newest component of the destination assembly label), then
+retrieve that new label separately:
+
+```python
+ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
+if not ok:
+    ...  # handle failure
+component_label = get_last_component(shape_tool, root_label)
+```
+
+`get_last_component()` (new helper, next to `get_label_entry`) just
+takes `shape_tool.GetComponents_s(assembly_label, comps, False)` and
+returns `comps.Value(comps.Length())` -- OCAF assigns child tags in
+increasing order and `GetComponents_s` returns them in that order, so
+the most recently added component is reliably last in the sequence.
+
+**Lesson:** when a header comment says "Clones the label... @return
+True if successfully extracted", read `@return` literally -- don't
+pattern-match to a sibling API (`AddComponent`) that happens to return
+the thing you want. Two OCCT calls that do almost the same job can
+still differ in exactly this way.
+
+### Follow-up observation: exported session files got smaller
+
+After the Session 10 fix, a real-world session (start with a part
+under an assembly, import several more STEP models, export the
+session) produced a noticeably *smaller* STEP file than the same
+workflow did with `doc_linter` in place. Visible content (parts,
+names, colors, shared-instance edits) looked correct.
+
+**Working hypothesis (not yet confirmed):** `doc_linter`'s STEP
+write/read round-trip ran on `self.doc` -- the *whole session
+document* -- on every single import, not just the newly-imported
+content. Each BREP -> STEP-text -> BREP cycle risks a shared/referenced
+shape no longer being recognized as identical (`TShape` identity is
+not guaranteed to survive a text round-trip), which would make the
+*next* STEP export write that geometry out again per-instance instead
+of once as a shared reference. Across a session with several imports,
+that's a compounding effect. `XCAFDoc_Editor.Extract_s` never leaves
+memory, so shared-instance structure should stay exactly what OCAF's
+label graph says it is -- smaller file = less duplicated geometry,
+not lost geometry.
+
+**How to actually verify this (not yet done):** export the same test
+session from a pre-Session-10 build and the current build, then diff
+STEP entity counts:
+```bash
+grep -c "MANIFOLD_SOLID_BREP" old.step new.step
+grep -c "ADVANCED_FACE"       old.step new.step
+grep -c "COLOUR_RGB"          old.step new.step
+```
+If `new.step` has meaningfully fewer solid/face entities but the same
+part count and colors, that confirms deduplication rather than data
+loss. If a part or color is actually missing, this comparison would
+catch that too. Worth doing before relying on this in earnest,
+especially on a session with heavy use of shared/dragged instances.
