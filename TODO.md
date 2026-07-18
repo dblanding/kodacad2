@@ -7,14 +7,6 @@ Both developer and user contributions welcome.
 
 ## 1. Broken (should work but doesn't)
 
-### RMB FitAll not working in viewport
-User observes: RMB-fit makes view zoom in and out with horizontal cursor movement. LMB click to stop.
-
-Right-click in the viewport should call `view.FitAll()`. The
-`AIS_ViewController` consumes RMB events entirely for its own pan
-gesture -- `mouseReleaseEvent` is never called for RMB clicks.
-**Fix:** use Qt `eventFilter` to intercept RMB before
-`AIS_ViewController` processes it, or detect the click duration.
 
 ---
 
@@ -24,6 +16,9 @@ gesture -- `mouseReleaseEvent` is never called for RMB clicks.
 ---
 
 ## 3. Future development ideas
+
+### Positioning parts  & assemblies
+Review Creo, BasiCAD and decide on how to proceed
 
 ### ViewCube in viewport corner
 Add `AIS_ViewCube` for click-to-orient (Top/Front/Right/Isometric).

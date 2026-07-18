@@ -194,10 +194,26 @@ class KodaViewport(QWidget):
     # ── Mouse (AIS_ViewController -- crash safe) ────────────────────────
 
     def _qt_buttons_to_occt(self, qt_buttons):
+        """Convert Qt mouse buttons to OCCT flags -- LMB/MMB only.
+
+        RMB is deliberately NOT forwarded here. AIS_ViewController's
+        default gesture map binds the right button to
+        AIS_MouseGesture_Zoom (drag right button = zoom, driven by
+        horizontal cursor movement). We use RMB exclusively for our
+        own click-to-FitAll gesture (see mouseReleaseEvent), handled
+        entirely outside the ViewController. If RMB press/move events
+        are fed to _vc, every RMB click also starts OCCT's built-in
+        zoom-drag gesture -- even a few pixels of jitter between press
+        and release is enough to trigger it -- and then our own
+        view.FitAll() call changes the camera scale out from under
+        that gesture's cached start-state, leaving the view zooming
+        wildly with cursor position afterward. Excluding RMB here
+        means it never reaches the ViewController's gesture state
+        machine at all.
+        """
         result = 0
         if qt_buttons & Qt.MouseButton.LeftButton:   result |= 8192
         if qt_buttons & Qt.MouseButton.MiddleButton: result |= 16384
-        if qt_buttons & Qt.MouseButton.RightButton:  result |= 32768
         return result
 
     def _vec2i(self, pos):
@@ -243,15 +259,11 @@ class KodaViewport(QWidget):
                 dx = event.position().x() - self._rmb_press_pos.x()
                 dy = event.position().y() - self._rmb_press_pos.y()
                 rmb_dist = (dx**2 + dy**2) ** 0.5
-                print(f"[RMB] dist={rmb_dist:.1f} threshold={self._drag_threshold}")
                 if rmb_dist < self._drag_threshold:
-                    print("[RMB] FitAll!")
                     if self.view is not None:
                         self.view.FitAll()
                         self.view.ZFitAll()
                         self.update()
-            else:
-                print("[RMB] press_pos was None")
             self._rmb_press_pos = None
         self._press_pos = None
         self._drag_distance = 0.0

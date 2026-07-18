@@ -1015,3 +1015,78 @@ happened. When "the feature doesn't work" and the code for it clearly
 exists, check whether the pieces are actually wired to each other
 before assuming logic is broken -- half-finished wiring reads a lot
 like working code at a glance.
+
+## Session 12: RMB->Fit zoomed wildly by cursor horizontal position
+
+**Symptom:** RMB (click, not drag) on the viewport is supposed to Fit
+All. It did fit the view initially, but then zoomed wildly, tracking
+the cursor's horizontal position, until the next click.
+
+**User-supplied notes going in (unverified):** *"AIS_ViewController
+consumes RMB events entirely for its own pan gesture -- mouseRelease
+Event is never called for RMB clicks. Fix: use Qt eventFilter to
+intercept RMB before AIS_ViewController processes it, or detect the
+click duration."* Worth checking claims like this against the actual
+code before acting on them -- the general instinct (AIS_ViewController
+is consuming RMB for its own gesture) was right, but the specifics
+were off: `mouseReleaseEvent` *was* being called for RMB (there were
+even debug prints confirming it, left over from an earlier look at
+this), and a click-to-FitAll handler already existed and worked --
+`view.FitAll()` really was firing. The gesture AIS_ViewController
+was running underneath it was Zoom, not Pan.
+
+### Root cause
+
+`KodaViewport._qt_buttons_to_occt()` forwarded LMB, MMB, *and* RMB
+button state into `AIS_ViewController` (`self._vc`) on every mouse
+event. Confirmed via an OCCT forum thread showing the actual default
+gesture map: `AIS_MouseGestureMap` binds `Aspect_VKeyMouse_RightButton`
+to `AIS_MouseGesture_Zoom` by default -- drag-right-button-to-zoom,
+with horizontal cursor movement driving the zoom factor. That's an
+exact match for the reported symptom.
+
+So every RMB press/move/release sequence was doing two unrelated
+things at once:
+1. The app's own custom logic: track press position, and on release,
+   if the distance moved was under the drag threshold, call
+   `view.FitAll()`.
+2. AIS_ViewController's own built-in Zoom gesture, silently running
+   in parallel because RMB button state was also being fed to `_vc`
+   via `UpdateMouseButtons`/`UpdateMousePosition`.
+
+Even a "stationary" click has a few pixels of real mouse jitter
+between press and release -- enough to nudge the Zoom gesture's
+internal state. Then the app's own `view.FitAll()` call changes the
+camera scale directly, bypassing the ViewController entirely. That
+leaves the ViewController's cached zoom-gesture start-state (distance/
+scale at button-down) stale relative to the camera's new, post-FitAll
+scale. Any further cursor movement gets interpreted against that
+stale baseline, producing the "zooms wildly by horizontal cursor
+position" behavior.
+
+### The fix
+
+Stop forwarding RMB to the ViewController at all -- it's used
+exclusively for the app's own click-to-Fit gesture, never for OCCT's
+navigation. `_qt_buttons_to_occt()` now only sets the LMB/MMB bits;
+RMB state simply never reaches `_vc`, so its Zoom gesture never starts
+in the first place. `mouseReleaseEvent`'s existing click-to-FitAll
+logic (already correct) is untouched. Also removed the `[RMB] ...`
+debug prints left over from the earlier (inconclusive) investigation,
+now that the actual cause is understood and fixed.
+
+### Lesson for future development
+
+**When mixing a custom app-level gesture with a framework's own
+built-in gesture system on the *same* input (here: RMB), decide which
+one owns that input and stop forwarding it to the other.** Feeding
+the same raw button/position events to both `AIS_ViewController` and
+your own click-detection logic doesn't just risk visible conflict --
+it risks exactly this kind of latent state desync, where the
+symptom (wild zoom) shows up nowhere near the code that causes it
+(`_qt_buttons_to_occt`, not `mouseReleaseEvent`, was the actual fix
+site). Also: take "unverified notes from an earlier look at this" as
+a lead worth checking, not a diagnosis worth trusting outright --
+the instinct here (ViewController eating RMB for a gesture) pointed
+in the right direction even though the specific claim (mouseRelease
+never fires; it's Pan) didn't hold up against the code.
