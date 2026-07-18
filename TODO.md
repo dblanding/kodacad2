@@ -8,38 +8,18 @@ Both developer and user contributions welcome.
 ## 1. Broken (should work but doesn't)
 
 ### RMB FitAll not working in viewport
+User observes: RMB-fit makes view zoom in and out with horizontal cursor movement. LMB click to stop.
+
 Right-click in the viewport should call `view.FitAll()`. The
 `AIS_ViewController` consumes RMB events entirely for its own pan
 gesture -- `mouseReleaseEvent` is never called for RMB clicks.
 **Fix:** use Qt `eventFilter` to intercept RMB before
 `AIS_ViewController` processes it, or detect the click duration.
 
-### Color and name loss on STEP export/reload (pre-existing)
-Modified parts (after fillet, shell, etc.) lose their color when
-saved to STEP and reloaded. Part names inside assemblies show as
-the OCCT translator string instead of the user-assigned name.
-This was a known issue in the original KodaCAD 0.2.x.
-
-### Double part created on extrude
-When extruding, pressing Enter once for the length and once for
-the name sometimes creates two copies of the part. Needs investigation.
-
-### Decorative '/' still showing in tree
-The visual '/' node from create_root_items() still appears above
-the real XDE '/' node. The fix was applied to mainwindow.py but
-doesn't seem to be taking effect. Low priority -- cosmetic only.
-
 ---
 
 ## 2. Known limitations (by design, not bugs)
 
-### New part position may be wrong if created in wrong context
-When creating a part via workplane → extrude, the part's world
-position depends on which face the workplane was placed on. If the
-workplane was placed on a face that is deep inside a positioned
-sub-assembly, the extruded shape appears in the correct world
-position but the user must drag it to the correct assembly.
-This is the correct Creo-style behavior.
 
 ---
 

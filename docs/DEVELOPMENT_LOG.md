@@ -950,3 +950,68 @@ part count and colors, that confirms deduplication rather than data
 loss. If a part or color is actually missing, this comparison would
 catch that too. Worth doing before relying on this in earnest,
 especially on a session with heavy use of shared/dragged instances.
+
+## Session 11: RMB delete on tree items didn't work (menu was never populated)
+
+**Symptom:** Right-clicking a part/assembly/workplane in the tree view
+and choosing Delete did nothing.
+
+### Root cause (two separate bugs stacked)
+
+1. `TreeView.popMenu` (a `QMenu` created in `TreeView.__init__`) was
+   never populated with any `QAction`s, anywhere in the codebase.
+   `TreeView.contextMenu()` just called `self.popMenu.exec_(...)` on
+   that permanently-empty menu -- so RMB always showed an empty popup,
+   regardless of what was clicked. (`MainWindow.contextMenu()`, used
+   for right-clicking the main window itself rather than the tree,
+   has the identical dead-empty-menu pattern -- not touched here since
+   it's a separate, unrelated right-click target, but worth knowing
+   it's the same bug if that one ever gets reported too.)
+2. Even with the menu wired up, `deleteItem()` only ever handled
+   workplane items (`if uid in self.wp_dict: ... else: print("Only
+   workplane deletion is implemented at this time")`) -- part/assembly
+   deletion from the XCAF document was never implemented.
+
+### The fix
+
+- Added `populate_tree_context_menu()` (called once, right after
+  `self.treeView` is created) that adds real actions -- Set Active,
+  Rename, Set Transparent, Set Opaque, Delete -- to `self.treeView.
+  popMenu`, wired to the handler methods that already existed
+  (`setClickedActive`, `editName`, `setTransparent`, `setOpaque`,
+  `deleteItem`) but were previously unreachable from the UI.
+- `TreeView.contextMenu()` now resolves `self.itemAt(point)` and
+  calls `self.setCurrentItem(item)` before showing the menu, so RMB
+  always targets whatever is under the cursor. Previously the class
+  docstring said you had to left-click an item *then* right-click to
+  act on it (`self.itemClicked`, set only by the `itemClicked` signal)
+  -- easy to trip over and easy to mistake for "the feature doesn't
+  work" when it's really "the feature requires an undocumented
+  two-step click." `setClickedActive()` already had `item =
+  self.itemClicked or self.treeView.currentItem()` as a partial fix;
+  extended that same fallback to `deleteItem()`, `setTransparent()`,
+  `setOpaque()`, `editName()` for consistency, and it's now backed by
+  `contextMenu()` actually setting `currentItem()`, so it's reliable
+  rather than coincidental.
+- `deleteItem()` now handles parts/assemblies via a new
+  `DocModel.delete_component(uid)`, which mirrors the removal step
+  already proven in `reparent_component()`: `RemoveComponent` for a
+  component under an assembly (drops just that reference -- other
+  shared instances of the same part/assembly are untouched),
+  `RemoveShape` for a free root shape. A confirmation dialog
+  (`QMessageBox`) guards the actual delete since it's destructive;
+  workplane deletion (already working) was left without a dialog to
+  match its prior behavior.
+
+### Lesson for future development
+
+**A UI element that "exists but does nothing" (menu created, signal
+connected, handler methods present) is a different bug from a UI
+element that's simply missing -- and easy to misdiagnose as the
+latter.** Every piece looked present here: `popMenu`, `contextMenu`,
+`deleteItem`, even docstrings describing the intended click-then-RMB
+workflow. The actual gap was one `addAction()` call that never
+happened. When "the feature doesn't work" and the code for it clearly
+exists, check whether the pieces are actually wired to each other
+before assuming logic is broken -- half-finished wiring reads a lot
+like working code at a glance.

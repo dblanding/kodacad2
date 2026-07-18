@@ -366,6 +366,33 @@ class DocModel:
         self.parse_doc()
 
 
+    def delete_component(self, uid):
+        """Delete a part or assembly component from the XDE document.
+
+        A component under an assembly is removed with RemoveComponent
+        (drops that one reference -- other shared instances of the
+        same part/assembly elsewhere in the tree are unaffected). A
+        free root shape (no parent) is removed with RemoveShape.
+        Mirrors the removal step already used in reparent_component().
+        """
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        if uid not in self.label_dict:
+            print(f"[delete] Unknown uid {uid}")
+            return False
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+        if comp_label is None:
+            print(f"[delete] Could not find label for {uid}")
+            return False
+        current_parent_uid = self.label_dict[uid].get('parent_uid')
+        if current_parent_uid:
+            shape_tool.RemoveComponent(comp_label)
+        else:
+            shape_tool.RemoveShape(comp_label, True)
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        return True
+
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.
 
@@ -534,8 +561,8 @@ class DocModel:
         root_label = free_labels.Value(1)
 
         # Extract_s returns True/False (success), NOT the new label --
-        # it adds the copied content as a new (last) component of
-        # root_label, so find it by comparing children before/after.
+        # it adds the copied content as the newest component of
+        # root_label, so retrieve it via get_last_component().
         ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
         if not ok:
             print("[add_component_from_label] XCAFDoc_Editor.Extract failed")

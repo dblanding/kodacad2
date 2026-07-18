@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QInputDialog,
     QTreeWidgetItemIterator,
+    QMessageBox,
 )
 from OCP.AIS import AIS_Shape, AIS_Line, AIS_Circle
 from OCP.BRep import BRep_Tool
@@ -95,7 +96,11 @@ class TreeView(QTreeWidget):
         self.popMenu = QMenu(self)
 
     def contextMenu(self, point):
-        self.menu = QMenu()
+        # Right-clicking should target whatever item is under the
+        # cursor, regardless of whether it was left-clicked first.
+        item = self.itemAt(point)
+        if item is not None:
+            self.setCurrentItem(item)
         self.popMenu.exec_(self.mapToGlobal(point))
 
     def dropEvent(self, event):
@@ -297,6 +302,7 @@ class MainWindow(QMainWindow):
         )
         self.treeView = TreeView()  # Assy/Part structure (display)
         self.treeView.itemClicked.connect(self.treeViewItemClicked)
+        self.populate_tree_context_menu()
         self.treeDockWidget.setWidget(self.treeView)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.treeDockWidget)
 
@@ -418,6 +424,21 @@ class MainWindow(QMainWindow):
     # treeView item action methods:
     #
     #############################################
+
+    def populate_tree_context_menu(self):
+        """Add actions to the treeView's RMB popup menu.
+
+        The menu was created (TreeView.__init__) but never populated,
+        so right-clicking a tree item previously showed an empty menu
+        and did nothing -- including Delete.
+        """
+        menu = self.treeView.popMenu
+        menu.addAction("Set Active", self.setClickedActive)
+        menu.addAction("Rename", self.editName)
+        menu.addAction("Set Transparent", self.setTransparent)
+        menu.addAction("Set Opaque", self.setOpaque)
+        menu.addSeparator()
+        menu.addAction("Delete", self.deleteItem)
 
     def treeViewItemClicked(self, item):
         """Called when treeView item is clicked.
@@ -614,27 +635,49 @@ class MainWindow(QMainWindow):
                 self.showItemActive(uid)
 
     def deleteItem(self):
-        """Delete item clicked."""
-        item = self.itemClicked
-        if item:
-            name = item.text(0)
-            uid = item.text(1)
-            if uid in self.wp_dict:
-                del self.wp_dict[uid]
-                self.build_tree()
-                self.redraw()
-                print(f"Workplane {name} deleted.")
-                if uid == self.activeWpUID:
-                    self.activeWp = None
-                    self.activeWpUID = 0
-            else:
-                print("Only workplane deletion is implemented at this time")
-        else:
+        """Delete the (workplane, part, or assembly) item clicked."""
+        item = self.itemClicked or self.treeView.currentItem()
+        if not item:
             print("No item selected. Try first left clicking item then right clicking.")
+            return
+        name = item.text(0)
+        uid = item.text(1)
+        if uid in self.wp_dict:
+            del self.wp_dict[uid]
+            self.build_tree()
+            self.redraw()
+            print(f"Workplane {name} deleted.")
+            if uid == self.activeWpUID:
+                self.activeWp = None
+                self.activeWpUID = 0
+        elif uid in dm.label_dict:
+            reply = QMessageBox.question(
+                self,
+                "Delete",
+                f"Delete '{name}' from the assembly?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                if dm.delete_component(uid):
+                    if uid == self.activePartUID:
+                        self.activePartUID = 0
+                        self.activePart = None
+                    if uid == self.activeAsyUID:
+                        self.activeAsyUID = 0
+                    self.ais_shape_dict.clear()
+                    self.build_tree()
+                    self.redraw()
+                    print(f"{name} deleted.")
+                else:
+                    print(f"Failed to delete {name}.")
+        else:
+            print(f"'{name}' cannot be deleted.")
+        self.itemClicked = None
 
     def setTransparent(self):
         """Set treeView item clicked transparent"""
-        item = self.itemClicked
+        item = self.itemClicked or self.treeView.currentItem()
         if item:
             uid = item.text(1)
             if uid in dm.part_dict:
@@ -647,7 +690,7 @@ class MainWindow(QMainWindow):
 
     def setOpaque(self):
         """Set treeView item clicked opaque"""
-        item = self.itemClicked
+        item = self.itemClicked or self.treeView.currentItem()
         if item:
             uid = item.text(1)
             if uid in dm.part_dict:
@@ -660,7 +703,7 @@ class MainWindow(QMainWindow):
 
     def editName(self):
         """Edit name of treeView item clicked"""
-        item = self.itemClicked
+        item = self.itemClicked or self.treeView.currentItem()
         if item:
             name = item.text(0)
             uid = item.text(1)
