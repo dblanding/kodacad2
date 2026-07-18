@@ -486,6 +486,59 @@ class DocModel:
         uid = self.get_uid_from_entry(entry)
         return uid
 
+    def add_component_from_label(self, source_label, name):
+        """Add an imported STEP label (with its full sub-tree) as a
+        component under '/' (the top assembly).
+
+        add_component() only carries a bare TopoDS_Shape into the
+        session, which loses any names of nested sub-assemblies/parts
+        because raw geometry has no attached XCAF label structure.
+        This method instead deep-copies the complete label subtree
+        (shape, name, color and every child component) from the
+        source document, so the names of all parts inside an imported
+        assembly are preserved in the tree view.
+        """
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+
+        # Get (or create) the '/' root assembly label (first free shape)
+        free_labels = TDF_LabelSequence()
+        shape_tool.GetFreeShapes(free_labels)
+        if free_labels.Length() == 0:
+            root_shape = TopoDS_Compound()
+            BRep_Builder().MakeCompound(root_shape)
+            root_label = shape_tool.AddShape(root_shape, True)
+            set_label_name(root_label, "/")
+            shape_tool.GetFreeShapes(free_labels)
+        root_label = free_labels.Value(1)
+
+        # Register an empty placeholder shape as a free top-level shape,
+        # then add THAT SAME shape object as a component of '/'. Because
+        # it's the identical shape instance, XCAF recognizes it as
+        # already-registered and creates a reference (not a duplicate),
+        # exactly as load_stp_undr_top does with target_proto/root_proto.
+        placeholder_shape = TopoDS_Compound()
+        BRep_Builder().MakeCompound(placeholder_shape)
+        ref_label = shape_tool.AddShape(placeholder_shape, True)
+        component_label = shape_tool.AddComponent(
+            root_label, placeholder_shape, True)
+
+        # Now deep-copy the imported label's full subtree (shape, name,
+        # color, and every child component) into the placeholder label.
+        # Since component_label refers to ref_label, this populates the
+        # component with the imported content while preserving the
+        # original names of every nested sub-part.
+        copy_label(source_label, ref_label)
+
+        set_label_name(component_label, name)
+        shape_tool.UpdateAssemblies()
+
+        # Round-trip through STEP (as load_stp_undr_top also does after
+        # a cross-document copy_label) to normalize the document before
+        # re-parsing. Note: this replaces self.doc, so any label/entry
+        # captured above should not be relied on afterward.
+        self.doc = doc_linter(self.doc)
+        self.parse_doc()
+
     def add_component_to_asy(self, shape, name, color, tag=1):
         """Add new shape to label at root with tag & return uid"""
         labels = TDF_LabelSequence()
@@ -682,16 +735,15 @@ def load_stp_cmpnt(dm):
     if doc is None:
         return
     step_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-    step_color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
     labels = TDF_LabelSequence()
     step_shape_tool.GetFreeShapes(labels)
     for j in range(labels.Length()):
         label = labels.Value(j+1)
-        shape = step_shape_tool.GetShape_s(label)
-        color = Quantity_Color()
         name = get_label_name(label) or f_name or "import"
-        step_color_tool.GetColor(shape, XCAFDoc_ColorSurf, color)
-        dm.add_component(shape, name, color)
+        # Use add_component_from_label (not add_component) so the
+        # names of any nested sub-assemblies/parts inside the
+        # imported STEP file are preserved rather than lost.
+        dm.add_component_from_label(label, name)
 
 
 def load_stp_undr_top(dm):

@@ -709,7 +709,78 @@ must be a component label (depth 5) with a valid `ref_entry`, NOT a
 free root shape (depth 4).** Always add new shapes via `AddComponent`
 under an assembly, never via `AddShape` directly at document root.
 
-The only shapes that should be free root shapes are:
-- Assembly containers (created via `AddShape` with a Compound)
-- Prototype shapes (automatically created by XDE when AddComponent
-  is called -- XDE stores the geometry at root and creates an instance)
+
+## Session 9: STEP import losing sub-component names
+
+**Symptom:** `File -> Import STEP` (adding a component under the current
+session, as opposed to `Load STEP At Top`) worked, and the imported
+assembly showed up under `/` -- but every part *inside* that assembly
+showed no name (or a blank/generic label) in the tree, even though the
+same STEP file's names displayed correctly via `Load STEP At Top`.
+
+### Root cause
+
+`load_stp_cmpnt()` pulled the imported free shape out of the temporary
+STEP document with:
+```python
+shape = step_shape_tool.GetShape_s(label)   # <- returns bare TopoDS_Shape
+```
+`GetShape_s` returns pure geometry. It has no idea it was ever an
+assembly with named children -- names in XCAF live on **labels**
+(`TDataStd_Name` attributes), not on `TopoDS_Shape` objects. Once the
+sub-assembly was flattened to a `TopoDS_Shape`, every child's name was
+gone. `dm.add_component(shape, name, color)` could then only apply
+ONE name (the top-level import name) to the whole flattened blob.
+
+This is the same "geometry vs. label" distinction that bit us in
+Session 8, just showing up on the import path instead of the
+new-part-creation path.
+
+### The fix: copy the label subtree, not the geometry
+
+Added `DocModel.add_component_from_label()`, which deep-copies the
+**entire OCAF label subtree** (shape + name + color + every nested
+child label) from the source STEP document into the session, using
+the same `TDocStd_XLinkTool`-based `copy_label()` helper that
+`load_stp_undr_top()` already used (that function existed in the
+codebase but wasn't wired into the "Import STEP" menu item).
+
+Pattern used -- register a placeholder shape, add it as a component
+by identity (so XCAF creates a *reference*, not a duplicate), then
+overwrite the placeholder label's content via `copy_label`:
+```python
+placeholder_shape = TopoDS_Compound()
+BRep_Builder().MakeCompound(placeholder_shape)
+ref_label = shape_tool.AddShape(placeholder_shape, True)
+component_label = shape_tool.AddComponent(
+    root_label, placeholder_shape, True)  # same object -> reused as reference
+
+copy_label(source_label, ref_label)   # populates ref_label's full subtree
+
+set_label_name(component_label, name)  # only the top instance is renamed
+shape_tool.UpdateAssemblies()
+self.doc = doc_linter(self.doc)       # STEP round-trip to normalize
+self.parse_doc()
+```
+
+`load_stp_cmpnt()` now calls `add_component_from_label()` instead of
+`add_component()`. `add_component()` itself was left untouched --
+it's still correct for parts created at runtime (extrude, etc.) that
+have no pre-existing label structure to preserve.
+
+**Caveat:** because `doc_linter()` replaces `self.doc` via a STEP
+save/load round-trip, any label/entry captured *before* that call is
+stale afterward -- so `add_component_from_label()` does not return a
+uid (the previous `add_component()`-style return value would have
+been wrong).
+
+### Lesson for future development
+
+**Any time content crosses from one XCAF document into another
+(imported STEP, pasted assembly, etc.), copy the label subtree via
+`copy_label()` / `TDocStd_XLinkTool`, never `GetShape_s()` +
+re-add-as-new-shape.** `GetShape_s()` is fine for geometry you're
+about to modify (fillet/shell/boolean) within a document you already
+control, but it silently discards names, colors and structure the
+moment it crosses a document boundary.
+
