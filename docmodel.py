@@ -393,6 +393,88 @@ class DocModel:
         self.parse_doc()
         return True
 
+    def set_component_location(self, uid, new_local_loc):
+        """Reposition a component IN PLACE (same parent) by removing it
+        and re-adding it at the new location.
+
+        Originally used XCAFDoc_ShapeTool::SetLocation directly (the
+        docs describe it as the purpose-built primitive: "if label is
+        reference, changes location attribute"). That worked correctly
+        in-memory -- confirmed via readback immediately after the call
+        -- but a real-world test caught it NOT surviving STEP export:
+        moving 'manual-lathe' (a component added via XCAFDoc_Editor.
+        Extract_s, see add_component_from_label) and saving showed the
+        new location correctly in the live document right up to
+        Write(), but the saved STEP file had that one component's
+        placement written as identity while four other, unrelated
+        components (added the normal way, via the STEP reader's own
+        AddComponent calls) all round-tripped correctly with their
+        (non-identity) locations intact. See docs/DEVELOPMENT_LOG.md,
+        Session 14, for the full diagnostic trail.
+
+        Rather than chase why SetLocation's result doesn't survive
+        export, this uses RemoveComponent + AddComponent(location) --
+        the exact pattern reparent_component() already uses
+        successfully, and the same mechanism the STEP reader itself
+        used to build the four components that round-tripped
+        correctly. Trade-off: the component gets a new entry/uid
+        (since AddComponent creates a new label rather than mutating
+        the existing one) -- harmless here since parse_doc() is called
+        immediately after and every uid is re-derived fresh.
+
+        Only the ONE component instance at `uid` is moved -- if the
+        same part is shared/dragged into multiple places in the tree,
+        the other instances are untouched (contrast with
+        reparent_component(), which deliberately targets the referred/
+        root label so ALL shared instances move together).
+
+        new_local_loc: TopLoc_Location expressed relative to the
+        component's current parent (same convention as
+        reparent_component's new_local).
+        """
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        if uid not in self.label_dict:
+            print(f"[set_component_location] Unknown uid {uid}")
+            return False
+        info = self.label_dict[uid]
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+
+        comp_label = self._find_label_by_entry(info['entry'])
+        if comp_label is None:
+            print(f"[set_component_location] Could not find label for {uid}")
+            return False
+
+        # Referred (root) shape -- same shape geometry, unlocated.
+        ref_entry = info.get('ref_entry')
+        ref_label = self._find_label_by_entry(ref_entry) if ref_entry else comp_label
+        if ref_label is None:
+            print(f"[set_component_location] Could not find referred label for {uid}")
+            return False
+        ref_shape = shape_tool.GetShape_s(ref_label)
+
+        # Parent assembly label (component's CURRENT parent -- we are
+        # repositioning in place, not reparenting).
+        parent_uid = info.get('parent_uid')
+        if not parent_uid or parent_uid not in self.label_dict:
+            print(f"[set_component_location] No parent found for {uid} "
+                  f"-- cannot reposition a root shape this way")
+            return False
+        parent_info = self.label_dict[parent_uid]
+        parent_entry = parent_info.get('ref_entry') or parent_info['entry']
+        parent_label = self._find_label_by_entry(parent_entry)
+        if parent_label is None:
+            print(f"[set_component_location] Could not find parent label for {uid}")
+            return False
+
+        located_shape = ref_shape.Located(new_local_loc)
+        shape_tool.RemoveComponent(comp_label)
+        new_comp = shape_tool.AddComponent(parent_label, located_shape, True)
+        set_label_name(new_comp, info['name'])
+
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        return True
+
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.
 

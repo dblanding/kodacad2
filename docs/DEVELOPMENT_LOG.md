@@ -1090,3 +1090,198 @@ a lead worth checking, not a diagnosis worth trusting outright --
 the instinct here (ViewController eating RMB for a gesture) pointed
 in the right direction even though the specific claim (mouseRelease
 never fires; it's Pan) didn't hold up against the code.
+
+## Session 13: Position function -- foundation + first working method
+
+**Goal:** Port Doug's Basicad Position/Mate-Align design (see the PDF
+he shared) to Kodacad, WITHOUT taking a build123d dependency -- explicit
+hard requirement, to protect Kodacad's raw XCAF/XDE STEP fidelity
+(Basicad, being built on build123d, has known STEP round-trip issues
+Doug specifically wants to avoid re-inheriting here).
+
+### What we found in Basicad worth porting
+
+`src/pose.py`'s six `compute_*_move()` functions (Step 1/2/3 of
+Mate/Align, plus the three Align Axis steps) turned out to be almost
+entirely raw OCP calls already (`gp_Trsf`, `gp_Ax1`, `gp_Dir`,
+`gp_Pnt`) -- build123d's `Vector`/`Location` are only used as thin
+point/direction bookkeeping. That makes this the most portable part of
+the whole design: swap the thin wrapper for a small dependency-free
+equivalent (or raw `gp_Vec` arithmetic) and the actual geometry math
+carries over close to verbatim.
+
+`gui/position_dialog.py`'s state machine (`PositionState`,
+`ConstraintType`, per-step pick handling, `_move_history` for
+Back/Reverse) matches the PDF design closely and ports as logic, not
+code -- Kodacad's `registerCallback()`/`SetSelectionModeFace()`/status
+bar already do the job Basicad's own pick-collection plumbing does.
+
+Also found (unexpectedly): `main_app.py` has a REAL, working
+`AIS_Manipulator` integration for the "Dynamic" method -- not a stub.
+It already solves the exact "who owns this mouse gesture" problem we
+spent Session 12 on for RMB (`context.MoveTo()` +
+`manipulator.HasActiveMode()` gates whether LMB goes to the gizmo or
+to rotation). Originally scoped as a stretch goal; turns out to be
+closer to done than Mate/Align.
+
+### The real gap, confirmed against Kodacad's own code
+
+Basicad's `node.move(local_move)` mutates a build123d Node's location
+directly -- in build123d, that mutation *is* the model; export walks
+the same live object tree. Kodacad has no equivalent: `dm.doc` (the
+XCAF document) is the sole source of truth; `dm.part_dict`/
+`label_dict` are caches rebuilt by `parse_doc()`. This is the exact
+trap already visible in Kodacad's own `rotateAP()` (kodacad.py) --
+marked `"""Experimental..."""`, mutates `win.activePart` and redraws,
+never touches `dm.doc`, so the rotation is display-only and
+disappears on save or the next `parse_doc()`.
+
+### set_component_location() -- the new foundational method
+
+Verified against the OCCT 8.0 refman (not assumed) before writing
+anything, per the `Extract_s` lesson from Session 10:
+`XCAFDoc_ShapeTool::SetLocation(theShapeLabel, theLoc, theRefLabel)`
+-- "Sets location to the shape label. If label is reference, changes
+location attribute." Exactly the purpose-built primitive: reposition
+one component instance in place (same identity, same parent, same
+entry), as opposed to `RemoveComponent`+`AddComponent` (would change
+identity) or a display-only mutation (would not persist).
+
+```python
+def set_component_location(self, uid, new_local_loc):
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+    comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+    ref_label = TDF_Label()
+    ok = shape_tool.SetLocation(comp_label, new_local_loc, ref_label)
+    shape_tool.UpdateAssemblies()
+    self.parse_doc()
+    return ok
+```
+
+Deliberately operates on the component's own (instance) label, not
+its referred/root label -- so moving a shared part only moves the ONE
+instance being positioned, matching ordinary CAD behavior. (Contrast
+with `reparent_component()`, which deliberately targets the referred
+label so ALL shared instances move together -- a different, and here
+intentionally different, choice.)
+
+### First working method: 2 Points (menu: Position -> Position
+Selected)
+
+Pure translation, no DOF accounting -- the simplest possible exercise
+of the full pipeline (tree pre-select -> pick 2 points via the
+existing `registerCallback`/vertex-selection-mode pattern -> compute
+world delta -> convert to local via the SAME parent-world-inverse
+math already proven in `reparent_component()` -> `set_component_
+location()` -> `parse_doc()` -> redraw), deliberately built before
+Mate/Align so the new persistence primitive gets proven end-to-end
+against something with no other moving parts to blame if it breaks.
+
+Handles both parts (world loc from `part_dict[uid]['loc']`) and
+assemblies (world loc from `label_dict[uid]['world_loc']`) -- these
+live in different dicts because `parse_components()` only adds simple
+shapes to `part_dict`, a distinction that would have been an easy bug
+to miss (first draft of this code checked `uid in dm.part_dict` for
+validity, which silently rejects every assembly).
+
+### Not yet done (next up)
+
+Mate/Align (the actual design priority, per Doug: "there is no way we
+are going to skip mate/Align") and Dynamic (AIS_Manipulator, now
+believed lower-risk than expected). `set_component_location()` is the
+piece both depend on, now in place.
+
+### Lesson for future development
+
+**When a proven implementation already exists in a sibling project,
+the highest-value read isn't "does the code work" but "where does its
+foundation stop matching mine."** Basicad's Mate/Align math and state
+machine were directly reusable; the one place it *couldn't* be reused
+verbatim -- how a computed move actually gets applied and persisted --
+was exactly the piece Kodacad needed built fresh, and exactly the
+piece where reusing Basicad's approach uncritically would have
+reintroduced the same STEP-fidelity risk Doug explicitly ruled out.
+
+## Session 14: Position moves didn't survive save/reload -- SetLocation vs. AddComponent for STEP export
+
+**Symptom (from Doug's real test):** loaded `as1-oc-214.stp` as the
+session, imported a separate "manual lathe" STEP file, moved it in Z
+using the new 2-Points Position command, saved the session, reloaded
+it -- the lathe was back at its original position. Everything else in
+the assembly was fine.
+
+### Diagnostic trail
+
+Added temporary instrumentation rather than guessing:
+
+1. **In `set_component_location()`, right after `SetLocation()`
+   succeeded:** printed the translation, then read it back two ways --
+   `get_label_location()` and `shape_tool.GetShape_s(comp_label)
+   .Location()`. Both agreed: `(0.0, 0.0, 60.0)`, correctly applied,
+   in memory.
+2. **In `save_step_doc()`, right before `Write()`:** dumped every
+   component under `/` with the same two readbacks. All five
+   components -- including manual-lathe -- showed the correct location
+   in the live document at the moment of export.
+3. **In the actual saved `.stp` file** (Doug ran `grep -n
+   "CARTESIAN_POINT"` and pasted the first block): the five
+   component placements appeared as `#12=(0,0,0)` (root), `#16=
+   (-10,75,60)` rod-assembly, `#20=(5,125,20)` l-bracket_1, `#24=
+   (0,0,0)` plate, `#28=(175,25,20)` l-bracket_2, `#32=(0,0,0)`
+   manual-lathe. **Every component matched its expected location
+   except manual-lathe, which was written as identity** -- even though
+   step 2 confirmed the document held `(0,0,60)` for it right up until
+   `Write()` was called.
+
+Conclusion: the bug is specifically in what `STEPCAFControl_Writer`
+serializes for a location that was set via `XCAFDoc_ShapeTool::
+SetLocation()`, at least for a component that itself was added via
+`XCAFDoc_Editor.Extract_s()` (Session 9's import path). The four
+components that round-tripped correctly were all built the normal
+way -- via `AddComponent()` with a located shape, either by the STEP
+reader itself or (for a moved part) by `reparent_component()`, which
+already uses that pattern successfully.
+
+No documented OCCT explanation for *why* `SetLocation`'s result
+doesn't survive export was found despite searching -- this may be
+genuinely under-tested territory (XCAF's own docs describe `AddComponent`-
+with-location as the primary/canonical mechanism for assembly
+placement; `SetLocation` gets far less use in examples and forum
+threads by comparison).
+
+### The fix
+
+Rather than chase the "why", `set_component_location()` now uses
+`RemoveComponent` + `AddComponent(parent_label, ref_shape.Located(new_loc),
+True)` -- the exact pattern already proven correct by
+`reparent_component()`, and the same mechanism that produced the four
+components that round-tripped correctly in Doug's test. Trade-off:
+the component gets a new label/entry/uid each time it's repositioned
+(`AddComponent` creates a new label rather than mutating the existing
+one) -- harmless here since `parse_doc()` runs immediately after and
+every uid gets re-derived fresh anyway.
+
+### Lesson for future development
+
+**"Correct in memory" and "correct after STEP export" are two
+different claims, and only real save+reload (not just a redraw)
+proves the second one.** The in-session redraw looked completely
+correct after the move -- which is exactly why this class of bug is
+dangerous: it doesn't announce itself until someone actually closes
+the loop with a save and a fresh load, by which point it's easy to
+mistake for "I must have mis-clicked" rather than a persistence bug.
+When adding any new document-mutating operation, a save+reload check
+belongs in the test pass alongside the in-session visual check -- the
+Position 2-Points smoke test in Session 13's writeup only asked for
+the former; this session is the reason the request now explicitly
+asks for both.
+
+**When two different low-level APIs claim to do the same thing
+(`SetLocation` vs. `RemoveComponent`+`AddComponent`, both "set a
+component's location"), and one of them already has a proven track
+record in this codebase, prefer the proven one -- even without a full
+explanation for why the alternative fails.** Understanding the root
+cause is worth pursuing when it's cheap, but shipping a fix that's
+demonstrably correct (matches 4/4 known-good examples) shouldn't wait
+on fully reverse-engineering an OCCT internals question search
+couldn't answer.

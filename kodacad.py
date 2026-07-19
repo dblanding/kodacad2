@@ -113,6 +113,91 @@ def wpBy3PtsC(shapeList, *args):
         wpBy3Pts()
 
 
+def position_selected():
+    """Position (move) the selected part/assembly using the '2 Points'
+    method: pick a point on the MOVING part, then pick a TARGET point.
+    The part is translated (no rotation) so the picked point on the
+    moving part lands exactly on the picked target point.
+
+    This is the first (simplest) of the Position methods -- pure
+    translation, no DOF/constraint accounting -- meant to prove the
+    end-to-end pipeline (tree pre-select -> pick -> compute ->
+    dm.set_component_location -> persisted in the XDE doc -> redraw)
+    before Mate/Align (which needs the same pipeline plus a DOF
+    accounting state machine) is built on top of it.
+    """
+    item = win.itemClicked or win.treeView.currentItem()
+    if not item:
+        win.statusBar().showMessage(
+            "Select a part or assembly in the tree, then choose Position.", 5000)
+        return
+    uid = item.text(1)
+    if uid not in dm.label_dict:
+        win.statusBar().showMessage(
+            f"'{item.text(0)}' cannot be positioned.", 5000)
+        return
+
+    win._position_uid = uid
+    win.ptStack = []
+    win.registerCallback(positionTwoPointsC)
+    win.canvas._display.SetSelectionModeVertex()
+    win.statusBar().showMessage(
+        f"Positioning '{item.text(0)}': pick a point ON the part to move.")
+
+
+def positionTwoPointsC(shapeList, *args):
+    """Callback (collector) for position_selected's 2-Points method."""
+
+    for shape in shapeList:
+        vrtx = TopoDS.Vertex_s(shape)
+        gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
+        win.ptStack.append(gpPt)
+    if len(win.ptStack) == 1:
+        win.statusBar().showMessage("Now pick the TARGET point.")
+    elif len(win.ptStack) == 2:
+        p2 = win.ptStack.pop()
+        p1 = win.ptStack.pop()
+        uid = getattr(win, "_position_uid", None)
+        win.clearCallback()
+        if uid is None or uid not in dm.label_dict:
+            win.statusBar().showMessage("Position failed: part no longer available.", 5000)
+            return
+        delta = gp_Vec(p1, p2)
+        delta_trsf = gp_Trsf()
+        delta_trsf.SetTranslation(delta)
+        delta_loc = TopLoc_Location(delta_trsf)
+
+        # Current world location -- parts store it in part_dict[uid]['loc'],
+        # assemblies store it in label_dict[uid]['world_loc'] (parse_doc
+        # only adds simple shapes to part_dict; see parse_components).
+        is_assy = dm.label_dict[uid].get('is_assy', False)
+        if is_assy:
+            part_world_loc = dm.label_dict[uid].get('world_loc', TopLoc_Location())
+        else:
+            part_world_loc = dm.part_dict.get(uid, {}).get('loc', TopLoc_Location())
+        new_world_loc = delta_loc.Multiplied(part_world_loc)
+
+        # Convert to local (relative to current parent), same convention
+        # as reparent_component's new_local computation.
+        parent_uid = dm.label_dict.get(uid, {}).get('parent_uid')
+        parent_world_loc = dm.label_dict.get(
+            parent_uid, {}).get('world_loc', TopLoc_Location())
+        if parent_uid and not parent_world_loc.IsIdentity():
+            new_local_loc = parent_world_loc.Inverted().Multiplied(new_world_loc)
+        else:
+            new_local_loc = new_world_loc
+
+        ok = dm.set_component_location(uid, new_local_loc)
+        if ok:
+            win.ais_shape_dict.clear()
+            win.canvas._display.Context.RemoveAll(False)
+            win.build_tree()
+            win.redraw()
+            win.statusBar().showMessage("Position applied.", 5000)
+        else:
+            win.statusBar().showMessage("Position failed -- see console.", 5000)
+
+
 def wpOnFace(*args):
     """ First face defines plane of wp. Second face defines uDir."""
 
@@ -711,6 +796,9 @@ if __name__ == "__main__":
     win.add_menu("Create 3D")
     win.add_function_to_menu("Create 3D", "Extrude", extrude)
     win.add_function_to_menu("Create 3D", "Revolve", revolve)
+    win.add_menu("Position")
+    win.add_function_to_menu("Position", "Position Selected (2 Points)",
+                             position_selected)
     win.add_menu("Modify Active Part")
     win.add_function_to_menu("Modify Active Part", "Rotate Act Part", rotateAP)
     win.add_function_to_menu("Modify Active Part",
