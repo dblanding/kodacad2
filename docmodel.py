@@ -309,7 +309,17 @@ class DocModel:
         else:
             new_local = part_world_loc
 
-        # Find the referred shape (root geometry) for the part being moved
+        # Find the referred LABEL (root geometry) for the part being moved.
+        # Deliberately reference the label itself, not shape_tool.
+        # GetShape_s(ref_label) -- see set_component_location() for why
+        # (that same GetShape_s + AddComponent(...,True) pattern was
+        # just confirmed, Session 16, to lose names/substructure on
+        # compounds/assemblies since raw geometry carries none of that
+        # XCAF metadata). This function hadn't been reported broken,
+        # but it had the identical pattern -- fixed proactively rather
+        # than leaving a known-bad pattern for it to be rediscovered
+        # independently. Please re-test drag/reparenting an assembly
+        # (not just a leaf part) with save/reload before trusting this.
         comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
         if comp_label is None:
             print(f"[reparent] Could not find component label for {uid}")
@@ -325,8 +335,6 @@ class DocModel:
             print(f"[reparent] Could not find ref label for {uid}")
             return
 
-        ref_shape = shape_tool.GetShape_s(ref_label)
-
         # Find target assembly's ROOT label (ref_entry) so both shared
         # instances of the target assembly receive the new component
         new_parent_info = self.label_dict[new_parent_uid]
@@ -336,9 +344,9 @@ class DocModel:
             print(f"[reparent] Could not find target label")
             return
 
-        # Add component to target with correct local transform
-        located_shape = ref_shape.Located(new_local)
-        new_comp = shape_tool.AddComponent(target_label, located_shape, True)
+        # Add component to target with correct local transform, by
+        # LABEL (preserves ref_label's full existing name/substructure)
+        new_comp = shape_tool.AddComponent(target_label, ref_label, new_local)
         part_name = self.label_dict[uid]['name']
         set_label_name(new_comp, part_name)
         # Also name the referred shape so it shows correctly in all viewers
@@ -346,10 +354,11 @@ class DocModel:
         if shape_tool.GetReferredShape_s(new_comp, new_ref):
             set_label_name(new_ref, part_name)
 
-        # Set color on the new component's referred shape
+        # Set color on the new component's referred label (label-based
+        # SetColor overload -- ref_shape is no longer fetched here)
         if part_color:
             from OCP.XCAFDoc import XCAFDoc_ColorGen
-            color_tool.SetColor(ref_shape, part_color, XCAFDoc_ColorGen)
+            color_tool.SetColor(ref_label, part_color, XCAFDoc_ColorGen)
             if not new_ref.IsNull():
                 color_tool.SetColor(new_ref, part_color, XCAFDoc_ColorGen)
 
@@ -417,10 +426,7 @@ class DocModel:
         the exact pattern reparent_component() already uses
         successfully, and the same mechanism the STEP reader itself
         used to build the four components that round-tripped
-        correctly. Trade-off: the component gets a new entry/uid
-        (since AddComponent creates a new label rather than mutating
-        the existing one) -- harmless here since parse_doc() is called
-        immediately after and every uid is re-derived fresh.
+        correctly.
 
         Only the ONE component instance at `uid` is moved -- if the
         same part is shared/dragged into multiple places in the tree,
@@ -431,26 +437,46 @@ class DocModel:
         new_local_loc: TopLoc_Location expressed relative to the
         component's current parent (same convention as
         reparent_component's new_local).
+
+        Returns the component's NEW uid on success, or None on
+        failure. IMPORTANT: because AddComponent creates a new label
+        rather than mutating the old one, `uid` changes on every call
+        -- callers that apply several moves in sequence to the same
+        item (e.g. PositionDialog's Step 1 / Back / Reverse) MUST use
+        the returned uid for the next call, not the original one.
         """
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
         if uid not in self.label_dict:
             print(f"[set_component_location] Unknown uid {uid}")
-            return False
+            return None
         info = self.label_dict[uid]
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
 
         comp_label = self._find_label_by_entry(info['entry'])
         if comp_label is None:
             print(f"[set_component_location] Could not find label for {uid}")
-            return False
+            return None
 
-        # Referred (root) shape -- same shape geometry, unlocated.
+        # Referred (root) shape's LABEL -- deliberately reference the
+        # label itself, not shape_tool.GetShape_s(ref_label). That
+        # call returns bare geometry with no XCAF name/structure
+        # attached (the exact trap Session 9 already fixed once, for
+        # STEP imports -- reintroduced here in Session 14 while fixing
+        # a different problem). Passing raw geometry through
+        # AddComponent(..., expand=True) for a compound/assembly tells
+        # OCCT to decompose it into a FRESH assembly structure with no
+        # name information to work from, so it falls back to
+        # auto-numbering (confirmed: 'manual-lathe' and the hub
+        # assembly came back named '22' and '25' after a Position
+        # move + save/reload -- see Session 16). Referencing ref_label
+        # directly via the label-based AddComponent overload avoids
+        # ever converting to raw geometry, so the existing names and
+        # substructure are untouched.
         ref_entry = info.get('ref_entry')
         ref_label = self._find_label_by_entry(ref_entry) if ref_entry else comp_label
         if ref_label is None:
             print(f"[set_component_location] Could not find referred label for {uid}")
-            return False
-        ref_shape = shape_tool.GetShape_s(ref_label)
+            return None
 
         # Parent assembly label (component's CURRENT parent -- we are
         # repositioning in place, not reparenting).
@@ -458,22 +484,159 @@ class DocModel:
         if not parent_uid or parent_uid not in self.label_dict:
             print(f"[set_component_location] No parent found for {uid} "
                   f"-- cannot reposition a root shape this way")
-            return False
+            return None
         parent_info = self.label_dict[parent_uid]
         parent_entry = parent_info.get('ref_entry') or parent_info['entry']
         parent_label = self._find_label_by_entry(parent_entry)
         if parent_label is None:
             print(f"[set_component_location] Could not find parent label for {uid}")
-            return False
+            return None
 
-        located_shape = ref_shape.Located(new_local_loc)
+        # DIAGNOSTIC (temporary -- Session 16's "label instead of shape"
+        # fix did NOT resolve the save/reload regression in real
+        # testing, despite being well-reasoned. Going back to Session
+        # 14's approach: real data beats another guess. Tracing every
+        # call since the dialog can apply several moves in one session
+        # (2 Points, Mate/Align, Back, Reverse) and we haven't yet
+        # ruled out that repeated calls behave differently from a
+        # single one.
+        self._sc_call_count = getattr(self, '_sc_call_count', 0) + 1
+        call_n = self._sc_call_count
+        print(f"[set_component_location #{call_n}] uid={uid} "
+              f"comp_entry={info['entry']} name={info['name']!r} "
+              f"parent_uid={info.get('parent_uid')}")
+        pre_name = get_label_name(comp_label)
+        print(f"[set_component_location #{call_n}] comp_label name "
+              f"BEFORE remove: {pre_name!r}")
+        ref_name_before = get_label_name(ref_label)
+        print(f"[set_component_location #{call_n}] ref_label entry="
+              f"{get_label_entry(ref_label)} name_before={ref_name_before!r}")
+
         shape_tool.RemoveComponent(comp_label)
-        new_comp = shape_tool.AddComponent(parent_label, located_shape, True)
-        set_label_name(new_comp, info['name'])
+        new_comp = shape_tool.AddComponent(parent_label, ref_label, new_local_loc)
+
+        # Confirmed via file inspection (Session 17): when an
+        # occurrence's own name is IDENTICAL to its referred/product
+        # label's name, STEPCAFControl_Writer leaves the NAUO's
+        # descriptive-name field blank on export -- every occurrence in
+        # as1-oc-214.stp that round-trips correctly has a name that
+        # DIFFERS from its product name (e.g. 'plate_1' vs 'plate'),
+        # confirmed via a controlled test (import + save + reload with
+        # NO Position move survives fine -- the bug is specific to
+        # set_component_location, not general to same-named occurrences
+        # on their own). Force a distinguishing suffix so this
+        # component's name is never identical to ref_label's, matching
+        # the convention every working component in the file already
+        # follows.
+        comp_name = info['name']
+        if comp_name == ref_name_before:
+            comp_name = f"{comp_name}_1"
+            print(f"[set_component_location] name matched referred label's "
+                  f"name exactly -- using {comp_name!r} instead to avoid "
+                  f"the writer leaving the NAUO name blank")
+        set_label_name(new_comp, comp_name)
+        new_entry = get_label_entry(new_comp)
+
+        # Read back IMMEDIATELY -- before UpdateAssemblies/parse_doc --
+        # to see whether the name/location are even correct right after
+        # AddComponent, before anything else touches the document.
+        readback_name = get_label_name(new_comp)
+        readback_loc = shape_tool.GetShape_s(new_comp).Location()
+        rt = readback_loc.Transformation().TranslationPart()
+        print(f"[set_component_location #{call_n}] new_comp entry={new_entry} "
+              f"name_readback={readback_name!r} "
+              f"loc_readback=({rt.X():.3f}, {rt.Y():.3f}, {rt.Z():.3f})")
+
+        # Also check: did ref_label ITSELF survive intact? (RemoveComponent
+        # removes the COMPONENT/reference, not the referred shape -- but
+        # confirming that assumption rather than continuing to trust it.)
+        ref_name_after = get_label_name(ref_label)
+        print(f"[set_component_location #{call_n}] ref_label name AFTER "
+              f"remove+add: {ref_name_after!r} (should be unchanged: "
+              f"{ref_name_after == ref_name_before})")
 
         shape_tool.UpdateAssemblies()
         self.parse_doc()
-        return True
+
+        # Recover the uid parse_doc() actually assigned to new_entry.
+        # NOTE: get_uid_from_entry() is a *generator* (increments a
+        # counter in self._share_dict on every call), used internally
+        # by parse_doc()'s own walk -- calling it again here would mint
+        # a fresh, never-assigned uid rather than recover the real one
+        # parse_doc() just gave this label. Search label_dict instead.
+        for candidate_uid, candidate_info in self.label_dict.items():
+            if candidate_info['entry'] == new_entry:
+                post_name = candidate_info.get('name')
+                post_loc = (self.label_dict[candidate_uid].get('world_loc')
+                            if candidate_info.get('is_assy')
+                            else self.part_dict.get(candidate_uid, {}).get('loc'))
+                pt = post_loc.Transformation().TranslationPart() if post_loc else None
+                print(f"[set_component_location #{call_n}] AFTER parse_doc: "
+                      f"uid={candidate_uid} name={post_name!r} "
+                      f"world_loc="
+                      f"{(round(pt.X(),3), round(pt.Y(),3), round(pt.Z(),3)) if pt else None}")
+                return candidate_uid
+        print(f"[set_component_location] Warning: could not recover uid "
+              f"for entry {new_entry} after parse_doc()")
+        return None
+
+    def get_full_path_name(self, uid):
+        """Full breadcrumb path from '/' down to uid, e.g.
+        '/ / as1 / manual-lathe'.
+
+        Kodacad's XCAF model allows the same part/assembly DEFINITION
+        to appear as multiple distinct instances in different places
+        in the tree (see Session 13's shared-instance discussion) --
+        a bare name alone doesn't disambiguate which instance is
+        meant. Used by PositionDialog's top section so there's no
+        ambiguity about which instance is about to be moved.
+        """
+        names = []
+        cur = uid
+        seen = set()
+        while cur and cur in self.label_dict:
+            if cur in seen:
+                break  # safety: guard against a malformed cycle
+            seen.add(cur)
+            names.append(self.label_dict[cur].get('name') or '?')
+            cur = self.label_dict[cur].get('parent_uid')
+        names.append('/')
+        return ' / '.join(reversed(names))
+
+    def get_world_loc(self, uid):
+        """Current world TopLoc_Location of a part or assembly uid.
+
+        Parts and assemblies store their world location in different
+        dicts (parse_components() only adds simple shapes to
+        part_dict -- see Session 13) so this branches on is_assy
+        rather than making every caller remember that distinction.
+        """
+        from OCP.TopLoc import TopLoc_Location
+        if uid not in self.label_dict:
+            return TopLoc_Location()
+        if self.label_dict[uid].get('is_assy', False):
+            return self.label_dict[uid].get('world_loc', TopLoc_Location())
+        return self.part_dict.get(uid, {}).get('loc', TopLoc_Location())
+
+    def get_parent_world_loc(self, uid):
+        """World TopLoc_Location of uid's current parent assembly
+        (Identity if uid is a free root shape with no parent)."""
+        from OCP.TopLoc import TopLoc_Location
+        parent_uid = self.label_dict.get(uid, {}).get('parent_uid')
+        if parent_uid:
+            return self.label_dict.get(parent_uid, {}).get(
+                'world_loc', TopLoc_Location())
+        return TopLoc_Location()
+
+    def world_to_local(self, uid, world_loc):
+        """Convert a world-space TopLoc_Location into the local
+        (relative-to-current-parent) location set_component_location()
+        expects -- same convention already proven in
+        reparent_component()'s new_local computation."""
+        parent_world = self.get_parent_world_loc(uid)
+        if not parent_world.IsIdentity():
+            return parent_world.Inverted().Multiplied(world_loc)
+        return world_loc
 
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.
@@ -523,6 +686,33 @@ class DocModel:
         if not fname:
             print("Save step cancelled.")
             return
+
+        # DIAGNOSTIC (temporary, reinstated from Session 14 -- the
+        # Session 16 fix did not resolve the regression in real
+        # testing). Dump every component under '/', recursively this
+        # time (Session 14 only went one level deep -- the name
+        # corruption this round may be at any depth, not just top-level).
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_LabelSequence
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+
+        def _dump(label, depth):
+            name = get_label_name(label)
+            loc = shape_tool.GetShape_s(label).Location()
+            t = loc.Transformation().TranslationPart()
+            print(f"{'  ' * depth}{name!r} entry={get_label_entry(label)} "
+                  f"loc=({t.X():.3f}, {t.Y():.3f}, {t.Z():.3f})")
+            children = TDF_LabelSequence()
+            shape_tool.GetComponents_s(label, children, False)
+            for i in range(1, children.Length() + 1):
+                _dump(children.Value(i), depth + 1)
+
+        free_labels = TDF_LabelSequence()
+        shape_tool.GetFreeShapes(free_labels)
+        print(f"[save_step_doc] pre-write dump ({free_labels.Length()} free shape(s)):")
+        for i in range(1, free_labels.Length() + 1):
+            _dump(free_labels.Value(i), 0)
+
         WS = XSControl_WorkSession()
         step_writer = STEPCAFControl_Writer(WS, False)
         step_writer.Transfer(self.doc, STEPControl_AsIs)
@@ -622,11 +812,25 @@ class DocModel:
         for cross-document XCAF copies -- so the names of all parts
         inside an imported assembly are preserved in the tree view.
 
-        (Earlier versions of this codebase used TDocStd_XLinkTool.Copy
-        followed by a STEP export/import round-trip (doc_linter) to
-        work around known XLinkTool inconsistencies in shape-managing
-        documents -- see docs/DEVELOPMENT_LOG.md, Session 10. Using
-        XCAFDoc_Editor.Extract directly avoids the round-trip.)
+        NORMALIZATION (Session 19): after extensive testing across
+        Sessions 14-18, confirmed that a component built via Extract_s
+        here is perfectly correct in isolation (displays fine, names
+        read back fine, even survives its OWN independent save/reload
+        untouched) -- but corrupts (blank NAUO name, identity location
+        in the written STEP file) the NEXT time it's referenced by a
+        fresh AddComponent call, e.g. via Position's
+        set_component_location(). Components built entirely by
+        STEPCAFControl_Reader (never imported via this method) never
+        show this problem -- repositioning one always round-trips
+        correctly. So: round-trip the WHOLE document through a temp
+        STEP file RIGHT HERE, immediately after Extract_s, before the
+        user ever gets a chance to reposition the freshly-imported
+        component. This normalizes the Extract_s-built structure into
+        Reader-native form before anything else ever references it.
+        (Round-tripping at SAVE time instead -- tried in Session 18 --
+        does NOT work: the corruption is already present by the time
+        of the FIRST write, so it has to happen before any AddComponent
+        call ever references the Extract_s-built label, not after.)
         """
         from OCP.XCAFDoc import XCAFDoc_Editor
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
@@ -650,12 +854,69 @@ class DocModel:
             print("[add_component_from_label] XCAFDoc_Editor.Extract failed")
             return None
         component_label = get_last_component(shape_tool, root_label)
-        entry = get_label_entry(component_label)
         set_label_name(component_label, name)
         shape_tool.UpdateAssemblies()
+
+        # Round-trip to normalize (see docstring above for why).
+        try:
+            import tempfile
+            tmp_fname = tempfile.mktemp(suffix='.stp')
+            tmp_WS = XSControl_WorkSession()
+            tmp_writer = STEPCAFControl_Writer(tmp_WS, False)
+            tmp_writer.Transfer(self.doc, STEPControl_AsIs)
+            tmp_status = tmp_writer.Write(tmp_fname)
+            if tmp_status == IFSelect_RetDone:
+                fresh_doc, fresh_app = create_doc()
+                reader = STEPCAFControl_Reader()
+                reader.SetColorMode(True)
+                reader.SetLayerMode(True)
+                reader.SetNameMode(True)
+                reader.SetMatMode(True)
+                r_status = reader.ReadFile(tmp_fname)
+                if r_status == IFSelect_RetDone:
+                    reader.Transfer(fresh_doc)
+                    self.doc = fresh_doc
+                    print("[add_component_from_label] normalized via "
+                          "round-trip")
+                else:
+                    print("[add_component_from_label] normalize: reader "
+                          "failed, keeping un-normalized doc")
+            else:
+                print("[add_component_from_label] normalize: temp write "
+                      "failed, keeping un-normalized doc")
+            os.remove(tmp_fname)
+        except Exception as e:
+            print(f"[add_component_from_label] normalize round-trip "
+                  f"errored ({e}) -- keeping un-normalized doc")
+
         self.parse_doc()
-        uid = self.get_uid_from_entry(entry)
-        return uid
+
+        # Recover the freshly-imported component's uid. The round-trip
+        # may have renumbered entries throughout the WHOLE document
+        # (Read() reassigns tags from scratch), so re-find root_label
+        # fresh in the (possibly new) self.doc and take its newest
+        # component, rather than trusting any label/entry captured
+        # before the round-trip.
+        new_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        new_free_labels = TDF_LabelSequence()
+        new_shape_tool.GetFreeShapes(new_free_labels)
+        if new_free_labels.Length() == 0:
+            print("[add_component_from_label] Warning: no free shapes "
+                  "after normalize")
+            return None
+        new_root_label = new_free_labels.Value(1)
+        new_component_label = get_last_component(new_shape_tool, new_root_label)
+        new_entry = get_label_entry(new_component_label)
+        found_name = get_label_name(new_component_label)
+        if found_name != name:
+            print(f"[add_component_from_label] Warning: post-normalize "
+                  f"name mismatch (expected {name!r}, got {found_name!r})")
+        for candidate_uid, candidate_info in self.label_dict.items():
+            if candidate_info['entry'] == new_entry:
+                return candidate_uid
+        print(f"[add_component_from_label] Warning: could not recover "
+              f"uid for entry {new_entry}")
+        return None
 
     def add_component_to_asy(self, shape, name, color, tag=1):
         """Add new shape to label at root with tag & return uid"""

@@ -1285,3 +1285,322 @@ cause is worth pursuing when it's cheap, but shipping a fix that's
 demonstrably correct (matches 4/4 known-good examples) shouldn't wait
 on fully reverse-engineering an OCCT internals question search
 couldn't answer.
+
+## Session 15: Position dialog + Mate/Align Step 1
+
+Built the real Position dialog from Doug's design PDF (Methods /
+Constraints / Reverse-Back-Done layout), replacing the standalone
+"2 Points" menu command from Session 13 with one dialog that will
+grow to hold every method. Wired up Step 1 of Mate/Align (rotate
+about the intersection line of two picked face planes until flush)
+and folded 2 Points in as a sibling method, both going through a new
+`position_math.py`.
+
+### position_math.py -- ported from Basicad, no build123d
+
+Doug was explicit: no build123d dependency, even a thin one -- he'd
+already learned the hard way (before Kodacad existed) that it risks
+STEP round-trip fidelity, which has been the throughline of this
+whole project. Turned out not to cost much: Basicad's `compute_*_move()`
+functions in `src/pose.py` are already almost entirely raw OCP calls
+(`gp_Trsf`, `gp_Ax1`, `gp_Dir`, `gp_Pnt`); build123d's `Vector`/
+`Location` were only ever used as thin point/direction bookkeeping.
+Replaced that layer with `Vec3` -- a ~60-line dependency-free class
+(X/Y/Z, +, -, unary -, scalar *, dot, cross, normalized, length) --
+and swapped `Location` for `TopLoc_Location` throughout. Only Step 1
+(`compute_step1_move`, `find_intersection_line`) is ported so far;
+Step 2/3 and Align Axis come once Step 1 is proven.
+
+**Caught two of my own mistakes before shipping, by re-diffing against
+the original line-by-line instead of trusting my first transcription:**
+1. Added an extra translation step after the Step 1 rotation that
+   ISN'T in the original -- the original returns just the rotation,
+   because rotating about the true plane-intersection line already
+   makes the faces coplanar by construction. Improvising on top of an
+   already-correct, already-tested algorithm is exactly the mistake
+   to avoid; caught it by re-viewing the source instead of assuming my
+   memory of it was right.
+2. Simplified away a genuinely dead `if result is not None: ... else:
+   ...` branch (the original has it too, but `result` is provably
+   non-None by that point in the function in both versions) -- this
+   one was a safe, behavior-preserving simplification, not a bug, but
+   worth noting as the kind of thing to flag explicitly rather than
+   silently "clean up" during a port.
+
+`resolve_face_pick()` reuses `workplane.face_normal()` verbatim rather
+than re-deriving face-normal/orientation logic -- that function
+already correctly handles `TopAbs_REVERSED` faces and has been in
+production since Session 3.
+
+### UID tracking through a multi-step dialog
+
+Session 14's `set_component_location()` fix (RemoveComponent +
+AddComponent instead of SetLocation) means the component's uid
+changes on EVERY call -- fine for a one-shot command, but the Position
+dialog applies several moves in sequence (Step 1, Reverse, Back) to
+the same item. Changed `set_component_location()` to return the new
+uid (`None` on failure) instead of a bare bool, and made every caller
+in the dialog thread that uid through (`self.uid = new_uid`) rather
+than reusing the one captured at dialog-open time.
+
+Caught a real bug in my own first draft while implementing this:
+`get_uid_from_entry()` looked like the obvious way to recover a uid
+from an entry string after `parse_doc()` rebuilds `label_dict` --
+except it's not a lookup, it's a *generator* (increments a counter in
+`self._share_dict` on every call, used internally by `parse_doc()`'s
+own walk). Calling it again after the fact would mint a fresh,
+never-actually-assigned uid rather than recover the real one. Fixed
+by searching the freshly-rebuilt `label_dict` for the matching entry
+instead.
+
+Caught a second instance of the same class of bug in `_on_reverse()`:
+it calls `set_component_location()` twice (once to undo the previous
+move, once to re-apply with the flipped mode) but the first draft
+only captured the uid from the second call -- leaving `self.uid` stale
+for that intermediate step. Same fix: capture and use the return
+value from every call, not just the last one.
+
+### Undo model differs from Basicad's, deliberately
+
+Basicad's `Back`/`Reverse` call `node.move(last_move.inverse())` --
+correct there because build123d's `.move()` composes onto the current
+location. Kodacad's `set_component_location()` sets an ABSOLUTE local
+location (a consequence of the Session 14 fix), so composing an
+inverse delta isn't the right primitive here. Instead, the dialog
+snapshots the item's current local location onto a history stack
+*before* every move, and Back/Reverse restore that exact snapshot
+directly -- simpler, and immune to compounding numerical drift from
+repeated delta inversions (irrelevant for one move, but would matter
+across a longer Mate/Align/Align-Axis sequence later).
+
+`Reverse` specifically: undo the last move FIRST (restoring the part
+to the exact state the original two picks were taken from), THEN
+recompute with the flipped Mate/Align mode from those same picks. This
+order isn't just style -- it's required for correctness, since the
+picks' stored world-space point/direction are only valid relative to
+where the part was *when they were taken*, not wherever it ended up
+after the move being reversed.
+
+### Also added: DocModel.get_world_loc() / get_parent_world_loc() /
+world_to_local()
+
+Small helpers extracted from logic that was about to be duplicated a
+third time (once in the original 2-Points command, now again in the
+dialog) -- the world-location bookkeeping already proven in
+`reparent_component()`, now available as `dm` methods instead of
+copy-pasted inline.
+
+### Not yet done
+
+Step 2, Step 3, and Align Axis of Mate/Align; Dynamic (AIS_Manipulator
+port); face-owner validation (trusting click order for moving/fixed,
+per Session 13's note, still deferred).
+
+### Lesson for future development
+
+**When porting a proven algorithm, verify by re-diffing against the
+source line-by-line, not by trusting a first transcription from
+memory -- even within the same sitting.** Both mistakes caught this
+session (the invented extra translation, the generator-vs-lookup
+confusion) were things a careful second look caught immediately but a
+first pass missed. The fix isn't "be more careful" in the abstract --
+it's "actually re-open the source and compare," the same discipline
+this log has already recorded paying off for `Extract_s` (Session 10)
+and `SetLocation` (Session 14).
+
+## Session 16: Position dialog testing -- a real regression, a real UI bug, and two feature requests
+
+Doug's first real test of the Position dialog (Session 15) surfaced
+five things. In priority order:
+
+### 1. REGRESSION: positions AND names reverted after save/reload
+
+Serious -- this is the exact class of bug Session 14 was supposed to
+have closed. Root cause: `set_component_location()` fetched the
+referred shape via `shape_tool.GetShape_s(ref_label)` -- which returns
+bare geometry with **no XCAF name/structure attached**. That's the
+exact trap Session 9 fixed once already, for STEP imports (`GetShape_s`
+losing names when flattening a sub-assembly to raw geometry). It got
+reintroduced here in Session 14 while solving a *different* problem
+(getting the location to survive STEP export) -- fixing one thing
+without rechecking whether the fix reopened an already-closed one.
+
+Compounding it: `AddComponent(parent_label, located_shape, True)` --
+the `True` (`expand`) tells OCCT to decompose a Compound into a FRESH
+assembly structure. For a raw, name-less `TopoDS_Shape` (which is what
+`GetShape_s` returns), that decomposition has nothing to name the new
+sub-labels with, so it falls back to auto-numbering. Confirmed exactly:
+"manual-lathe" and the hub assembly came back named `22` and `25`
+after a Position move + save/reload.
+
+**Fix:** `XCAFDoc_ShapeTool::AddComponent` has TWO overloads (both
+already confirmed against the OCCT refman in Session 14, just used the
+wrong one):
+```
+AddComponent(assembly, comp: TDF_Label, Loc: TopLoc_Location)
+AddComponent(assembly, comp: TopoDS_Shape, expand: bool = false)
+```
+Switched to the LABEL-based overload -- reference `ref_label` directly
+(never converting to raw geometry at all), passing the location
+straight through at creation time. This should fix both problems at
+once: names/substructure preserved (no geometry extraction), and
+location survives export (still going through `AddComponent`, the
+mechanism Session 14 already proved correct, not `SetLocation`).
+
+**Also fixed `reparent_component()` proactively** -- identical
+`GetShape_s` + `AddComponent(...,True)` pattern, never specifically
+reported broken, but that's very plausibly because it's only ever been
+tested with leaf parts (no children to lose names for) or hasn't been
+tested with save/reload after reparenting an *assembly* specifically.
+Switched to the same label-based `AddComponent`, and its color-setting
+call (`color_tool.SetColor(ref_shape, ...)`) to the label-based
+`SetColor(ref_label, ...)` overload (confirmed to exist) since
+`ref_shape` is no longer fetched.
+
+**Not yet re-verified by real testing** -- please re-run Doug's exact
+repro (move an assembly, save, reload, check both position AND name)
+before trusting this.
+
+### 2. UI bug: clicking an already-selected radio button does nothing
+
+Real, structural Qt bug, very likely the actual cause of the "reverse
+to make align into a mate" workaround Doug reached for during the
+hex-shaft test. `QRadioButton.toggled` only fires on an actual state
+CHANGE -- clicking "Mate" again while Mate is already the selected
+constraint is a no-op as far as `toggled` is concerned, so the second
+pick sequence never started. Fixed by switching the Mate/Align/2-Points
+buttons from `toggled` to `clicked` (fires on every user click,
+regardless of prior state) for anything that should start a new pick
+sequence.
+
+### 3. Hex-on-hex-shaft ("mate, then mate again") -- not a bug, a
+missing feature
+
+With #2 fixed, clicking Mate twice in a row now DOES start two
+separate pick sequences and apply two separate moves. But it still
+won't do what Doug wants for the hex-collar-on-hex-shaft case: our
+current `compute_step1_move()` recomputes a full flush-rotation from
+only the two NEWLY picked faces' current normals every time -- it has
+no concept of "rotate only within the plane already fixed by the
+previous mate." Applying it twice can partially UN-mate the first
+pair unless the two rotation axes happen to coincide by luck. This is
+exactly what Step 2 of the 3-2-1 workflow is *for* (rotate within the
+plane Step 1 already fixed, preserving that constraint) -- deliberately
+not built yet. Doug's hex-shaft example is a good concrete
+justification for building Step 2 next, not a bug in what exists now.
+
+### 4. 2-Points prompt text was misleading
+
+"pick a point ON the part to move" implied an ownership constraint
+that doesn't actually exist for this method -- confirmed by Doug's own
+use of it (picked both points on an L-bracket, unrelated to the lathe
+being moved, purely to capture a known reference distance). Only the
+DELTA between the two points matters for 2 Points; neither point needs
+to belong to the moving item. (Mate/Align's face-picking prompt is
+correctly left alone -- pick 1 genuinely must be a face on the moving
+part there, since the math uses that face's own orientation.)
+
+### 5. Added: full breadcrumb path in the dialog's top section
+
+Doug: "we want to avoid any ambiguity about which instance we are
+moving." A bare name doesn't disambiguate when the same part/assembly
+appears more than once in the tree (shared instances -- see Session
+13). Added `DocModel.get_full_path_name(uid)`, walking the
+`parent_uid` chain up to `/` and joining names, e.g. `/ / as1 /
+manual-lathe`. Displayed in the dialog's top label, refreshed after
+every move (since `self.uid` changes each time).
+
+### Lesson for future development
+
+**Fixing bug A by changing how something is built doesn't
+automatically mean bug B (already fixed once, in a DIFFERENT function,
+for a DIFFERENT reason) can't come back through the new code path.**
+Session 14 fixed a STEP-export problem by switching from `SetLocation`
+to `AddComponent`. That fix was correct AS FAR AS IT WENT -- but
+picking the shape-based overload of `AddComponent` (instead of the
+label-based one that was sitting right there in the same refman page)
+reopened the exact `GetShape_s`-loses-names problem Session 9 had
+already closed, just via a new code path. When a fix touches a
+primitive that a DIFFERENT past bug also touched, it's worth
+explicitly checking whether the new code still respects the earlier
+fix's constraints -- not just whether it solves the problem in front
+of you.
+
+## Session 19: the actual root cause -- Extract_s labels, not set_component_location
+
+**The breakthrough test:** after four sessions (14, 16, 17, 18) of
+fixes to `set_component_location()` that all failed identically, tried
+repositioning a component that was NEVER imported via "Import STEP" --
+`l-bracket_1`, part of the original `as1-oc-214.stp` session file,
+built entirely by `STEPCAFControl_Reader`. It worked. Name and
+position both survived save/reload perfectly, on the first try, with
+code that had already failed on `manual-lathe` and the hub assembly
+in every prior test.
+
+**This means every fix attempted in Sessions 14-18 was aimed at the
+wrong function.** `set_component_location()` was never broken. The
+actual defect is in `add_component_from_label()` (Session 9's
+`XCAFDoc_Editor.Extract_s`-based STEP import) -- or more precisely, in
+what `Extract_s` produces: a component that is perfectly correct in
+every check we ran (displays fine, name reads back fine, survives its
+OWN independent save/reload untouched -- confirmed by Doug's control
+test in an earlier session), but corrupts the moment it's later
+referenced by a *second* `AddComponent` call, e.g. via Position. A
+component built entirely by `STEPCAFControl_Reader` never shows this
+problem, no matter what `set_component_location` does to it.
+
+### The fix: normalize at import time, not save time
+
+Session 18 tried round-tripping the whole document through a temp
+STEP file right before the final `Write()` -- reasoning that this
+would force everything through the one path (`STEPCAFControl_Reader`)
+proven to produce correct results. Real testing showed this doesn't
+help: the corruption is already present by the time of the *first*
+write (confirmed: writing the temp file already produces the
+identical broken output the second write then faithfully reproduces).
+Round-tripping too late can only round-trip a bug, not fix it.
+
+The actual fix: move the round-trip to `add_component_from_label()`,
+immediately after `Extract_s`, before the freshly-imported component
+is ever referenced by anything else. This normalizes the Extract_s-
+built structure into Reader-native form *before* the user ever gets a
+chance to reposition it -- so by the time `set_component_location`
+later touches it, it's structurally identical to something the Reader
+built directly, matching the one case that's always worked.
+
+`save_step_doc()`'s round-trip (Session 18) was reverted -- confirmed
+ineffective, now dead weight.
+
+### Why this took five sessions to find
+
+Every individual piece of evidence gathered along the way was real
+and correctly interpreted -- the diagnostics showing memory was
+correct up to `Write()` (Session 14, confirmed again here), the NAUO
+name field genuinely blank in the file (Session 17), the "identical
+name" correlation that turned out to be coincidental (also Session
+17, disproven by direct test rather than left as unexamined belief).
+What was missing wasn't more diagnostic data -- it was a *controlled
+variable*: every test case tried so far (`manual-lathe`, the hub)
+had gone through the SAME import path, so nothing distinguished
+"caused by set_component_location" from "caused by something upstream
+that set_component_location merely exposes." The test that finally
+separated those two hypotheses -- try the same operation on a
+component with different provenance -- is the kind of test worth
+reaching for earlier when several specific fixes to the same function
+have failed identically. Session 18's honest framing ("if this
+doesn't work, the problem is deeper still") was the right instinct;
+the actual next step should have been changing what's being tested,
+not what's being fixed.
+
+### Lesson for future development
+
+**When several specific fixes to the same function all fail the same
+way, stop varying the fix and start varying the input.** Sessions
+14-18 tried `SetLocation`, two different `AddComponent` overloads,
+distinct-name forcing, and a save-time round-trip -- four different
+*fixes* to the same function, against the same two test components
+(`manual-lathe`, the hub), both of which shared a variable nobody had
+isolated: their import history. The question that actually mattered
+wasn't "which API call is correct" -- it was "does this reproduce on
+a component this function didn't create the label for." Once asked,
+one test settled it.
