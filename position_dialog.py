@@ -189,8 +189,7 @@ class PositionDialog(QDialog):
         self._pick2 = None
         self.main_win.registerCallback(self._face_pick_callback)
         self.main_win.canvas._display.SetSelectionModeFace()
-        self.main_win.statusBar().showMessage(
-            f"Positioning '{self.name}': pick a face ON the part to move.")
+        self.main_win.statusBar().showMessage("Pick face 1 (moving part).")
 
     def _face_pick_callback(self, shapeList, *args):
         for shape in shapeList:
@@ -202,8 +201,7 @@ class PositionDialog(QDialog):
             pick = position_math.resolve_face_pick(face)
             if self._pick1 is None:
                 self._pick1 = pick
-                self.main_win.statusBar().showMessage(
-                    f"Positioning '{self.name}': now pick the FIXED (target) face.")
+                self.main_win.statusBar().showMessage("Face 1 picked. Pick face 2 (fixed).")
             else:
                 self._pick2 = pick
                 self._apply_mate_align()
@@ -214,15 +212,13 @@ class PositionDialog(QDialog):
         mate = (self._last_mode == "mate")
         move = position_math.compute_step1_move(self._pick1, self._pick2, mate=mate)
         if move is None:
-            self.main_win.statusBar().showMessage(
-                "Could not compute move from these picks. Try again.", 5000)
+            self.main_win.statusBar().showMessage("Couldn't compute move -- try again.", 5000)
             return
         self._last_picks = (self._pick1, self._pick2)
         ok = self._apply_world_move(move)
         if ok:
             label = "Mate" if mate else "Align"
-            self.main_win.statusBar().showMessage(
-                f"{label} applied. Reverse to flip Mate/Align, or Done to finish.", 8000)
+            self.main_win.statusBar().showMessage(f"{label} applied.", 5000)
         self._update_ui_state()
 
     # -----------------------------------------------------------------
@@ -235,10 +231,7 @@ class PositionDialog(QDialog):
         self._pick2 = None
         self.main_win.registerCallback(self._point_pick_callback)
         self.main_win.canvas._display.SetSelectionModeVertex()
-        self.main_win.statusBar().showMessage(
-            f"Positioning '{self.name}': pick a reference point (point 1). "
-            f"It doesn't need to be on '{self.name}' itself -- only the "
-            f"distance from point 1 to point 2 matters.")
+        self.main_win.statusBar().showMessage("Pick point 1 (need not be on the part).")
 
     def _point_pick_callback(self, shapeList, *args):
         from OCP.BRep import BRep_Tool
@@ -252,9 +245,7 @@ class PositionDialog(QDialog):
             pt = position_math.Vec3.from_gp(gp_pt)
             if self._pick1 is None:
                 self._pick1 = pt
-                self.main_win.statusBar().showMessage(
-                    f"Positioning '{self.name}': now pick point 2 -- "
-                    f"'{self.name}' will move by the distance from point 1 to point 2.")
+                self.main_win.statusBar().showMessage("Point 1 picked. Pick point 2.")
             else:
                 self._pick2 = pt
                 self._apply_two_points()

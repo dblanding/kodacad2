@@ -1604,3 +1604,125 @@ isolated: their import history. The question that actually mattered
 wasn't "which API call is correct" -- it was "does this reproduce on
 a component this function didn't create the label for." Once asked,
 one test settled it.
+
+## Session 20: regression pass -- fillet crash, status bar terseness,
+testing checklist
+
+Doug ran a broader regression pass (the Session 19 fix, plus the OCCT
+"Bottle" tutorial as an unrelated sanity check) and reported three
+things.
+
+### 1. Hub still fails; manual-lathe now passes
+
+Confirms Session 19's fix is real progress, not a false fix -- but the
+hub-specific case is narrower than the original bug and still open.
+Likely related to unusual internal structure in the hub's OWN STEP
+file (we noticed `NAUO1`/`NAUO2` generic occurrence names inside it
+back during the Session 17 investigation, suggesting whatever tool
+originally exported that file already had some internal referencing
+quirk, independent of anything Kodacad does). Logged as a known open
+issue in the new testing checklist (below) rather than chased further
+right now -- lower priority than the general regression it resembled.
+
+### 2. Fillet crash with no Active Part set
+
+```
+TypeError: Init(): incompatible function arguments... 
+Invoked with: <TopExp_Explorer>, None, <TopAbs_EDGE>
+```
+
+Pre-existing bug, unrelated to Position work -- just never triggered
+until this regression pass. `fillet()` already anticipated "no Active
+Part set" as a real scenario (there's a friendly message for exactly
+that case!) but only caught `ValueError`. `Topology.Topo(None).edges()`
+raises `TypeError` in this OCP binding, not `ValueError`, so the
+existing guard never fired. Fixed by checking `win.activePart is None`
+explicitly before constructing `Topology.Topo` at all, rather than
+guessing which exception type a `None` input produces.
+
+### 3. Position dialog status bar messages too long
+
+Several messages restated the item's full name and a paragraph of
+explanation on every pick ("Positioning 'manual-lathe': pick a
+reference point (point 1). It doesn't need to be on 'manual-lathe'
+itself -- only the distance from point 1 to point 2 matters.") --
+wider than the status bar, so unreadable in practice. Shortened to
+match the terse, count-based style `filletC` already uses elsewhere
+in this codebase ("Edge 3 selected. Add more edges or enter radius +
+Enter.") -- e.g. "Pick point 1 (need not be on the part)." -> "Point 1
+picked. Pick point 2." Explanatory prose that isn't essential in the
+moment (like Reverse's behavior) moved out of the status bar entirely
+rather than shortened further -- it doesn't need to be said every time.
+
+### 4. New: docs/TESTING_CHECKLIST.md
+
+Doug's suggestion, and overdue -- 19 sessions of manual regression
+testing existed only as scattered log entries, easy to forget to
+re-check. Added a checklist organized by feature area (STEP Import,
+Save/Reload, Tree/RMB, Shared Instances, Viewport, Position Dialog,
+Modify Active Part), each item traceable back to the session that
+found the original bug, plus a "Known Open Issues" section so
+Session 19's hub case and the deferred Step 2/3/Dynamic/Align Axis
+work don't get silently re-reported as new bugs later.
+
+### Lesson for future development
+
+**A regression checklist earns its value the first time it catches
+something a targeted test wouldn't have.** The fillet crash is exactly
+that case -- nothing about Position work touches `fillet()`, but
+running an unrelated tutorial as a broad sanity check caught a
+real, user-facing crash that narrow feature testing never would have
+surfaced. Worth treating "run something unrelated" as a real testing
+strategy, not just a formality.
+
+## Session 21: modal Active Part check, upfront not after-the-fact
+
+Following up on Session 20's fillet crash fix. The crash was gone, but
+the underlying UX problem wasn't: the check only fired AFTER the user
+had already picked every edge and typed a radius (a real 12-edge
+fillet in Doug's case) -- console-only message, easy to miss, and by
+the time it showed up all that picking work was wasted.
+
+Added `require_active_part(op_name)`: a shared, modal check (`QMessageBox.
+warning`) used consistently across every "Modify Active Part" operation
+that needs one -- `fillet`, `shell` (both pick geometry before
+applying, same "tedium" risk), `mill`, `pull` (less picking work, but
+same missing-Active-Part crash risk), and `rotateAP`/`rev_rotateAP`
+(single-shot, would otherwise crash immediately calling `.Move()` on
+`None`). Checked at the point the menu item is first clicked, before
+any picking/callback registration starts, not after the user has
+already done the work.
+
+Also (unrelated): fixed `KodaViewport.call_select_callbacks()`'s error
+handler, which was printing only `str(e)` -- empty for some exception
+types, producing the useless "Select callback error: " Doug hit while
+making the second construction circle in the Bottle tutorial. Now
+prints a full traceback. The underlying circle bug didn't reproduce on
+a second attempt (transient or input-sequence-dependent), but the
+diagnostic stays in place for if/when it recurs -- per Doug: "let's
+leave the expanded error message in place in case we encounter it
+again."
+
+### Menu order: not a regression
+
+Doug flagged Position/Modify Active Part being "swapped" from what
+Basicad does, worth a quick note: the delivered code already has
+Position before Modify Active Part, matching workflow order (Workplane
+-> Create 3D -> Modify as one linear sequence, Position introduced as
+a separate subsequent step, not inserted into that flow) -- which is
+actually the OPPOSITE of the original design PDF's own mockup, which
+showed Modify Active Part before Position. That deviation was made
+back in Session 13 without explicitly flagging it. No code change
+needed; noted here so the reasoning is on record instead of silently
+implicit in a menu ordering nobody wrote down.
+
+### Lesson for future development
+
+**Catching an error correctly isn't the same as catching it at the
+right TIME.** Session 20's fix (catch the right exception type) and
+Session 21's fix (catch it before the expensive part starts) address
+two different aspects of the same bug report, and only the second one
+actually addresses what the user experienced as the problem ("I did
+all this picking for nothing"). When a fix resolves the crash but not
+the underlying frustration, that's worth noticing as a separate,
+still-open issue, not folded into "already fixed."

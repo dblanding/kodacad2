@@ -105,8 +105,16 @@ class DisplayShim:
         # is a list of selected shapes. Wrap single shape in a list.
         shape_list = [shape] if shape is not None else []
         for cb in self._select_callbacks:
-            try: cb(shape_list, *args)
-            except Exception as e: print(f"Select callback error: {e}")
+            try:
+                cb(shape_list, *args)
+            except Exception:
+                # str(e) alone can be empty for some exception types
+                # (confirmed: this is exactly why "Select callback
+                # error: " was printing with nothing after it) -- print
+                # a full traceback so the actual failure is visible.
+                import traceback
+                print("Select callback error:")
+                traceback.print_exc()
 
 
 class KodaViewport(QWidget):

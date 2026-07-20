@@ -40,7 +40,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Face, TopoDS_Vertex
 from OCP.TopTools import TopTools_ListOfShape
 
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QTreeWidgetItemIterator
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QTreeWidgetItemIterator
 
 from m2d import M2D
 import stepanalyzer
@@ -321,6 +321,8 @@ def revolveC(shapeList, *args):
 def rotateAP():
     """Experimental... Rotate active part incrementally"""
 
+    if not require_active_part("Rotate Act Part"):
+        return
     ax1 = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0))
     aRotTrsf = gp_Trsf()
     angle = math.pi / 18  # 10 degrees
@@ -335,6 +337,8 @@ def rotateAP():
 def rev_rotateAP():
     """Experimental... rotate back"""
 
+    if not require_active_part("Reverse Rotate Act Part"):
+        return
     ax1 = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0))
     aRotTrsf = gp_Trsf()
     angle = math.pi / 18  # 10 degrees
@@ -352,6 +356,27 @@ def rev_rotateAP():
 # 3D Geometry modification functions
 #
 #############################################
+
+def require_active_part(op_name):
+    """Check that an Active Part is set before a Modify Active Part
+    operation starts picking geometry. Returns True if OK to proceed.
+
+    Session 20 caught fillet crashing outright when no Active Part was
+    set (wrong exception type caught). Fixing just the crash wasn't
+    enough on its own, though -- the check only fired AFTER the user
+    had already picked every edge and typed a radius, so a real-world
+    12-edge fillet failed only at the very last step. This checks
+    upfront, before any picking starts, and uses a modal dialog (not
+    just a status-bar/console message) so it can't be missed and the
+    user isn't left to discover the problem after doing all the work.
+    """
+    if win.activePart is not None:
+        return True
+    QMessageBox.warning(
+        win, "No Active Part",
+        f"You must set an Active Part before using {op_name}.\n\n"
+        f"Select a part in the tree, then RMB \u2192 Set Active.")
+    return False
 
 
 def mill():
@@ -377,6 +402,8 @@ def mill():
         win.setActivePart(uid)
         win.statusBar().showMessage("Mill operation complete")
         win.clearCallback()
+    elif not require_active_part("Mill"):
+        return
     else:
         win.registerCallback(millC)
         win.lineEdit.setFocus()
@@ -415,6 +442,8 @@ def pull():
         win.setActivePart(uid)
         win.statusBar().showMessage("Pull operation complete")
         win.clearCallback()
+    elif not require_active_part("Pull"):
+        return
     else:
         win.registerCallback(pullC)
         win.lineEdit.setFocus()
@@ -447,17 +476,12 @@ def fillet(event=None):
         # Use IsSame() instead of Python 'in' -- TopoDS shapes may be
         # different Python objects but the same underlying geometry
         for edge in win.edgeStack:
-            try:
-                part_edges = list(topo.edges())
-                found = any(edge.IsSame(e) for e in part_edges)
-                if found:
-                    edges.append(edge)
-                else:
-                    print("Selected edge(s) must be in Active Part.")
-                    win.clearCallback()
-                    return
-            except ValueError:
-                print("You must first set the Active Part.")
+            part_edges = list(topo.edges())
+            found = any(edge.IsSame(e) for e in part_edges)
+            if found:
+                edges.append(edge)
+            else:
+                print("Selected edge(s) must be in Active Part.")
                 win.clearCallback()
                 return
         win.edgeStack = []
@@ -483,6 +507,8 @@ def fillet(event=None):
             win.redraw()
         win.setActivePart(uid)
         win.clearCallback()
+    elif not require_active_part("Fillet"):
+        return
     else:
         win.registerCallback(filletC)
         display.SetSelectionModeEdge()
@@ -559,6 +585,8 @@ def shell(event=None):
         win.setActivePart(uid)
         win.statusBar().showMessage("Shell operation complete")
         win.clearCallback()
+    elif not require_active_part("Shell"):
+        return
     else:
         win.registerCallback(shellC)
         display.SetSelectionModeFace()
