@@ -65,6 +65,19 @@ silently come back.
       instance's placement. (Session 13)
 - [ ] Delete one shared instance -- the other instance and the
       underlying shared definition survive intact. (Session 11)
+- [ ] Position (2 Points or Mate/Align) a shared instance, save,
+      reload -- name and position both survive now (Session 22:
+      previously any shared instance -- confirmed with
+      `l-bracket-assembly_1`/`_2` -- reverted position and lost its
+      name on export, a documented `STEPCAFControl_Writer` limitation
+      with "partner shapes" at different locations). Confirm the
+      REPOSITIONED instance is now independent -- editing it should NOT
+      affect its sibling anymore (deliberate behavior change: a
+      repositioned instance intentionally stops sharing geometry with
+      any sibling that stays linked to the original, matching "make
+      unique" in mainstream CAD tools). Confirm the UNTOUCHED sibling
+      still round-trips correctly and is still linked to whatever else
+      references the original shared definition.
 
 ## Viewport
 
@@ -119,9 +132,14 @@ haven't gotten WORSE)
 
 - Positioning an imported hub assembly with unusual internal STEP
   structure (generic `NAUO1`/`NAUO2` names in its own file) does not
-  survive save/reload, even though the general Extract_s-import
-  regression this resembled is fixed (Session 19). Lower priority;
-  narrower scope than the bug it was mistaken for.
+  survive save/reload. UPDATE (Session 22): the general mechanism
+  turned out to be shared instances ("partner shapes" at different
+  locations, a documented OCCT writer limitation) -- now fixed via
+  automatic unsharing before reposition. The hub's own internal
+  NAUO1/NAUO2 naming was an early clue pointing at some kind of
+  internal duplication/sharing in that specific file, so this fix may
+  well have resolved the hub case too as a side effect -- worth
+  retesting before assuming it's still broken.
 - Mate/Align only implements Step 1 of the 3-2-1 workflow -- applying
   Mate twice in a row does NOT preserve the first mate's constraint
   (no DOF-tracking yet; Step 2/3 not built). Expected limitation, not

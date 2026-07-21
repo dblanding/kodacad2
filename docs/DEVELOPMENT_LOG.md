@@ -1726,3 +1726,83 @@ actually addresses what the user experienced as the problem ("I did
 all this picking for nothing"). When a fix resolves the crash but not
 the underlying frustration, that's worth noticing as a separate,
 still-open issue, not folded into "already fixed."
+
+## Session 22: root cause found -- shared instances, not assemblies
+
+Building on Session 21's data: Doug ran two more controlled tests.
+`plate` (a leaf part, reached this time via `as1-oc-214.stp` imported
+INTO a `manual-lathe.step` session) survived save/reload completely --
+position, name, and color. `l-bracket-assembly` failed again, in this
+SAME import path (Extract_s + Session 19's round-trip -- the exact
+treatment that fixed `manual-lathe`), ruling out "generalize the
+round-trip fix" as the answer: whatever's different about
+`l-bracket-assembly` isn't fixed by the same treatment that fixed
+`manual-lathe`.
+
+### The actual differentiator: shared instances, not assembly-ness
+
+Requested and got the untruncated NAUO grep. Two findings settled it:
+
+1. `l-bracket-assembly`'s occurrence that failed to save showed up
+   with a BLANK name (`#139794 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('237',
+   '','',#133581,#134718,$)`), which is why an earlier `grep
+   "l-bracket-assembly"` search didn't find it -- nothing to match on
+   a blank name field.
+2. That entity's child reference (`#134718`) is the SAME entity
+   `l-bracket_1`'s own NAUO uses as ITS parent reference -- confirming
+   `l-bracket-assembly_1` and `_2` are true XCAF-level shared
+   instances of one product definition, not just visually identical.
+
+This matches a documented OCCT `STEPCAFControl_Writer` limitation
+found back in Session 14 and set aside at the time as maybe not
+applicable: mishandling export when a shape has "other partner shapes
+with a different location." That's exactly this scenario --
+repositioning one shared instance while its sibling stays at a
+different location confuses the writer specifically for the modified
+instance.
+
+### The fix: unshare before repositioning
+
+`set_component_location()` now checks `XCAFDoc_ShapeTool::GetUsers()`
+on the referred label before repositioning. If more than one
+component references it (a genuinely shared instance), it clones the
+referred label into an independent copy via `XCAFDoc_Editor.Extract_s`
+(the same tool already proven correct for imports) before proceeding,
+falling back gracefully to the shared reference if any step of the
+clone fails.
+
+**This is a deliberate behavior change, discussed and confirmed with
+Doug first, not assumed:** once an instance is repositioned this way,
+it stops sharing geometry with any sibling that remains linked to the
+original -- e.g. editing a hole size on the repositioned instance will
+no longer propagate to its sibling, the way it did before (celebrated
+as correct behavior back in Session 13). The tradeoff: a part that
+silently reverts position and loses its name on every save is worse
+than losing an edit-propagation convenience that only applies once
+you've deliberately diverged an instance's placement from its sibling
+anyway. Matches how mainstream CAD tools handle this same situation
+("make unique" / "break the link").
+
+Doug's own framing mattered here too: this fix stays inside strict
+XDE/XCAF conformity rather than compromising it -- `Extract_s` is
+OCCT's own sanctioned cloning tool, not a workaround bolted on
+alongside the format. Worth recording plainly: his insistence on not
+"zagging" toward build123d's looser approach (a 200MB file bloating to
+1.1GB after deleting content, in his own recent test) is exactly what
+kept this investigation pointed at a real fix instead of a shortcut.
+
+### Lesson for future development
+
+**A documented bug report set aside as "probably not applicable" is
+worth re-checking once the evidence narrows enough to test it
+directly, not just once.** The Mantis report about partner shapes at
+different locations was found in Session 14, considered, and shelved
+because nothing at the time distinguished it from several other
+candidate explanations. Five sessions of increasingly controlled
+tests (varying leaf-vs-assembly, import path, and finally shared-vs-
+unique) were needed to isolate the one variable that mattered --
+sharing -- at which point the shelved report turned out to be the
+answer all along. The lesson isn't "should have found it sooner" (the
+isolating tests were genuinely necessary); it's that a plausible
+discarded lead is worth a second look once new evidence narrows the
+field, rather than staying discarded by default.
