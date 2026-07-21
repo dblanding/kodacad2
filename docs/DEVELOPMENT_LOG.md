@@ -1806,3 +1806,511 @@ answer all along. The lesson isn't "should have found it sooner" (the
 isolating tests were genuinely necessary); it's that a plausible
 discarded lead is worth a second look once new evidence narrows the
 field, rather than staying discarded by default.
+
+## Session 22 (cont'd): hub deferred, not resolved
+
+Confirmed the hub's `NAUO1`/`NAUO2` blank names are present in the
+hub's OWN source file, loaded standalone with no import, no Position,
+no save/reload involved at all -- this is a pre-existing data-quality
+issue in that specific file, not something Kodacad causes. However,
+blank names alone don't confirm this is the SAME shared-instance bug
+Session 22 fixed -- that requires checking whether NAUO1 and NAUO2
+reference the same child entity (true sharing) or two different ones
+(just poorly named). That check was never completed.
+
+**Decision: deferred, not resolved.** After 22 sessions chasing what
+turned out to be (at least for every other tested case) the shared-
+instance bug, diminishing returns on this one specific file. If it
+resurfaces later, the open question is exactly where this note leaves
+it: confirm whether NAUO1/NAUO2 share a child reference before
+assuming Session 22's fix should have caught it.
+
+## Session 23: Dynamic (AIS_Manipulator) -- drag + numeric Nudge
+
+Ported Basicad's proven `AIS_Manipulator` integration into Kodacad's
+`KodaViewport`, and wired it into the Position dialog as the "Dynamic"
+method. Discussed scope with Doug first: a true Creo-style floating
+numeric-input box that appears mid-drag next to the active axis/ring
+isn't something `AIS_Manipulator` provides on its own -- Creo builds
+that UI itself. Building the real thing would mean detecting which
+handle is active, floating a `QLineEdit` over the OpenGL viewport at
+the right screen position, live-updating it every mouse-move, and
+juggling keyboard focus between dragging and typing -- a real, options-
+open future project, not this session's scope. Agreed instead: live
+status-bar feedback during the drag (reusing the pattern every other
+Position method already has) plus a small "Nudge" section (dX/dY/dZ
+fields + Apply) for exact refinement after a rough drag -- same
+deterministic input -> transform -> apply flow as 2 Points and
+Mate/Align, just seeded by a drag instead of two picks.
+
+### What ported directly vs. what needed adapting
+
+`attach_manipulator()`/`detach_manipulator()` and the mouse-gesture-
+ownership logic (`context.MoveTo()` + `manipulator.HasActiveMode()`
+deciding whether LMB goes to the gizmo or falls through to rotation)
+ported close to verbatim -- this is the same category of problem
+Session 12 solved for RMB vs. AIS_ViewController's built-in zoom
+gesture, and Basicad had already proven the pattern.
+
+What needed rework: Basicad walks a build123d node tree to find every
+leaf AIS_Shape under the thing being moved (so a multi-part sub-
+assembly moves live together, since the gizmo only ever transforms
+the ONE shape it's Attach()-ed to). Kodacad has no such tree -- added
+`DocModel.get_descendant_part_uids(uid)`, walking `parent_uid` chains
+over `part_dict`/`label_dict` instead, then mapping to `win.
+ais_shape_dict` for the actual AIS_Shape objects.
+
+### The integration point that needed real care: redraws destroy AIS_Shapes
+
+`_apply_world_move()` (used by every Position method to actually
+persist a move) ends with a full redraw: `ais_shape_dict.clear()` +
+`Context.RemoveAll(False)` + rebuild. That's fine for 2 Points/Mate-
+Align, which don't hold onto AIS_Shape references across the apply --
+but the manipulator DOES (it's `Attach()`-ed to specific shape
+objects, and `_manip_leaf_shapes` holds direct references to the
+rest). Applying a drag's result without detaching first would leave
+the manipulator attached to shapes that no longer exist. Every path
+that calls `_apply_world_move` while Dynamic mode might be active --
+`_on_manip_done`, `_apply_nudge`, and `_on_back` (Back's enablement
+doesn't check which method is current, so it can fire mid-Dynamic-
+session) -- now detaches first and re-attaches after, resolving fresh
+`AIS_Shape` references via `_reattach_manipulator()` rather than
+reusing anything from before the redraw.
+
+### Not yet tested
+
+None of this has been run -- Doug is away and asked me to build ahead.
+Test plan for next session: attach and drag a translate arrow, drag a
+rotate ring, verify live status-bar feedback, verify a multi-part
+sub-assembly moves together (not just one part of it), verify Nudge
+applies an exact correction on top of a rough drag, verify Back/
+Reverse/Done all correctly detach/reattach around the redraw without
+leaving a stale gizmo on screen, and -- per the now-standard
+discipline -- save and reload afterward to confirm Dynamic-produced
+moves persist exactly like every other method's.
+
+### Lesson for future development
+
+**Scoping a feature honestly up front (the Creo floating-box
+discussion) made the actual implementation simpler to reason about,
+not just faster to agree on.** Knowing from the start that "Nudge
+after the drag" was the real target, rather than "numeric input mid-
+drag," meant the redraw-invalidates-AIS_Shape problem only needed
+solving around a small, well-defined set of call sites (`_on_manip_
+done`, `_apply_nudge`, `_on_back`) instead of a live-updating input
+box that would need the SAME fix applied continuously during an
+active drag, which would have been a materially harder problem.
+
+## Session 24: gizmo-jump bug -- parent resolution used the wrong entry
+
+Doug's terminal log from the Dynamic-mode L-bracket test showed the
+concrete cause directly, no guessing needed: the same uid's reported
+`parent_uid` silently changed between two consecutive
+`set_component_location` calls --
+
+```
+[set_component_location #1] uid=0:1:1:5:4.1 ... parent_uid=0:1:1:1:4.0   (l-bracket-assembly_2)
+[set_component_location #2] uid=0:1:1:5:5.0 ... parent_uid=0:1:1:1:2.0   (l-bracket-assembly_1)
+```
+
+-- with no reparenting ever requested. Root cause: `set_component_
+location()`'s parent-label resolution used `parent_info.get('ref_entry')
+or parent_info['entry']`, preferring the parent's *shared product
+definition* over its own specific instance entry. `l-bracket-assembly_1`
+and `_2` share one underlying definition (Session 22), so resolving
+the parent through `ref_entry` added the repositioned L-bracket to the
+SHARED DEFINITION rather than to the one specific assembly instance it
+actually belonged to -- explaining exactly why the manipulator
+appeared to jump to the sibling bracket after release.
+
+This exact `ref_entry`-preferring pattern is correct and intentional
+in `reparent_component()` (deliberately making every shared instance
+of a target parent receive the reparented child), which is likely why
+it got carried into `set_component_location()` without being
+questioned -- same-looking code, opposite correct behavior, depending
+on whether the goal is "affect every instance" (reparent) or
+"reposition within one specific instance" (this function). Fixed by
+always using the parent's own instance entry (`parent_info['entry']`)
+here, never `ref_entry`.
+
+### The lathe save/reload regression -- still open, but narrowed
+
+Console diagnostics for `manual-lathe` in the same log show correct
+state in memory AND in the pre-write dump right up to `Write()` --
+the same "correct until the file is actually written" pattern from
+every prior export-time bug this project has hit. The parent-
+resolution bug above doesn't explain it (the lathe's parent stayed
+stable across all 4 of its calls, unlike the L-bracket's). Doug is
+retesting this in isolation (moving only the lathe, not mixed with
+L-bracket work in the same session) to determine whether it's
+independent of the bug just fixed or was somehow triggered by it.
+
+### Lesson for future development
+
+**Code that looks like a reasonable default in one function can be
+exactly backwards in a structurally similar one -- copy-pasting (or
+mentally reusing) a pattern without re-deriving why it was correct in
+its original context is a real risk, not just a style concern.** This
+is the second time in this project a `ref_entry`-vs-`entry` choice
+mattered (Session 13's `parse_components`, Session 22's unsharing),
+and the first time it was actually chosen wrong. Worth treating
+`ref_entry` vs. own-`entry` as a decision to make explicitly and
+comment, every time, rather than a detail to default from a nearby
+example.
+
+## Session 25: Session 24's fix crashed -- the real problem was one
+level deeper
+
+Doug's next test crashed immediately:
+```
+OCP.OCP.Standard.Standard_NullObject: A null Label has no attribute.
+```
+inside `set_label_name`, meaning `AddComponent(parent_label, ...)`
+returned a null/invalid label. Root cause: Session 24 correctly
+diagnosed the SYMPTOM (a repositioned child's parent silently jumping
+between `l-bracket-assembly_1` and `_2`) but reached for the wrong
+fix. `AddComponent` requires its "assembly" argument to structurally
+hold children -- and a component/INSTANCE label (like `l-bracket-
+assembly_2`'s own occurrence) does not hold children directly; only
+its REFERRED (product) label does. Passing the instance label
+directly, as Session 24 did, isn't just semantically wrong -- it's
+not a valid target at all, hence the null result.
+
+### The real problem: the PARENT can be shared too, not just the child
+
+Session 22 built unsharing for the CHILD being repositioned (if ITS
+own geometry is shared). That's necessary but not sufficient:
+`l-bracket-assembly_2`'s referred label is itself shared with `_1`
+(that's the whole reason cross-contamination was possible). Removing
+and re-adding a child under a shared PARENT structure edits the
+shared product directly, affecting every sibling instance of that
+parent -- a different, deeper problem than child-level sharing, and
+one the current code has no answer for yet (would need to recursively
+unshare the parent, and potentially ITS parent, and so on -- real
+future work, not something to improvise untested).
+
+**Fix, this session:** restored `ref_entry` preference for parent
+resolution (required -- `AddComponent` needs a real assembly-
+structured label), but added an explicit check: if the parent's own
+referred label has more than one user, refuse cleanly with a clear
+message instead of crashing or silently cross-contaminating a
+sibling.
+
+### Reconciles the earlier successful test
+
+Doug's Session 22 write-up moved `l-bracket-assembly_2` (the whole
+assembly) FIRST, which unshared it -- THEN moved the L-bracket part
+within it, by which point the parent was already independent. Today's
+tests moved `l-bracket_1` directly, without that first step, so the
+parent was still shared. Same underlying limitation, different order
+of operations exposed it. Practical workaround until parent-unsharing
+is built: reposition the containing assembly first (any real move
+unshares it), then reposition children within it.
+
+### Also: Nudge input boxes too narrow for 3-digit values
+
+Cosmetic but reported alongside the above -- `setMaximumWidth(60)` was
+too tight to display "180" legibly. Widened to 80px across all six
+Nudge fields (translation and the new rotation ones).
+
+### Lesson for future development
+
+**Diagnosing the right symptom doesn't guarantee the right fix if the
+underlying structural assumption is wrong.** Session 24's diagnosis
+(parent cross-contamination via `ref_entry`) was accurate. Its fix
+assumed "the parent's own instance entry" was a viable alternative
+target for `AddComponent` -- without confirming that instance labels
+can actually hold children (they can't). Worth verifying not just
+"does this fix the symptom" but "does this target the API actually
+expects to receive" before shipping a structural change like this. In
+this case, the crash caught it fast and safely (Doug's test-in-
+isolation discipline again paying off) -- better than the quieter,
+more dangerous alternative Session 24 could have produced elsewhere.
+
+## Session 26: Session 19's "fix" removed -- it was never actually working
+
+Doug's fully isolated test (single import, single nudge, nothing else
+touched in the session) showed the exact same corruption Session 19
+believed it had fixed: `manual-lathe`'s occurrence written with a
+blank NAUO name and identity location, despite the document being
+100% correct in memory and in the pre-write dump right up to
+`Write()`. Confirmed via file inspection (same technique as every
+previous round of this investigation): `PRODUCT('manual-lathe', ...)`
+present and correct, but the NAUO for the moved occurrence blank-
+named, and its `CARTESIAN_POINT` back to identity `(0,0,0)`.
+
+This means Session 19's round-trip (write the freshly-Extract_s-built
+document to a temp file, read it back, replace self.doc) never
+actually solved anything for `manual-lathe` -- earlier tests that
+looked successful must have coincided with success for some other,
+unidentified reason, not because the round-trip normalized anything.
+
+### The fix: remove the round-trip, don't add another one
+
+Direct comparison caught what months of theorizing about "what's
+different about Extract_s-built structures" missed: `set_component_
+location()`'s unsharing logic (Session 22) uses the exact same
+`XCAFDoc_Editor.Extract_s` clone -- and that path is CONFIRMED working
+(Doug's L-bracket unshare test survived save/reload with correct name
+and position). The only structural difference between the two code
+paths was the round-trip Session 19 added. Removed it from
+`add_component_from_label()`, restoring the simpler pre-Session-19
+shape (Extract_s -> name -> UpdateAssemblies -> parse_doc -> done),
+while keeping Session 15's uid-recovery fix (search `label_dict` for
+the matching entry, since `get_uid_from_entry()` is a generator, not
+a lookup -- almost got reintroduced by accident while reverting the
+round-trip, caught before shipping).
+
+**Not yet re-tested.** If this resolves it, the actual lesson is that
+Extract_s's clone was fine all along and the "fix" for a real bug
+(confirmed in Session 14, `manual-lathe` genuinely didn't survive
+export back then) was actually solving nothing -- something else
+Session 14 changed at the same time must have been the real fix, or
+the original Session 14 bug and this one were never quite the same
+bug to begin with. If it does NOT resolve it, the round-trip theory
+is fully dead, and whatever's actually wrong with Extract_s-imported
+top-level components remains open -- worth revisiting Session 14's
+original diagnostic trail from scratch rather than assuming anything
+carried forward from it still holds.
+
+### Lesson for future development
+
+**A fix that "worked" in early testing but was never re-verified in a
+fully isolated test can quietly stop being trustworthy evidence.**
+Session 19's round-trip got treated as settled for five sessions
+because early tests looked successful -- but those tests always had
+other things happening in the same session (multiple moves, mixed
+with other bugs being chased). The moment Doug ran a genuinely
+isolated single-operation test, the fix's actual (lack of) effect
+became visible immediately. Isolation testing isn't just useful for
+finding NEW bugs -- it's the only way to actually confirm an old fix
+still holds, rather than assuming past success generalizes.
+
+## Session 27: round-trip theory confirmed dead; testing cross-document
+vs. same-document Extract_s instead
+
+Doug's re-test after Session 26 (round-trip removed) showed the exact
+same corruption -- blank name (this time "34"), reverted position.
+**This definitively kills the round-trip theory** -- it was never the
+mechanism, in either direction (adding it in Session 19, or removing
+it in Session 26 both left the bug unchanged). Genuinely useful
+result, even though frustrating: four different fixes (`SetLocation`,
+two `AddComponent` overloads, round-trip added, round-trip removed)
+are now ruled out with real evidence, not abandoned on a hunch.
+
+### The one remaining, confirmed structural difference
+
+Direct comparison of the two `XCAFDoc_Editor.Extract_s` call sites:
+- `set_component_location()`'s unsharing (Session 22, CONFIRMED
+  working -- Doug's L-bracket test survived save/reload correctly):
+  `Extract_s(ref_label, unshare_root)` -- both labels already inside
+  `self.doc`. Same-document.
+- `add_component_from_label()`'s import (CONFIRMED failing, every
+  test so far): `Extract_s(source_label, root_label)` -- `source_
+  label` comes from the separate, temporary document `_load_step()`
+  creates for the imported STEP file. Genuinely cross-document.
+
+This is the first real, structural distinction found between a
+working and a failing use of the same primitive -- not a coincidence
+noticed in passing, but the ONE variable that differs between the two
+confirmed outcomes.
+
+### Experiment: re-clone same-document, right after the cross-document import
+
+Added a second Extract_s call in `add_component_from_label()`,
+immediately after the cross-document import completes: re-clone the
+just-imported referred label from WITHIN self.doc back into self.doc,
+then discard the original cross-document-created component and use
+the same-document re-clone instead. Cheap (in-memory, not a file
+round-trip) and directly tests the one remaining distinguishing
+factor, rather than another blind variation on where names/locations
+get set. Falls back gracefully to the original import at every step
+if anything about the re-clone fails, so this can't make the import
+path worse than it already was even if the hypothesis is wrong.
+
+**Not yet tested.** If this works, it's strong evidence the STEP-
+import document itself (or something about a truly cross-document
+Extract_s specifically) is where the corruption originates -- worth
+understanding properly rather than just working around, once
+confirmed. If it doesn't work, cross-document-vs-same-document is
+ruled out too, and the remaining honest options are: (a) build a
+minimal, standalone repro script outside the full app to test OCCT's
+actual behavior in isolation (more rigorous than continued trial-and-
+error inside Kodacad's full complexity), or (b) treat this as a
+documented, accepted limitation and move on, the way the hub was set
+aside in Session 22.
+
+### Lesson for future development
+
+**A failed fix is still worth full evidentiary credit -- it eliminates
+a hypothesis as surely as a successful one confirms it.** Neither
+Session 19 nor Session 26 "worked," but together they definitively
+prove the round-trip was never the mechanism in either direction --
+that's real ground covered, not wasted effort, and it's what actually
+narrowed the search down to the cross-document/same-document
+distinction being tested now.
+
+## Session 28: minimal repro -- flat case works, testing nesting next
+
+Doug ran `minimal_repro.py` (a headless script driving docmodel.py's
+real `add_component_from_label`/`set_component_location` against a
+two-box toy model, built after Session 27's fifth failed fix). Result:
+**the bug did NOT reproduce.** Name and position both survived cleanly
+-- `NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','imported_box_1',...)` correctly
+named, `CARTESIAN_POINT('',(50.,0.,0.))` correctly positioned, and the
+re-read document showed the same, correct, on the first try.
+
+This is a genuinely valuable negative result, not a null one: it rules
+out "the cross-document Extract_s + reposition mechanism is
+fundamentally broken" as a category. Whatever's actually wrong depends
+on something the flat single-box model doesn't have. The clearest
+candidate: `manual-lathe` isn't a flat leaf shape -- it's a multi-level
+assembly (e.g. `1925-4008-0048 assembly` is one of ITS OWN children,
+itself presumably containing further parts). The minimal repro's test
+box had no nesting at all.
+
+Extended the script with a second scenario: a wrapper assembly
+containing two sub-boxes (one level of nesting), built and moved the
+same way, to test whether assembly depth is the missing variable.
+**Not yet run.**
+
+### Lesson for future development
+
+**A minimal repro that DOESN'T reproduce the bug is exactly as valuable
+as one that does -- it eliminates a whole category of explanation in
+one clean result.** After five failed fixes all aimed at "something
+about how Extract_s-imported components are built or referenced,"
+this test shows that explanation was too broad: the mechanism itself
+is fine in the simple case. The search space just got smaller in a
+way six sessions of varying fixes inside the full app couldn't
+achieve, because the full app never let us isolate "flat vs. nested"
+as a variable on its own.
+
+## Session 28 (cont'd): nesting confirmed as the trigger; re-clone
+experiment removed
+
+The extended `minimal_repro.py` (Scenario B: a wrapper assembly
+containing two sub-boxes, instead of a flat leaf shape) DID reproduce
+the bug. `nested_assembly_1` -- whose name `set_component_location`
+explicitly set and confirmed correct right up to `Write()` -- came
+back after reload as bare `'3'`. **Nesting is confirmed as a real
+trigger; flat is confirmed clean.** First genuinely new, actionable
+fact this investigation has produced since Session 22.
+
+The file also showed component-level names like `'=>0:1:1:3'` --
+XCAF's own auto-naming placeholder for a reference that was never
+explicitly named. Traced this to a gap in the TEST SCRIPT itself (the
+sub-box components under the wrapper were never named, only their
+referred labels were) -- an artifact of how the test was built, not
+evidence about real STEP files, which come with their components
+already named by whatever tool exported them. Fixed the script to
+name components properly, to get a cleaner signal on a re-run.
+
+Doug separately suggested round-tripping real-world STEP files through
+CAD Assistant to clean them up before import. Good practice in
+general, but worth being direct about: it would NOT have prevented
+this specific bug, since the nested test model was built fresh,
+in-memory, by a script, seconds before failing -- there was no messy
+source file involved. The bug is inside Kodacad's own handling of
+nested structures, not caused by, or fixable by cleaning, the input
+file.
+
+### Session 27's re-clone experiment removed
+
+Confirmed it failed on the nested case too, and confirmed (by reading
+its own logic again) that it leaves a genuinely orphaned duplicate
+referred label behind on every run -- removing a component's
+reference to a label doesn't delete the label, so the original
+cross-document import's referred label was never cleaned up after the
+re-clone replaced it. That orphan is very likely what produced the
+"2 free shapes" Doug noticed in an earlier save. Removed the whole
+experiment; `add_component_from_label()` is back to a single,
+straightforward `Extract_s` call.
+
+### Where this leaves the investigation
+
+Six sessions (14, 16, 17, 18, 19/26, 27) of fixes aimed at "how the
+component gets built or referenced" are now fully ruled out by direct
+evidence. The confirmed remaining variable is nesting depth within
+the imported structure itself -- something about how `Extract_s`
+recursively clones a multi-level assembly (or how the rest of the
+pipeline handles the result) breaks in a way the single-level case
+doesn't hit. Next step: re-run the corrected (properly-named) nested
+test without the removed re-clone experiment, to get a clean signal
+on nesting alone.
+
+### Lesson for future development
+
+**A diagnostic script needs the same rigor as production code --
+including catching its own construction bugs before trusting its
+output.** The auto-naming placeholder in this test's output looked
+alarming at first glance but turned out to be the script's own
+oversight, not new evidence about the real bug. Worth explicitly
+separating "what the tool is telling us" from "what I forgot to set
+up correctly" before drawing conclusions from either.
+
+## Session 29: root cause fixed -- build assembly structure natively,
+Extract_s only for leaves
+
+The corrected nested test (component names fixed, confirming the
+earlier `'=>0:1:1:3'` symptom was a test-script artifact, not a real
+finding) completed the pattern: sub-component names now survived
+correctly, but the TOP-level wrapper assembly's own name and position
+still failed -- identical to every prior test. Combined with all prior
+data, six independent, contradiction-free data points now show
+exactly one rule: **cross-document `XCAFDoc_Editor.Extract_s` survives
+save/reload reliably for leaf/simple shapes, never for anything that
+is itself an assembly with children.** Same-document copies of
+assemblies (Session 22's unsharing) are fine. Cross-document copies of
+leaves are fine. Only cross-document + assembly-structure fails,
+every time it's been tested.
+
+### The fix
+
+Added `extract_component_recursive()` (module-level function): copies
+a component from a source document into a destination assembly label,
+branching on whether it's a leaf or an assembly. Leaves still go
+through cross-document `Extract_s` directly (proven reliable, six
+confirmations). Assemblies are built NATIVELY in the destination
+document instead -- plain `AddShape(empty_compound, True)` +
+`AddComponent`, exactly how every other working assembly in Kodacad
+(`/`, `as1`, etc.) is already built -- and the function recurses into
+each child, so cross-document `Extract_s` is used only for leaf
+content, at any depth, never for assembly-level structure.
+
+`add_component_from_label()` now branches the same way at the top
+level: a leaf import goes straight through `Extract_s` as before; an
+assembly import builds its own wrapper natively and recurses via
+`extract_component_recursive()` for each child. Signature changed to
+accept `source_shape_tool` (needed for the recursive case to query
+the source document) -- the one real caller (`load_stp_cmpnt`) and
+`minimal_repro.py` both updated to match.
+
+**A mistake caught and fixed before it did real damage:** the first
+version of this edit accidentally placed the new module-level function
+in the middle of the `DocModel` class body, at column 0 -- which
+silently terminated the class early and turned `add_component_from_
+label` and every method after it into a nested function inside the
+new helper, no longer real methods of `DocModel` at all. `py_compile`
+did not catch this (it's syntactically valid Python, just structurally
+wrong) -- caught it by checking the actual class structure via `ast`,
+not by trusting a clean compile. Worth remembering: a clean
+`py_compile` only proves valid syntax, never correct structure.
+
+**Not yet tested against the real bug.** `minimal_repro.py` (Scenario
+B, now using the new code path) is the immediate next test; if that
+passes, the real next step is retesting against `manual-lathe` and the
+hub in the actual app.
+
+### Lesson for future development
+
+**Six sessions of testing "how the component gets built or
+referenced" without changing "which primitive builds assembly
+structure at all" could never have found this** -- every prior fix
+(SetLocation, two AddComponent overloads, round-trip added/removed,
+same-document re-clone) still used Extract_s to copy the ENTIRE
+assembly structure across documents in one call; none of them stopped
+doing that. The fix that (potentially) works isn't a better way to
+call Extract_s -- it's recognizing Extract_s was never the right tool
+for assembly-level structure in the first place, only for the leaf
+content underneath it.

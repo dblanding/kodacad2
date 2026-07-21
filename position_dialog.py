@@ -9,8 +9,8 @@ THE POSITION DIALOG -- layout follows Doug's design PDF
                     which instance is meant when the same part/
                     assembly appears more than once in the tree
                     (shared instances) -- see Session 16.
-  METHODS section: Dynamic (disabled -- AIS_Manipulator not ported
-                    yet), Mate Align, 2 Points.
+  METHODS section: Dynamic (AIS_Manipulator drag + numeric Nudge
+                    refinement -- see Session 23), Mate Align, 2 Points.
   CONSTRAINTS section: Mate, Align, Align Axis (disabled -- Step 2/3
                     not ported yet).
   BOTTOM section:   Reverse / Back side by side, Done below. Status
@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QRadioButton,
     QGroupBox,
+    QLineEdit,
 )
 from PySide6.QtGui import QFont
 
@@ -107,14 +108,50 @@ class PositionDialog(QDialog):
         methods_layout = QVBoxLayout(methods_box)
         self._method_group = QButtonGroup(self)
         self._dynamic_btn = QRadioButton("Dynamic")
-        self._dynamic_btn.setEnabled(False)  # AIS_Manipulator not ported yet
-        self._dynamic_btn.setToolTip("Not available yet -- coming with the AIS_Manipulator port")
+        self._dynamic_btn.setToolTip(
+            "Drag the gizmo's arrows to translate or rings to rotate. "
+            "After releasing, use Nudge below for an exact adjustment.")
         self._mate_align_btn = QRadioButton("Mate Align")
         self._two_points_btn = QRadioButton("2 Points")
         for i, btn in enumerate([self._dynamic_btn, self._mate_align_btn, self._two_points_btn]):
             self._method_group.addButton(btn, i)
             methods_layout.addWidget(btn)
         layout.addWidget(methods_box)
+
+        # NUDGE -- shown only while using Dynamic. A drag with
+        # AIS_Manipulator is inherently mouse-driven, not exact; this
+        # gives a way to refine the result with a typed value
+        # afterward, rather than needing a Creo-style floating input
+        # box mid-drag (real, but a much bigger UI undertaking -- see
+        # docs/DEVELOPMENT_LOG.md, Session 23).
+        self._nudge_box = QGroupBox("Nudge (after a drag)")
+        nudge_layout = QVBoxLayout(self._nudge_box)
+        trans_row = QHBoxLayout()
+        self._nudge_dx = QLineEdit("0")
+        self._nudge_dy = QLineEdit("0")
+        self._nudge_dz = QLineEdit("0")
+        for label, field in (("dX", self._nudge_dx), ("dY", self._nudge_dy), ("dZ", self._nudge_dz)):
+            trans_row.addWidget(QLabel(label))
+            field.setMaximumWidth(80)
+            trans_row.addWidget(field)
+        nudge_layout.addLayout(trans_row)
+        # Rotation nudges (degrees, about world X/Y/Z) -- pivot about
+        # the part's CURRENT world position (see _apply_nudge), not
+        # the global origin, so a small angle can't swing a part that's
+        # far from (0,0,0) wildly across the scene.
+        rot_row = QHBoxLayout()
+        self._nudge_rx = QLineEdit("0")
+        self._nudge_ry = QLineEdit("0")
+        self._nudge_rz = QLineEdit("0")
+        for label, field in (("rX\u00b0", self._nudge_rx), ("rY\u00b0", self._nudge_ry), ("rZ\u00b0", self._nudge_rz)):
+            rot_row.addWidget(QLabel(label))
+            field.setMaximumWidth(80)
+            rot_row.addWidget(field)
+        nudge_layout.addLayout(rot_row)
+        self._nudge_apply_btn = QPushButton("Apply Nudge")
+        nudge_layout.addWidget(self._nudge_apply_btn)
+        self._nudge_box.setVisible(False)
+        layout.addWidget(self._nudge_box)
 
         # CONSTRAINTS (only meaningful for Mate Align)
         constraints_box = QGroupBox("Constraints")
@@ -149,6 +186,8 @@ class PositionDialog(QDialog):
         # again while Mate is already selected would do nothing). clicked
         # fires on every user click regardless of prior state.
         self._two_points_btn.clicked.connect(self._start_two_points_picking)
+        self._dynamic_btn.clicked.connect(self._start_dynamic_mode)
+        self._nudge_apply_btn.clicked.connect(self._apply_nudge)
         self._mate_btn.clicked.connect(lambda: self._on_constraint_chosen("mate"))
         self._align_btn.clicked.connect(lambda: self._on_constraint_chosen("align"))
         self._reverse_btn.clicked.connect(self._on_reverse)
@@ -184,6 +223,8 @@ class PositionDialog(QDialog):
     # -----------------------------------------------------------------
 
     def _start_face_picking(self):
+        self.main_win.canvas.detach_manipulator()
+        self._nudge_box.setVisible(False)
         self._picking_for = "mate_align"
         self._pick1 = None
         self._pick2 = None
@@ -226,6 +267,8 @@ class PositionDialog(QDialog):
     # -----------------------------------------------------------------
 
     def _start_two_points_picking(self):
+        self.main_win.canvas.detach_manipulator()
+        self._nudge_box.setVisible(False)
         self._picking_for = "two_points"
         self._pick1 = None
         self._pick2 = None
@@ -257,6 +300,131 @@ class PositionDialog(QDialog):
         ok = self._apply_world_move(move)
         if ok:
             self.main_win.statusBar().showMessage("Position applied.", 5000)
+        self._update_ui_state()
+
+    # -----------------------------------------------------------------
+    # Dynamic (AIS_Manipulator drag + numeric Nudge refinement)
+    # -----------------------------------------------------------------
+
+    def _start_dynamic_mode(self):
+        self.main_win.clearCallback()
+        self._picking_for = "dynamic"
+        if self._reattach_manipulator():
+            self._nudge_box.setVisible(True)
+            self.main_win.statusBar().showMessage(
+                "Drag an arrow to translate or a ring to rotate.")
+        else:
+            self.main_win.statusBar().showMessage(
+                "Could not attach manipulator -- see console.", 5000)
+
+    def _reattach_manipulator(self):
+        """(Re)attach the manipulator to every leaf part under self.uid.
+
+        Called both to start Dynamic mode and after every applied move
+        (Session 15's uid-tracking rule applies here too: self.uid
+        changes on every set_component_location() call, and the
+        redraw it triggers destroys/rebuilds every AIS_Shape, so the
+        manipulator has to be re-resolved fresh each time rather than
+        reused)."""
+        part_uids = self.dm.get_descendant_part_uids(self.uid)
+        leaf_shapes = [self.main_win.ais_shape_dict[u] for u in part_uids
+                       if u in self.main_win.ais_shape_dict]
+        if not leaf_shapes:
+            return False
+        return self.main_win.canvas.attach_manipulator(
+            leaf_shapes, move_callback=self._on_manip_move,
+            done_callback=self._on_manip_done)
+
+    def _on_manip_move(self, delta_trsf):
+        """Live status update during a drag. Translation distance only
+        (not rotation angle) -- keeps this to APIs already proven
+        elsewhere in this codebase (TranslationPart().X/Y/Z()) rather
+        than guessing at gp_Trsf's rotation-extraction signature."""
+        tp = delta_trsf.TranslationPart()
+        dist = (tp.X() ** 2 + tp.Y() ** 2 + tp.Z() ** 2) ** 0.5
+        if dist > 1e-6:
+            self.main_win.statusBar().showMessage(f"Dragging: {dist:.2f} mm from start.")
+        else:
+            self.main_win.statusBar().showMessage("Dragging (rotation).")
+
+    def _on_manip_done(self, delta_trsf):
+        """Drag released -- apply it the same way every other Position
+        method does (dm.set_component_location via _apply_world_move),
+        so Back/Reverse/history all work uniformly regardless of which
+        method produced the move."""
+        from OCP.TopLoc import TopLoc_Location
+        # Detach BEFORE applying: _apply_world_move triggers a full
+        # redraw (ais_shape_dict.clear() + rebuild), which would leave
+        # the manipulator attached to now-destroyed AIS_Shape objects.
+        self.main_win.canvas.detach_manipulator()
+        move = TopLoc_Location(delta_trsf)
+        ok = self._apply_world_move(move)
+        if ok:
+            self.main_win.statusBar().showMessage(
+                "Move applied. Drag again, or use Nudge to refine.", 6000)
+            self._reattach_manipulator()
+        self._update_ui_state()
+
+    def _apply_nudge(self):
+        """Apply an exact numeric translation and/or rotation on top of
+        whatever the drag already did -- the actual answer to 'I want
+        a precise typed value', short of a full Creo-style floating
+        input box mid-drag (see module docstring)."""
+        try:
+            dx = float(self._nudge_dx.text())
+            dy = float(self._nudge_dy.text())
+            dz = float(self._nudge_dz.text())
+            rx = float(self._nudge_rx.text())
+            ry = float(self._nudge_ry.text())
+            rz = float(self._nudge_rz.text())
+        except ValueError:
+            self.main_win.statusBar().showMessage("Nudge values must be numbers.", 5000)
+            return
+        if dx == dy == dz == rx == ry == rz == 0:
+            return
+
+        import math
+        from OCP.gp import gp_Trsf, gp_Vec, gp_Ax1, gp_Pnt, gp_Dir
+        from OCP.TopLoc import TopLoc_Location
+
+        # Rotations pivot about the part's CURRENT world position, not
+        # the global origin -- otherwise a small angle could swing a
+        # part that's far from (0,0,0) wildly across the scene, since
+        # gp_Ax1's default axis point IS the origin unless told
+        # otherwise.
+        current_world = self.dm.get_world_loc(self.uid)
+        pivot = current_world.Transformation().TranslationPart()
+        pivot_pnt = gp_Pnt(pivot.X(), pivot.Y(), pivot.Z())
+
+        # Compose in a fixed order: rotate about X, then Y, then Z
+        # (all at the pivot), then translate. Simultaneous multi-axis
+        # rotation is inherently order-dependent (there's no single
+        # "correct" order) -- fine for a nudge, which is typically one
+        # axis at a time, but worth knowing if two angles are entered
+        # together and the result isn't what was expected.
+        combined = gp_Trsf()
+        for axis_dir, angle_deg in ((gp_Dir(1, 0, 0), rx),
+                                    (gp_Dir(0, 1, 0), ry),
+                                    (gp_Dir(0, 0, 1), rz)):
+            if angle_deg == 0:
+                continue
+            t = gp_Trsf()
+            t.SetRotation(gp_Ax1(pivot_pnt, axis_dir), math.radians(angle_deg))
+            combined = t.Multiplied(combined)
+        if dx or dy or dz:
+            t = gp_Trsf()
+            t.SetTranslation(gp_Vec(dx, dy, dz))
+            combined = t.Multiplied(combined)
+
+        move = TopLoc_Location(combined)
+        self.main_win.canvas.detach_manipulator()
+        ok = self._apply_world_move(move)
+        if ok:
+            for field in (self._nudge_dx, self._nudge_dy, self._nudge_dz,
+                         self._nudge_rx, self._nudge_ry, self._nudge_rz):
+                field.setText("0")
+            self.main_win.statusBar().showMessage("Nudge applied.", 5000)
+            self._reattach_manipulator()
         self._update_ui_state()
 
     # -----------------------------------------------------------------
@@ -342,6 +510,13 @@ class PositionDialog(QDialog):
     def _on_back(self):
         if not self._history:
             return
+        # Back can be clicked while Dynamic mode is active (its
+        # enablement doesn't check which method is current) -- detach
+        # around the redraw for the same reason _on_manip_done and
+        # _apply_nudge do.
+        was_dynamic = self._picking_for == "dynamic"
+        if was_dynamic:
+            self.main_win.canvas.detach_manipulator()
         prev_local = self._history.pop()
         new_uid = self.dm.set_component_location(self.uid, prev_local)
         if new_uid is not None:
@@ -349,13 +524,17 @@ class PositionDialog(QDialog):
             self._refresh_display()
             self.main_win.statusBar().showMessage("Step undone.", 5000)
         self._last_picks = None
+        if was_dynamic:
+            self._reattach_manipulator()
         self._update_ui_state()
 
     def _on_done(self):
         self.main_win.clearCallback()
+        self.main_win.canvas.detach_manipulator()
         self.main_win.statusBar().showMessage("Position complete.", 5000)
         self.close()
 
     def closeEvent(self, event):
         self.main_win.clearCallback()
+        self.main_win.canvas.detach_manipulator()
         super().closeEvent(event)

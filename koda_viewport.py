@@ -143,6 +143,19 @@ class KodaViewport(QWidget):
         self._drag_threshold = 4.0
         self._rmb_press_pos = None
 
+        # AIS_Manipulator ("Dynamic" Position method) state -- None
+        # when not in dynamic-move mode. Ported from Basicad's
+        # main_app.py (proven working there, including the mouse-
+        # gesture-ownership handling below), adapted for Kodacad's
+        # uid/ais_shape_dict model instead of Basicad's build123d node
+        # tree. See docs/DEVELOPMENT_LOG.md, Session 23.
+        self._manipulator = None
+        self._manip_dragging = False
+        self._manip_leaf_shapes = []       # every AIS_Shape that must move together
+        self._manip_start_trsfs = {}       # id(ais) -> gp_Trsf at drag start
+        self._manip_move_callback = None   # called every move: (delta_trsf) -> None
+        self._manip_done_callback = None   # called on release: (delta_trsf) -> None
+
     def paintEngine(self):
         return None  # Required for WA_PaintOnScreen
 
@@ -199,6 +212,79 @@ class KodaViewport(QWidget):
             except Exception as e:
                 print(f"resizeEvent error: {e}")
 
+    # ── AIS_Manipulator ("Dynamic" Position method) ─────────────────────
+
+    def attach_manipulator(self, leaf_shapes, move_callback=None, done_callback=None):
+        """Attach an AIS_Manipulator gizmo to the first of leaf_shapes
+        (the rest move in lockstep during drag -- see mouseMoveEvent).
+
+        move_callback(delta_trsf): called on every mouse-move while
+        dragging, with the WORLD-space gp_Trsf delta accumulated so
+        far. Used for live status-bar feedback.
+
+        done_callback(delta_trsf): called once when the drag ends
+        (mouse release), with the final delta. Used to actually apply
+        the move via dm.set_component_location(), same as every other
+        Position method.
+        """
+        self.detach_manipulator()  # clean up any existing one first
+
+        if not leaf_shapes:
+            print("[manipulator] No shapes to attach to")
+            return False
+
+        try:
+            from OCP.AIS import AIS_Manipulator
+        except ImportError:
+            print("[manipulator] AIS_Manipulator not available in this OCP build")
+            return False
+
+        self._manip_leaf_shapes = list(leaf_shapes)
+        self._manip_move_callback = move_callback
+        self._manip_done_callback = done_callback
+
+        try:
+            manip = AIS_Manipulator()
+            manip.SetModeActivationOnDetection(True)
+
+            # Disable scaling handles -- translate + rotate only.
+            for attr_name in ["Scaling", "Scale", "AIS_MM_Scaling"]:
+                try:
+                    part_type = getattr(AIS_Manipulator, attr_name)
+                    for axis in range(3):
+                        manip.SetPart(axis, part_type, False)
+                    break
+                except AttributeError:
+                    continue
+
+            manip.Attach(self._manip_leaf_shapes[0])
+            self.context.Display(manip, False)
+            self.context.UpdateCurrentViewer()
+            self.update()
+            self._manipulator = manip
+            return True
+        except Exception as e:
+            print(f"[manipulator] attach failed: {e}")
+            return False
+
+    def detach_manipulator(self):
+        """Remove the manipulator gizmo from the viewport."""
+        if self._manipulator is None:
+            return
+        try:
+            self.context.Erase(self._manipulator, False)
+            self._manipulator.Detach()
+            self.context.UpdateCurrentViewer()
+            self.update()
+        except Exception as e:
+            print(f"[manipulator] detach failed: {e}")
+        self._manipulator = None
+        self._manip_dragging = False
+        self._manip_leaf_shapes = []
+        self._manip_start_trsfs = {}
+        self._manip_move_callback = None
+        self._manip_done_callback = None
+
     # ── Mouse (AIS_ViewController -- crash safe) ────────────────────────
 
     def _qt_buttons_to_occt(self, qt_buttons):
@@ -241,6 +327,31 @@ class KodaViewport(QWidget):
         self._drag_distance = 0.0
         if event.button() == Qt.MouseButton.RightButton:
             self._rmb_press_pos = event.position()
+
+        # Manipulator gets first refusal on LMB -- same "who owns this
+        # gesture" pattern as Session 12's RMB fix, this time deciding
+        # between the gizmo and AIS_ViewController's rotate instead of
+        # between our own click-to-fit and OCCT's built-in zoom.
+        if event.button() == Qt.MouseButton.LeftButton and self._manipulator is not None:
+            x, y = int(event.position().x()), int(event.position().y())
+            try:
+                self.context.MoveTo(x, y, self.view, True)
+                is_manip = self._manipulator.HasActiveMode()
+            except Exception:
+                is_manip = False
+            if is_manip:
+                try:
+                    self._manipulator.StartTransform(x, y, self.view)
+                    self._manip_dragging = True
+                    self._manip_start_trsfs = {
+                        id(ais): ais.LocalTransformation()
+                        for ais in self._manip_leaf_shapes
+                    }
+                    return  # do NOT forward to _vc -- gizmo owns this drag
+                except Exception as e:
+                    print(f"[manipulator] StartTransform failed: {e}")
+            self._manip_dragging = False
+
         pt = self._vec2i(event.position())
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
         self._flush()
@@ -250,11 +361,82 @@ class KodaViewport(QWidget):
             dx = event.position().x() - self._press_pos.x()
             dy = event.position().y() - self._press_pos.y()
             self._drag_distance = (dx**2 + dy**2) ** 0.5
+
+        if self._manip_dragging and self._manipulator is not None:
+            x, y = int(event.position().x()), int(event.position().y())
+            try:
+                self._manipulator.Transform(x, y, self.view)
+
+                # The gizmo only moves the ONE shape it's Attach()-ed
+                # to. Work out how far that shape moved since drag
+                # start and apply the SAME delta to every other leaf
+                # shape in the sub-assembly, so the whole thing moves
+                # live instead of just one part of it.
+                target_obj = self._manipulator.Object()
+                delta_trsf = None
+                if target_obj is not None and self._manip_start_trsfs:
+                    start_target = self._manip_start_trsfs.get(id(target_obj))
+                    if start_target is not None:
+                        new_target = target_obj.LocalTransformation()
+                        delta_trsf = new_target.Multiplied(start_target.Inverted())
+                        for ais in self._manip_leaf_shapes:
+                            if ais is target_obj:
+                                continue
+                            start = self._manip_start_trsfs.get(id(ais))
+                            if start is None:
+                                continue
+                            ais.SetLocalTransformation(delta_trsf.Multiplied(start))
+                            self.context.Redisplay(ais, False)
+
+                if delta_trsf is not None and self._manip_move_callback:
+                    try:
+                        self._manip_move_callback(delta_trsf)
+                    except Exception as e:
+                        print(f"[manipulator] move_callback failed: {e}")
+
+                self.context.UpdateCurrentViewer()
+                self.update()
+                return  # suppress orbit/pan while dragging the gizmo
+            except Exception as e:
+                print(f"[manipulator] Transform failed: {e}")
+                self._manip_dragging = False
+
         pt = self._vec2i(event.position())
         self._vc.UpdateMousePosition(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
         self._flush()
 
     def mouseReleaseEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._manip_dragging and self._manipulator is not None):
+            final_delta = None
+            try:
+                target_obj = self._manipulator.Object()
+                if target_obj is not None:
+                    start_target = self._manip_start_trsfs.get(id(target_obj))
+                    if start_target is not None:
+                        final_delta = target_obj.LocalTransformation().Multiplied(
+                            start_target.Inverted())
+                self._manipulator.StopTransform()
+                # CRITICAL (per Basicad's own comment, confirmed the
+                # same concern applies here): deactivate the current
+                # mode so HasActiveMode() returns False once the cursor
+                # moves away -- without this, HasActiveMode() stays
+                # True and every subsequent LMB click gets intercepted
+                # as a manipulator drag, locking out rotation entirely.
+                self._manipulator.DeactivateCurrentMode()
+            except Exception as e:
+                print(f"[manipulator] StopTransform/Deactivate failed: {e}")
+            self._manip_dragging = False
+            if final_delta is not None and self._manip_done_callback:
+                try:
+                    self._manip_done_callback(final_delta)
+                except Exception as e:
+                    print(f"[manipulator] done_callback failed: {e}")
+            self._press_pos = None
+            self._drag_distance = 0.0
+            self.update()
+            return  # suppress the normal LMB click/selection handling
+
         pt = self._vec2i(event.position())
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
         self._flush()

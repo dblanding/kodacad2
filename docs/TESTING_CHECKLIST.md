@@ -110,6 +110,18 @@ silently come back.
 - [ ] Save + reload after using Position -- see the Session Save /
       Reload section above; this is the step most likely to reveal a
       regression that looked fine in the live session.
+- [ ] Dynamic (Session 23, UNTESTED as of this writing -- built while
+      Doug was away): drag a translate arrow, drag a rotate ring, both
+      move the part live and show status-bar feedback during the drag.
+      Position an ASSEMBLY with multiple parts -- confirm the WHOLE
+      thing moves together during the drag, not just one part of it.
+      After releasing, use Nudge (dX/dY/dZ + Apply) to add an exact
+      correction on top of the rough drag. Click Back while Dynamic is
+      active -- confirm no stale/orphaned gizmo is left on screen and
+      the manipulator still works afterward if you drag again. Switch
+      from Dynamic to 2 Points or Mate/Align mid-session -- confirm
+      the gizmo disappears cleanly. Click Done, or close the dialog,
+      while a gizmo is attached -- confirm it's removed.
 
 ## Modify Active Part (fillet, shell, extrude, revolve, etc.)
 
@@ -130,16 +142,15 @@ silently come back.
 ## Known Open Issues (not yet fixed -- don't re-report, do check they
 haven't gotten WORSE)
 
-- Positioning an imported hub assembly with unusual internal STEP
-  structure (generic `NAUO1`/`NAUO2` names in its own file) does not
-  survive save/reload. UPDATE (Session 22): the general mechanism
-  turned out to be shared instances ("partner shapes" at different
-  locations, a documented OCCT writer limitation) -- now fixed via
-  automatic unsharing before reposition. The hub's own internal
-  NAUO1/NAUO2 naming was an early clue pointing at some kind of
-  internal duplication/sharing in that specific file, so this fix may
-  well have resolved the hub case too as a side effect -- worth
-  retesting before assuming it's still broken.
+- Positioning an imported hub assembly (`clamping-hub-assembly.step`)
+  does not survive save/reload. DEFERRED (Session 22): confirmed its
+  `NAUO1`/`NAUO2` blank names are present in the file's own original
+  source, before any Kodacad involvement -- a pre-existing data-
+  quality issue in that file, not necessarily the same bug as the
+  shared-instance fix above. Whether it's the same root cause (true
+  sharing between NAUO1/NAUO2) was never confirmed. Set aside after
+  diminishing returns; revisit the open question above before
+  assuming it's fixed OR assuming it's a new bug.
 - Mate/Align only implements Step 1 of the 3-2-1 workflow -- applying
   Mate twice in a row does NOT preserve the first mate's constraint
   (no DOF-tracking yet; Step 2/3 not built). Expected limitation, not
