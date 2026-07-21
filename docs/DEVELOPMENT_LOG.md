@@ -2314,3 +2314,200 @@ doing that. The fix that (potentially) works isn't a better way to
 call Extract_s -- it's recognizing Extract_s was never the right tool
 for assembly-level structure in the first place, only for the leaf
 content underneath it.
+
+## Session 30: wrap-up decision -- revert the native-rebuild dead end,
+close out Position work for now
+
+Doug's call, and the right one: after Session 29's native-rebuild
+approach failed an isolated re-test identically to every prior
+attempt, and was found to have a genuine additional downside (see
+below), continuing to chase this specific bug had crossed into
+diminishing returns. Reverted Session 29's changes; kept everything
+else from Sessions 21-29 that's actually proven working.
+
+### What got reverted
+
+`add_component_from_label()` and the `extract_component_recursive()`
+helper it introduced (Session 29's native-rebuild-with-recursion
+approach) -- back to the simple, single cross-document `Extract_s`
+call from before Session 29. Two reasons, not one:
+
+1. It didn't work. A fully isolated re-test (minimal_repro.py,
+   Scenario B, using the new code) showed the exact same corruption
+   as every prior attempt -- blank NAUO name, identity location, on a
+   purpose-built, perfectly clean test structure.
+2. It made a DIFFERENT thing worse. `extract_component_recursive()`
+   rebuilds every assembly-typed child from scratch via `AddShape`,
+   with no de-duplication check -- so if a real imported STEP file
+   internally reuses the same sub-assembly definition in two places (a
+   common pattern for repeated hardware), the native-rebuild approach
+   would silently create two independent copies instead of preserving
+   that internal sharing. A regression nobody asked for, on top of not
+   fixing the bug it was meant to fix.
+
+`minimal_repro.py`'s one call site was updated to match the reverted
+signature so the diagnostic script doesn't bit-rot into something
+broken if this investigation is picked up again later.
+
+### What was KEPT (all independently proven, none of it touches
+add_component_from_label)
+
+- **Session 21**: modal "No Active Part" check, checked upfront before
+  any picking starts.
+- **Session 22**: shared-instance unsharing in `set_component_
+  location()` -- the actual high-water mark. Confirmed working,
+  including a real multi-move test respecting shared instances
+  correctly.
+- **Session 23**: AIS_Manipulator ("Dynamic" method) + Nudge
+  refinement. Doug used this successfully to precisely mate the lathe
+  assembly to the plate, centered, using the calculator's edge-length
+  key to compute exact Nudge values -- a genuinely proven, working
+  feature.
+- **Session 25**: the manipulator gizmo-jump crash fix, and the safe
+  (non-crashing, non-corrupting) refusal when a component's PARENT is
+  itself shared -- a real, distinct case from Session 22's child-level
+  unsharing, still open as future work but no longer dangerous.
+- **Session 26 / 28**: the Session 19 round-trip and Session 27
+  same-document re-clone removed -- both confirmed to not matter
+  either way, net code simplification.
+
+### Honest final status of Position, as of this decision
+
+- **2 Points**: fully working, including shared instances and
+  multi-move sessions. Checked off.
+- **Mate/Align**: Step 1 only (flush-rotate about the picked faces'
+  intersection line). Step 2/3 and Align Axis not built.
+- **Dynamic**: working -- drag to translate/rotate, Nudge to refine
+  numerically. Proven in real use (the lathe-to-plate mating).
+- **Known, accepted limitation**: an imported (via "Import STEP") item
+  that is itself an assembly with children does not survive a save/
+  reload round trip correctly -- confirmed narrowly and precisely (not
+  a mystery-shaped gap: we know exactly which case fails and roughly
+  why, just not how to fix it yet). Items native to the session file,
+  and imported LEAF/simple parts, are unaffected. Tracked in
+  docs/TESTING_CHECKLIST.md rather than chased further for now.
+
+### Lesson for future development
+
+**Knowing when to stop is as much a project-management skill as
+debugging is, and reverting a well-reasoned but unsuccessful attempt
+is not the same as reverting a mistake.** Session 29's approach was
+principled, evidence-based, and genuinely worth trying -- it just
+didn't pan out, and it happened to introduce a new problem in the
+process. Recognizing "this specific path is a dead end AND has a real
+cost" and closing it out cleanly, rather than leaving it half-resolved
+alongside seven other closed hypotheses, is what actually protects
+the project's overall integrity here -- exactly the concern Doug
+raised in asking for this cleanup.
+
+## Session 31: propagation restored -- Sessions 24/25 were fixing a
+misdiagnosis, not a real bug
+
+Doug pushed back, correctly: the Session 19-era behavior he wants is
+propagation -- move a shared child once (e.g. the L-bracket inside
+l-bracket-assembly_1/_2), see the correction in BOTH assemblies,
+survives save/reload -- the same mental model as shape edits already
+propagating to every shared instance. That behavior worked at the end
+of Session 19. Session 24 broke it, reading correct propagation
+behavior (a component's reported parent_uid appearing to alternate
+between l-bracket-assembly_1 and _2 across calls) as corruption, and
+"fixed" it in a way that crashed (Session 25's null-label fix), then
+added a refusal on top rather than reconsidering the original
+diagnosis.
+
+**Removed the Session 25 refusal.** Parent resolution goes back to
+preferring the parent's referred (shared) label -- Session 22/pre-24
+behavior -- so repositioning a child within a shared parent
+propagates to every instance again, matching Session 19 and what Doug
+explicitly wants.
+
+### The gizmo-jump bug is real and separate -- now has a concrete
+hypothesis
+
+Doug asked directly whether the shared-parent "fix" and the
+manipulator gizmo-jump bug had been wrongly conflated. Very likely
+yes. Re-examining: `l-bracket`'s component reference lives structurally
+INSIDE the one shared `l-bracket-assembly` product, not duplicated per
+instance -- so it's reachable through TWO parent paths during
+`parse_doc()`'s tree walk, getting a fresh uid generated at each
+encounter even though it's the same underlying label. `set_component_
+location`'s uid-recovery step (search label_dict for a matching entry)
+takes whichever one comes first, which can differ between calls purely
+based on walk order -- not corruption, but real ambiguity about WHICH
+of two equally-valid occurrence-uids to report back. If `position_
+dialog.py`'s `_reattach_manipulator()` ends up with "the other"
+occurrence's uid, it would attach the gizmo to the sibling's AIS_Shape
+-- exactly the reported symptom. Plausible, well-reasoned, but NOT yet
+re-confirmed against fresh data -- next test will show whether this
+holds up.
+
+### Lesson for future development
+
+**When two different reports get "fixed" by the same change, check
+whether they're actually the same bug before assuming they are.**
+Session 24 treated a confusing diagnostic reading (parent_uid
+alternating) as the root cause of BOTH the "cross-contamination" worry
+AND, implicitly, was in the neighborhood of the manipulator gizmo-jump
+report from the same testing session. They were never actually shown
+to be the same bug -- the connection was assumed because they surfaced
+close together. Doug catching this by asking a direct question
+("shouldn't these be separate?") rather than accepting the bundled
+fix is exactly the kind of check that would have caught this sooner
+if asked earlier.
+
+## Session 32: the actual gizmo-jump fix -- uid recovery preferred
+whichever parent the tree walk visits first
+
+Doug retested immediately: propagation confirmed correct (2 Points on
+a shared L-bracket updated both l-bracket-assembly_1 and _2, exactly
+as wanted). The Dynamic/manipulator gizmo jump reproduced identically
+to before, confirming Session 31's hypothesis was on the right track
+and this is a genuinely separate bug from the propagation question.
+
+### Root cause, confirmed (not just theorized this time)
+
+`set_component_location()`'s uid-recovery step searched `label_dict`
+for the first entry matching the newly-created label's entry string.
+A shared child (living inside the ONE shared `l-bracket-assembly`
+product, not duplicated per parent instance) is reachable through
+BOTH `l-bracket-assembly_1` and `_2`'s occurrence paths during
+`parse_doc()`'s recursive walk -- generating a SEPARATE uid per path
+for the same underlying label. Since the walk always visits
+`l-bracket-assembly_1` before `_2` (plain document order), the "first
+match" was deterministically always the assy_1 view -- regardless of
+which sibling the user actually started from. Every previous test
+that happened to select assy_2 would silently jump to assy_1 after
+any move.
+
+### The fix
+
+When more than one candidate matches the entry (i.e. the moved label
+is reachable through more than one parent), prefer the candidate
+whose OWN parent's entry matches the parent this call actually started
+from (captured in `parent_info` earlier in the same function, before
+`parse_doc()` reran). This keeps the caller tracking the SAME
+occurrence across repeated calls -- so `_reattach_manipulator()` in
+the Position dialog, which relies entirely on `self.uid` staying
+correctly anchored to "the thing the user is looking at," stops
+losing track of which sibling was selected.
+
+**Known remaining limitation:** this resolves one level of sharing
+ambiguity (a shared child under a shared parent). If sharing were
+nested more than one level deep (a shared grandparent whose own
+parent is also shared), the same ambiguity could recur further up the
+chain -- not currently in play for anything tested, but worth knowing
+if a future report looks similar in a more deeply nested structure.
+
+### Lesson for future development
+
+**A "recover the uid" helper that just takes the first match is
+implicitly assuming uniqueness it was never actually guaranteed.**
+This bug existed from the moment `set_component_location()`'s uid-
+recovery pattern was written (Session 15) -- it just never surfaced
+until Session 22 made repositioning shared children a real, working
+feature, and Session 23 built something (the manipulator) that
+actually depended on uid continuity across repeated calls to notice
+the consequence. Worth treating "search for a match" helpers as
+needing an explicit disambiguation rule from the start whenever the
+underlying data model allows more than one truthful answer, not just
+when a bug report eventually reveals it.

@@ -110,18 +110,26 @@ silently come back.
 - [ ] Save + reload after using Position -- see the Session Save /
       Reload section above; this is the step most likely to reveal a
       regression that looked fine in the live session.
-- [ ] Dynamic (Session 23, UNTESTED as of this writing -- built while
-      Doug was away): drag a translate arrow, drag a rotate ring, both
-      move the part live and show status-bar feedback during the drag.
-      Position an ASSEMBLY with multiple parts -- confirm the WHOLE
-      thing moves together during the drag, not just one part of it.
-      After releasing, use Nudge (dX/dY/dZ + Apply) to add an exact
-      correction on top of the rough drag. Click Back while Dynamic is
-      active -- confirm no stale/orphaned gizmo is left on screen and
-      the manipulator still works afterward if you drag again. Switch
-      from Dynamic to 2 Points or Mate/Align mid-session -- confirm
-      the gizmo disappears cleanly. Click Done, or close the dialog,
-      while a gizmo is attached -- confirm it's removed.
+- [ ] Dynamic (Session 23; translate-drag + Nudge CONFIRMED working --
+      Doug used this to precisely mate the lathe assembly to the
+      plate, centered, using Nudge values computed from the
+      calculator's edge-length key. Gizmo-jump-to-sibling and a crash,
+      both traced to set_component_location()'s parent-resolution
+      logic, fixed in Session 25.): drag a translate arrow, drag a
+      rotate ring, both move the part live and show status-bar
+      feedback during the drag. Position an ASSEMBLY with multiple
+      parts -- confirm the WHOLE thing moves together during the drag,
+      not just one part of it. After releasing, use Nudge (dX/dY/dZ +
+      rX/rY/rZ + Apply) to add an exact correction on top of the rough
+      drag -- rotation nudge specifically has NOT yet been cleanly
+      tested (every attempt so far happened to hit the shared-parent
+      limitation first; try it on something whose parent is NOT
+      shared). Click Back while Dynamic is active -- confirm no stale/
+      orphaned gizmo is left on screen and the manipulator still works
+      afterward if you drag again. Switch from Dynamic to 2 Points or
+      Mate/Align mid-session -- confirm the gizmo disappears cleanly.
+      Click Done, or close the dialog, while a gizmo is attached --
+      confirm it's removed.
 
 ## Modify Active Part (fillet, shell, extrude, revolve, etc.)
 
@@ -142,6 +150,44 @@ silently come back.
 ## Known Open Issues (not yet fixed -- don't re-report, do check they
 haven't gotten WORSE)
 
+- **Imported top-level assemblies don't survive save/reload.** An item
+  brought in via "Import STEP" survives correctly if it's a LEAF/
+  simple part, but NOT if it is itself an assembly with its own
+  children (confirmed: manual-lathe, a hub assembly, and a purpose-
+  built minimal test all fail the same way -- blank NAUO name,
+  identity location -- despite the in-memory document being confirmed
+  correct right up to the STEP write). Seven fix attempts across
+  Sessions 14-29 all failed identically on a fully isolated, headless
+  re-test (`minimal_repro.py`); the most invasive one (Session 29, a
+  full native-rebuild-with-recursion) additionally regressed internal
+  sharing within imported files and was reverted (Session 30). Set
+  aside as a known, well-understood (if unresolved) limitation rather
+  than chased further for now. Items NATIVE to the session file
+  (never imported) are unaffected, including shared instances --
+  see the Session Save/Reload section above.
+- Repositioning a child within a shared parent assembly (e.g. moving
+  `l-bracket` inside `l-bracket-assembly_2`) PROPAGATES to every
+  instance of that parent (`l-bracket-assembly_1` too) -- this is
+  intended behavior, not a bug, matching how shape edits already
+  propagate to shared instances (confirmed with Doug, Session 31,
+  after Sessions 24/25 briefly and incorrectly treated this as
+  something to refuse). Test: move a shared child via 2 Points, confirm
+  BOTH parent instances show the correction, and it survives save/
+  reload.
+- The AIS_Manipulator gizmo jumping to a sibling occurrence after
+  releasing a drag on a SHARED child (Session 23/24 report) -- FIXED
+  (Session 32): `set_component_location`'s uid-recovery took the
+  first matching label unconditionally, which for a shared child was
+  always whichever parent `parse_doc()`'s tree walk visits first in
+  document order (assy_1 before assy_2), regardless of which sibling
+  was actually selected. Now prefers the occurrence reached through
+  the SAME parent the operation started from. Test: select the L-
+  bracket via assy_2 specifically, Dynamic-drag it, confirm the
+  dialog's breadcrumb and the gizmo both stay anchored to assy_2
+  after releasing, not jump to assy_1. Known remaining limitation:
+  only resolves one level of sharing ambiguity -- a shared child
+  under a shared grandparent (nested two levels deep) could still hit
+  a similar issue, not currently tested.
 - Positioning an imported hub assembly (`clamping-hub-assembly.step`)
   does not survive save/reload. DEFERRED (Session 22): confirmed its
   `NAUO1`/`NAUO2` blank names are present in the file's own original
@@ -155,6 +201,5 @@ haven't gotten WORSE)
   Mate twice in a row does NOT preserve the first mate's constraint
   (no DOF-tracking yet; Step 2/3 not built). Expected limitation, not
   a bug -- see Session 16.
-- "Dynamic" (AIS_Manipulator) method is disabled -- not ported yet.
 - "Align Axis" constraint is disabled -- Step 2/3 territory, not built
   yet.

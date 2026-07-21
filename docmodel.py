@@ -528,53 +528,40 @@ class DocModel:
         # Parent assembly label (component's CURRENT parent -- we are
         # repositioning in place, not reparenting).
         #
-        # Session 24 correctly found that repositioning could cross-
-        # contaminate a sibling when the parent is itself shared (e.g.
-        # l-bracket-assembly_1/_2 both referencing one product), but
-        # its fix -- using the parent's own instance entry instead of
-        # ref_entry -- was WRONG: a component/instance label does not
-        # structurally hold children directly (only its REFERRED
-        # label does), so AddComponent(instance_label, ...) returns a
-        # null result. Confirmed directly: this crashed on the very
-        # next real test (Standard_NullObject inside set_label_name).
+        # Resolves through the parent's REFERRED (shared) label when
+        # the parent is itself a shared instance (e.g. l-bracket-
+        # assembly_1/_2 both referencing one product) -- this is
+        # deliberate, not a bug: it means repositioning a child within
+        # a shared parent propagates to every instance of that parent,
+        # the same way editing the child's own shape already
+        # propagates. Confirmed with Doug (Session 31) as the actually
+        # desired behavior, matching Session 19-era behavior he
+        # specifically wants back: move the shared L-bracket once, see
+        # it correctly in both assemblies, survives save/reload.
         #
-        # The actual fix needs AddComponent's target to be the
-        # parent's referred label (as it always structurally must be),
-        # but must ALSO detect when that referred label is itself
-        # shared by more than one parent instance -- a different,
-        # deeper problem than the child-level sharing Session 22
-        # already handles (unsharing the moved child's own geometry
-        # doesn't help if the PARENT ASSEMBLY STRUCTURE itself is
-        # shared, since adding/removing a child there is edited on the
-        # shared product, affecting every sibling instance of the
-        # parent). Recursively unsharing the parent (and potentially
-        # ITS parent, and so on) is real future work, not something to
-        # improvise untested right now -- refuse cleanly instead of
-        # crashing or corrupting a sibling.
+        # Session 24 read a component's parent_uid appearing to change
+        # between calls as corruption and "fixed" it by resolving
+        # through the parent's own instance entry instead -- which
+        # crashed (AddComponent needs a label that structurally holds
+        # children; an instance/reference label doesn't). Session 25
+        # then added a refusal here instead of chasing that further.
+        # Both were very likely responding to this same correct
+        # propagation behavior, misread as a defect -- removed in
+        # Session 31. If cross-contamination between UNRELATED shared
+        # assemblies is ever seen again, that would be a real, new bug
+        # worth its own fresh diagnosis -- but propagation to a
+        # parent's own sibling instances is the intended feature.
         parent_uid = info.get('parent_uid')
         if not parent_uid or parent_uid not in self.label_dict:
             print(f"[set_component_location] No parent found for {uid} "
                   f"-- cannot reposition a root shape this way")
             return None
         parent_info = self.label_dict[parent_uid]
-        parent_ref_entry = parent_info.get('ref_entry')
-        parent_entry = parent_ref_entry or parent_info['entry']
+        parent_entry = parent_info.get('ref_entry') or parent_info['entry']
         parent_label = self._find_label_by_entry(parent_entry)
         if parent_label is None:
             print(f"[set_component_location] Could not find parent label for {uid}")
             return None
-
-        if parent_ref_entry:
-            parent_users = TDF_LabelSequence()
-            n_parent_users = shape_tool.GetUsers_s(parent_label, parent_users, False)
-            if n_parent_users > 1:
-                print(f"[set_component_location] Cannot reposition "
-                      f"{info['name']!r}: its parent {parent_info['name']!r} "
-                      f"is itself shared ({n_parent_users} users) -- "
-                      f"repositioning within a shared parent assembly "
-                      f"isn't supported yet (would affect every sibling "
-                      f"instance of the parent, not just this one).")
-                return None
 
         # DIAGNOSTIC (temporary -- Session 16's "label instead of shape"
         # fix did NOT resolve the save/reload regression in real
@@ -648,21 +635,51 @@ class DocModel:
         # by parse_doc()'s own walk -- calling it again here would mint
         # a fresh, never-assigned uid rather than recover the real one
         # parse_doc() just gave this label. Search label_dict instead.
-        for candidate_uid, candidate_info in self.label_dict.items():
-            if candidate_info['entry'] == new_entry:
-                post_name = candidate_info.get('name')
-                post_loc = (self.label_dict[candidate_uid].get('world_loc')
-                            if candidate_info.get('is_assy')
-                            else self.part_dict.get(candidate_uid, {}).get('loc'))
-                pt = post_loc.Transformation().TranslationPart() if post_loc else None
-                print(f"[set_component_location #{call_n}] AFTER parse_doc: "
-                      f"uid={candidate_uid} name={post_name!r} "
-                      f"world_loc="
-                      f"{(round(pt.X(),3), round(pt.Y(),3), round(pt.Z(),3)) if pt else None}")
-                return candidate_uid
-        print(f"[set_component_location] Warning: could not recover uid "
-              f"for entry {new_entry} after parse_doc()")
-        return None
+        #
+        # A shared child (e.g. l-bracket, living inside the ONE shared
+        # l-bracket-assembly product) is reachable through MULTIPLE
+        # parent paths -- parse_doc()'s walk visits each parent
+        # occurrence and generates a SEPARATE uid per path, even
+        # though it's the same underlying label. Session 32: taking
+        # the first match unconditionally meant this ALWAYS returned
+        # whichever parent path parse_doc() visits first in document
+        # order (l-bracket-assembly_1 before _2) -- confirmed this is
+        # exactly why the Position dialog's breadcrumb and the
+        # manipulator gizmo always "jumped" to assy_1 after a move,
+        # regardless of which sibling the user actually started from.
+        # Fix: when more than one candidate matches, prefer the one
+        # reached through the SAME parent this call started from, so
+        # the caller keeps tracking the same occurrence across
+        # repeated calls instead of whichever the tree walk visits
+        # first.
+        matches = [c_uid for c_uid, c_info in self.label_dict.items()
+                  if c_info['entry'] == new_entry]
+        if not matches:
+            print(f"[set_component_location] Warning: could not recover uid "
+                  f"for entry {new_entry} after parse_doc()")
+            return None
+
+        chosen_uid = matches[0]
+        if len(matches) > 1:
+            original_parent_entry = parent_info['entry']
+            for c_uid in matches:
+                c_parent_uid = self.label_dict[c_uid].get('parent_uid')
+                c_parent_entry = self.label_dict.get(c_parent_uid, {}).get('entry')
+                if c_parent_entry == original_parent_entry:
+                    chosen_uid = c_uid
+                    break
+
+        post_name = self.label_dict[chosen_uid].get('name')
+        post_loc = (self.label_dict[chosen_uid].get('world_loc')
+                    if self.label_dict[chosen_uid].get('is_assy')
+                    else self.part_dict.get(chosen_uid, {}).get('loc'))
+        pt = post_loc.Transformation().TranslationPart() if post_loc else None
+        print(f"[set_component_location #{call_n}] AFTER parse_doc: "
+              f"uid={chosen_uid} name={post_name!r} "
+              f"world_loc="
+              f"{(round(pt.X(),3), round(pt.Y(),3), round(pt.Z(),3)) if pt else None}"
+              f"{' (chosen from ' + str(len(matches)) + ' shared occurrences)' if len(matches) > 1 else ''}")
+        return chosen_uid
 
     def get_full_path_name(self, uid):
         """Full breadcrumb path from '/' down to uid, e.g.
@@ -907,46 +924,52 @@ class DocModel:
         uid = self.get_uid_from_entry(entry)
         return uid
 
-    def add_component_from_label(self, source_shape_tool, source_label, name):
+    def add_component_from_label(self, source_label, name):
         """Add an imported STEP label (with its full sub-tree) as a
         component under '/' (the top assembly).
 
         add_component() only carries a bare TopoDS_Shape into the
         session, which loses any names of nested sub-assemblies/parts
         because raw geometry has no attached XCAF label structure.
-        This method instead preserves the complete label subtree
-        (shape, name, color and every child component) from the
-        source document.
+        This method instead clones the complete label subtree (shape,
+        name, color and every child component) from the source
+        document using XCAFDoc_Editor.Extract -- OCCT's dedicated tool
+        for cross-document XCAF copies -- so the names of all parts
+        inside an imported assembly are preserved in the tree view.
 
-        Session 19 added a write-to-temp-file-then-read-back round-
-        trip here, right after Extract_s, believing Extract_s's clone
-        needed "normalizing" into Reader-native form before anything
-        else could safely reference it. REMOVED in Session 26: a fully
-        isolated re-test showed the exact same corruption -- meaning it
-        never actually worked.
+        KNOWN LIMITATION (unresolved as of Session 30): a component
+        imported this way survives save/reload correctly if it's a
+        LEAF/simple shape, but NOT if it is itself an assembly with
+        its own children (confirmed: manual-lathe, a hub assembly, and
+        a purpose-built minimal test all show the same symptom -- blank
+        NAUO name, identity location -- after a save/reload round
+        trip, despite the in-memory document being confirmed correct
+        right up to the STEP write).
 
-        Session 27 tried re-cloning via a SECOND, same-document
-        Extract_s call right after the cross-document one. REMOVED in
-        Session 28: still failed identically, AND confirmed to leave
-        an orphaned duplicate referred label behind every time it ran.
+        Sessions 14, 16-19, 26-29 tried seven different fixes for this
+        (SetLocation, two AddComponent overloads, a round-trip added
+        then removed, a same-document re-clone, and a full native-
+        rebuild-with-recursion of the assembly structure) -- all
+        failed identically on a fully isolated, headless re-test
+        (minimal_repro.py). The native-rebuild attempt (Session 29)
+        additionally introduced a real regression of its own -- it
+        rebuilds every assembly-typed child from scratch with no
+        de-duplication, so any sharing that existed WITHIN the
+        imported STEP file itself (e.g. a sub-assembly reused twice in
+        the same import) would be silently lost even where the
+        original bug wouldn't have mattered. Reverted in Session 30
+        rather than kept as a worse trade for an unfixed bug.
 
-        Session 28's minimal, headless repro (minimal_repro.py) then
-        found the real, confirmed variable: cross-document
-        XCAFDoc_Editor.Extract_s survives save/reload reliably for
-        LEAF/simple shapes, but NOT for anything that is itself an
-        assembly (has its own children) -- six independent data points,
-        zero contradictions (see extract_component_recursive()'s
-        docstring for the full evidence trail).
-
-        FIX (Session 29): branch on whether the top-level import is a
-        leaf or an assembly. Leaves still go through cross-document
-        Extract_s directly (proven reliable). Assemblies are built
-        NATIVELY in self.doc instead (matching how every other working
-        assembly in Kodacad -- '/', 'as1', etc. -- is already built),
-        recursing into every child via extract_component_recursive()
-        so cross-document Extract_s is used only for leaf content, at
-        any depth, never for assembly-level structure.
+        Positioning parts and assemblies that are NOT imported this
+        way (native to the session file, e.g. everything in
+        as1-oc-214.stp) works correctly, INCLUDING shared instances
+        (Session 22) -- this is the confirmed, tested, working core of
+        the Position feature. The limitation above is specific to
+        imported top-level assemblies and is being tracked as a known
+        issue (see docs/TESTING_CHECKLIST.md) rather than chased
+        further for now.
         """
+        from OCP.XCAFDoc import XCAFDoc_Editor
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
 
         # Get (or create) the '/' root assembly label (first free shape)
@@ -960,38 +983,14 @@ class DocModel:
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 
-        is_assy = source_shape_tool.IsAssembly_s(source_label)
-
-        if not is_assy:
-            # LEAF top-level import: cross-document Extract_s directly.
-            # Extract_s returns True/False (success), NOT the new
-            # label -- it adds the copied content as the newest
-            # component of root_label, so retrieve it via
-            # get_last_component().
-            from OCP.XCAFDoc import XCAFDoc_Editor
-            ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
-            if not ok:
-                print("[add_component_from_label] XCAFDoc_Editor.Extract failed")
-                return None
-            component_label = get_last_component(shape_tool, root_label)
-        else:
-            # ASSEMBLY top-level import: build the wrapper NATIVELY,
-            # then recurse into each child.
-            from OCP.TopLoc import TopLoc_Location
-            empty_shape = TopoDS_Compound()
-            BRep_Builder().MakeCompound(empty_shape)
-            wrapper_ref_label = shape_tool.AddShape(empty_shape, True)
-            set_label_name(wrapper_ref_label, name)
-            component_label = shape_tool.AddComponent(
-                root_label, wrapper_ref_label, TopLoc_Location())
-
-            source_children = TDF_LabelSequence()
-            source_shape_tool.GetComponents_s(source_label, source_children, False)
-            for i in range(1, source_children.Length() + 1):
-                extract_component_recursive(
-                    shape_tool, source_shape_tool,
-                    source_children.Value(i), wrapper_ref_label)
-            shape_tool.UpdateAssemblies()
+        # Extract_s returns True/False (success), NOT the new label --
+        # it adds the copied content as the newest component of
+        # root_label, so retrieve it via get_last_component().
+        ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
+        if not ok:
+            print("[add_component_from_label] XCAFDoc_Editor.Extract failed")
+            return None
+        component_label = get_last_component(shape_tool, root_label)
 
         entry = get_label_entry(component_label)
         set_label_name(component_label, name)
@@ -1175,79 +1174,6 @@ def load_stp_at_top(dm):
     print("[load_stp_at_top] done")
 
 
-def extract_component_recursive(shape_tool, source_shape_tool,
-                                source_comp_label, dest_assembly_label):
-    """Copy ONE component (source_comp_label, a component under some
-    assembly in the SOURCE document) into dest_assembly_label (an
-    assembly label already in the DESTINATION document), preserving
-    its name and location.
-
-    Session 28's minimal, headless repro (minimal_repro.py) proved,
-    with a clean, purpose-built test structure (not a messy real
-    file): cross-document XCAFDoc_Editor.Extract_s survives save/
-    reload reliably for LEAF/simple shapes, but NOT for anything that
-    is itself an assembly (has its own children) -- confirmed across
-    six independent data points (manual-lathe, the hub, and a purpose-
-    built nested test assembly all fail; every leaf shape tested,
-    regardless of import path, survives). Session 22's unsharing
-    clone (which DOES work for an assembly with children) is always
-    SAME-document, never cross-document -- consistent with this being
-    specifically a cross-document + assembly-structure problem.
-
-    So: LEAF children are still copied via cross-document Extract_s
-    (proven reliable). ASSEMBLY children are built NATIVELY in the
-    destination document instead -- plain AddShape(empty_compound,
-    True) + AddComponent, exactly how every other working assembly in
-    Kodacad ('/', 'as1', etc.) is already built -- and this function
-    recurses into each of THEIR children, so cross-document Extract_s
-    is used only for leaves, never for assembly-level structure, at
-    any depth.
-    """
-    from OCP.XCAFDoc import XCAFDoc_Editor
-    source_ref_label = TDF_Label()
-    source_shape_tool.GetReferredShape_s(source_comp_label, source_ref_label)
-    comp_name = (get_label_name(source_comp_label)
-                or get_label_name(source_ref_label) or "imported")
-    comp_loc = source_shape_tool.GetShape_s(source_comp_label).Location()
-    is_assy = source_shape_tool.IsAssembly_s(source_ref_label)
-
-    if not is_assy:
-        # LEAF: cross-document Extract_s (creates the component at a
-        # default/identity location -- Extract_s takes no location
-        # parameter), then re-add it WITH the correct location via
-        # the same RemoveComponent+AddComponent(label, location)
-        # pattern already proven reliable in set_component_location().
-        ok = XCAFDoc_Editor.Extract_s(source_ref_label, dest_assembly_label)
-        if not ok:
-            print(f"[extract_component_recursive] Extract failed for "
-                  f"leaf {comp_name!r}")
-            return None
-        temp_comp = get_last_component(shape_tool, dest_assembly_label)
-        temp_ref = TDF_Label()
-        shape_tool.GetReferredShape_s(temp_comp, temp_ref)
-        shape_tool.RemoveComponent(temp_comp)
-        new_comp = shape_tool.AddComponent(dest_assembly_label, temp_ref, comp_loc)
-        set_label_name(new_comp, comp_name)
-        return new_comp
-
-    # ASSEMBLY: build the wrapper NATIVELY (never cross-document Extract_s
-    # an assembly-typed label), then recurse into its own children.
-    empty_shape = TopoDS_Compound()
-    BRep_Builder().MakeCompound(empty_shape)
-    wrapper_ref_label = shape_tool.AddShape(empty_shape, True)
-    set_label_name(wrapper_ref_label, comp_name)
-    new_comp = shape_tool.AddComponent(dest_assembly_label, wrapper_ref_label, comp_loc)
-    set_label_name(new_comp, comp_name)
-
-    source_children = TDF_LabelSequence()
-    source_shape_tool.GetComponents_s(source_ref_label, source_children, False)
-    for i in range(1, source_children.Length() + 1):
-        extract_component_recursive(shape_tool, source_shape_tool,
-                                    source_children.Value(i), wrapper_ref_label)
-    shape_tool.UpdateAssemblies()
-    return new_comp
-
-
 def load_stp_cmpnt(dm):
     """Import a STEP file and add it as a component under '/' root.
 
@@ -1267,7 +1193,7 @@ def load_stp_cmpnt(dm):
         # Use add_component_from_label (not add_component) so the
         # names of any nested sub-assemblies/parts inside the
         # imported STEP file are preserved rather than lost.
-        dm.add_component_from_label(step_shape_tool, label, name)
+        dm.add_component_from_label(label, name)
 
 
 def load_stp_undr_top(dm):
