@@ -2797,3 +2797,120 @@ lesson as Session 28's minimal-repro discipline, in miniature: a
 claim about "how OCCT reliably behaves" is worth treating as
 unverified until tested against real, specific data, not just
 plausible in general.
+
+## Session 38: AIS_ViewCube with RGB-colored axes, ported from Basicad
+plus a real forum-confirmed addition
+
+Doug wanted CAD Assistant's corner ViewCube (Basicad already has one,
+without axis coloring) with RGB X/Y/Z axis indicators added on top.
+
+### What ported directly from Basicad
+
+`gui/assembly_viewer.py`'s existing `AIS_ViewCube` setup -- already
+real, working code with a genuine gotcha already solved (the same
+`Quantity_Color` construction issue this codebase already handles for
+the background color: needs an explicit RGB or named-color
+construction, not a bare float triple) and the corner-pinning
+`Graphic3d_TransformPers` setup. Ported into `koda_viewport.py`'s
+`InitDriver()` close to verbatim.
+
+### What's new: RGB axis coloring
+
+Basicad's version doesn't have this. Found the documented, working
+answer directly from a real OCCT forum thread where a user asked this
+exact question ("how to change the color of the coordinate system
+near the viewcube") and got a confirmed-working answer:
+`Prs3d_DatumAspect`'s per-axis `ShadingAspect()`. Verified the enum
+naming convention (`Prs3d_DP_XAxis` etc., flat top-level names, same
+pattern as every other OCCT enum already used throughout this
+codebase) against OCCT's own class reference before using it, rather
+than assuming the forum snippet's naming translated directly to OCP.
+
+### One thing I can't verify without running it
+
+`AIS_ViewCube` is designed to integrate with `AIS_ViewController`'s
+own built-in picking pipeline (automatic camera transform on
+click/selection is documented as part of the class itself, not
+something the application needs to code). Since Kodacad's mouse
+handling already routes through `AIS_ViewController` for the "no
+active drag" case, ViewCube clicks should reach it automatically --
+but whether that interaction is clean with Kodacad's OWN additional
+click handling (part selection via `_on_click()`, the manipulator
+gesture-interception from Session 23) hasn't been tested. Worth
+specifically checking that clicking a ViewCube face doesn't also
+trigger an unwanted part-selection attempt.
+
+### Lesson for future development
+
+**A forum thread answering the exact question being asked is worth
+more than general API documentation, but its exact syntax still needs
+independent verification against the actual binding being used.** The
+forum answer was C++; confirming `Prs3d_DP_XAxis` translates to a flat
+top-level OCP name (not nested inside a wrapper enum class) took a
+second, separate check against OCCT's own class reference -- exactly
+the discipline that's caught several wrong assumptions earlier in
+this project (WriteNames, GeomAbs_Cylinder's reliability). A forum
+answer confirms the APPROACH is right; it doesn't excuse skipping the
+binding-specific verification step.
+
+## Session 38 (cont'd): the actual bug -- DatumAspect() returns null
+until explicitly assigned
+
+Doug's terminal output pinpointed it exactly: `'NoneType' object has
+no attribute 'ShadingAspect'` -- `vc.Attributes().DatumAspect()`
+itself returns null on a freshly-constructed `AIS_ViewCube`, before
+anything has explicitly given it a `Prs3d_DatumAspect`. The forum
+snippet copied earlier skipped this step (or assumed it already
+existed from some other setup) -- confirmed by finding a second,
+more complete real-world example that includes the missing line:
+
+```cpp
+aDrawer->SetDatumAspect(new Prs3d_DatumAspect());   // required first
+const Handle(Prs3d_DatumAspect)& aDatumAsp = aDrawer->DatumAspect();
+```
+
+Added `drawer.SetDatumAspect(Prs3d_DatumAspect())` before retrieving
+it. The earlier `UpdateCurrentViewer()` addition (this session's first
+fix attempt) turned out not to be the actual problem, but it's a
+correct, low-risk improvement worth keeping regardless.
+
+### Lesson for future development
+
+**The very first forum snippet found isn't always the complete
+picture -- a second search specifically for the failing symptom
+turned up a MORE complete example that included a step the first one
+omitted.** Worth treating an initial confirmed-working-elsewhere
+example as a strong lead, not a guarantee of completeness, especially
+when it's presented as a short snippet rather than a full working
+file. When it fails, searching for the SPECIFIC error message
+directly (rather than re-searching the general topic) found the exact
+missing piece fast.
+
+## Session 38 (cont'd again): ViewCube vanishing on redraw -- fixed at
+the actual source, not just the reported symptom
+
+Doug reported the ViewCube disappearing after loading a session.
+Traced to `redraw()`'s `context.RemoveAll(False)`, which wipes
+EVERYTHING in the AIS context, not just part/workplane geometry --
+the ViewCube was only ever added once, at `InitDriver()` time, with
+nothing restoring it after any subsequent wipe.
+
+**This is broader than just session load.** `redraw()` is called
+throughout the app -- Position moves, RMB delete, drag-and-drop
+reparenting -- session load is just where Doug happened to notice it
+first. Checked all three `RemoveAll` call sites in the codebase (`main
+window.py` x2, `position_dialog.py` x1): two are direct calls to
+`redraw()` itself, and the third (drag-and-drop reparent) calls
+`redraw()` immediately afterward -- so fixing `redraw()` once, at the
+end right before the final `UpdateCurrentViewer()`, covers every wipe
+path in the app, not just the one that was reported.
+
+### Lesson for future development
+
+**When a symptom is reported at one specific trigger, check whether
+the underlying cause is shared by other triggers before fixing only
+the one reported.** `RemoveAll()` wiping non-part objects is a general
+property of that call, not something specific to session loading --
+grepping for every call site before considering the fix complete
+caught two other places that would have hit the identical bug later,
+reported as separate-seeming issues if left unfixed.

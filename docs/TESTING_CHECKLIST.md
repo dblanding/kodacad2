@@ -86,6 +86,23 @@ silently come back.
 - [ ] LMB rotate and MMB pan still feel normal (these were never
       broken, but worth a sanity check after any `koda_viewport.py`
       change).
+- [ ] AIS_ViewCube (Session 38): appears in the corner with visible
+      X/Y/Z axes colored red/green/blue. Click a cube face, edge, and
+      corner -- each should animate the camera to the corresponding
+      standard view. Click the ViewCube while a part is also under
+      the cursor location in the 3D scene behind it -- confirm the
+      click is consumed by the ViewCube only, not ALSO triggering
+      Kodacad's own part-selection logic. Try it during an active
+      Dynamic/manipulator session too, to confirm no conflict with
+      Session 23's mouse-gesture interception. Confirm it SURVIVES a
+      redraw -- load a session file, do a Position move, RMB delete
+      something, drag-reparent in the tree -- the ViewCube should
+      still be there after every one of these, not just at startup
+      (root cause: `redraw()`'s `context.RemoveAll()` wipes the whole
+      AIS context, not just part geometry -- fixed by re-adding the
+      ViewCube at the end of `redraw()` itself, covering every call
+      site that wipes the context, not just the one Doug first
+      noticed).
 
 ## Position Dialog
 

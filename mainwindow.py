@@ -843,6 +843,14 @@ class MainWindow(QMainWindow):
                 self.draw_shape(uid)
         # Redraw workplanes except those hidden
         self.redraw_workplanes()
+        # RemoveAll() above wipes EVERYTHING in the context, not just
+        # part/workplane geometry -- the AIS_ViewCube (Session 38)
+        # lives in the same context and was only ever added once, at
+        # startup, with nothing restoring it after any of the many
+        # places that call redraw() (session load, Position moves,
+        # RMB delete, etc. -- not just session load, which is just
+        # where this was first noticed). Re-add it every time.
+        self.canvas._add_view_cube()
         context.UpdateCurrentViewer()
         self.canvas.update()
 

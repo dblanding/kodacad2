@@ -150,6 +150,7 @@ class KodaViewport(QWidget):
         # uid/ais_shape_dict model instead of Basicad's build123d node
         # tree. See docs/DEVELOPMENT_LOG.md, Session 23.
         self._manipulator = None
+        self._view_cube = None  # AIS_ViewCube, set in _add_view_cube()
         self._manip_dragging = False
         self._manip_leaf_shapes = []       # every AIS_Shape that must move together
         self._manip_start_trsfs = {}       # id(ais) -> gp_Trsf at drag start
@@ -192,8 +193,86 @@ class KodaViewport(QWidget):
         self.context = context
         self._display = DisplayShim(context, view, self)
 
+        self._add_view_cube()
+
         view.MustBeResized()
         self.update()
+
+    def _add_view_cube(self):
+        """AIS_ViewCube in the corner, with RGB-colored XYZ axes
+        (matching CAD Assistant's viewport). Clickable faces (6),
+        edges (12), and corners (8) animate the camera to the
+        corresponding standard view.
+
+        Ported from Basicad's gui/assembly_viewer.py -- already
+        proven working there, including a real gotcha already solved:
+        Quantity_Color needs an explicit RGB or named-color
+        construction, not a bare float triple (confirmed against the
+        actual OCP error message when this was first built). The
+        corner-pinning via Graphic3d_TransformPers is copied as-is.
+
+        The RGB axis coloring is new -- Basicad's own version doesn't
+        have it. Confirmed via a real OCCT forum thread (a user asked
+        exactly this -- "how to change the color of the coordinate
+        system near the viewcube" -- and the documented, working
+        answer is Prs3d_DatumAspect's per-axis ShadingAspect):
+        https://dev.opencascade.org/content/how-change-color-coordinate-system-near-viewcube-or-even-erase-coordinate-system
+        """
+        self._view_cube = None
+        try:
+            from OCP.AIS import AIS_ViewCube
+            from OCP.Prs3d import Prs3d_DatumAspect, Prs3d_DP_XAxis, Prs3d_DP_YAxis, Prs3d_DP_ZAxis
+            from OCP.Graphic3d import (
+                Graphic3d_TransformPers,
+                Graphic3d_TransModeFlags,
+                Graphic3d_Vec2i,
+            )
+            from OCP.Aspect import Aspect_TypeOfTriedronPosition
+
+            vc = AIS_ViewCube()
+            vc.SetSize(80)
+            vc.SetBoxFacetExtension(8)
+            vc.SetAxesPadding(5)
+            vc.SetFontHeight(12)
+            vc.SetDrawAxes(True)
+
+            # RGB axes: X=red, Y=green, Z=blue, matching CAD Assistant.
+            # DatumAspect() returns null on a freshly-constructed
+            # AIS_ViewCube -- confirmed directly (real testing hit this
+            # exact "'NoneType' object has no attribute 'ShadingAspect'"
+            # error) -- it needs an explicit Prs3d_DatumAspect assigned
+            # first via SetDatumAspect(), matching a real, confirmed-
+            # working example found on the OCCT forum.
+            drawer = vc.Attributes()
+            drawer.SetDatumAspect(Prs3d_DatumAspect())
+            datum = drawer.DatumAspect()
+            # Explicit RGB construction (not a bare Quantity_NOC_* enum
+            # passed directly) -- matches the already-proven-working
+            # pattern this codebase already uses for the background
+            # color, avoiding the enum-vs-object construction ambiguity
+            # Basicad's own comment flagged when this was first built.
+            red = Quantity_Color(1.0, 0.0, 0.0, Quantity_TypeOfColor.Quantity_TOC_RGB)
+            green = Quantity_Color(0.0, 1.0, 0.0, Quantity_TypeOfColor.Quantity_TOC_RGB)
+            blue = Quantity_Color(0.0, 0.0, 1.0, Quantity_TypeOfColor.Quantity_TOC_RGB)
+            datum.ShadingAspect(Prs3d_DP_XAxis).SetColor(red)
+            datum.ShadingAspect(Prs3d_DP_YAxis).SetColor(green)
+            datum.ShadingAspect(Prs3d_DP_ZAxis).SetColor(blue)
+
+            # Transform persistence keeps it fixed in the corner
+            # regardless of camera orientation/zoom.
+            trsf_pers = Graphic3d_TransformPers(
+                Graphic3d_TransModeFlags.Graphic3d_TMF_TriedronPers,
+                Aspect_TypeOfTriedronPosition.Aspect_TOTP_RIGHT_LOWER,
+                Graphic3d_Vec2i(100, 100)
+            )
+            vc.SetTransformPersistence(trsf_pers)
+            self.context.Display(vc, False)
+            self.context.UpdateCurrentViewer()
+            self._view_cube = vc
+            print("AIS_ViewCube added to corner (RGB axes).")
+        except Exception as e:
+            print(f"(AIS_ViewCube not available: {e} -- falling back to trihedron)")
+            self.view.TriedronDisplay()
 
     def paintEvent(self, event):
         if self.view is not None:
