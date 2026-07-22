@@ -11,21 +11,25 @@ THE POSITION DIALOG -- layout follows Doug's design PDF
                     (shared instances) -- see Session 16.
   METHODS section: Dynamic (AIS_Manipulator drag + numeric Nudge
                     refinement -- see Session 23), Mate Align, 2 Points.
-  CONSTRAINTS section: Mate, Align, Align Axis (disabled -- Step 2/3
-                    not ported yet).
+  CONSTRAINTS section: Mate, Align, Align Axis (disabled -- needs its
+                    own axis-picking machinery, not built yet).
   BOTTOM section:   Reverse / Back side by side, Done below. Status
                     messages go to the main window's status bar (not
                     printed in the dialog), per Doug's explicit note
                     that Basicad's dialog "often has to be resized...
                     let's put it on a diet."
 
-THIS ROUND: only Step 1 of Mate/Align (rotate about the intersection
-line of two picked face planes until flush) and 2 Points (pure
-translation) are wired up. No DOF/constraint-accounting engine yet --
-that's Step 2/3 territory, built once this is proven working
-end-to-end including save/reload (see docs/DEVELOPMENT_LOG.md,
-Session 14 -- persistence bugs here are easy to miss without a real
-save+reload test, not just a redraw check).
+THIS ROUND: the full 3-2-1 Mate/Align workflow (Step 1: rotate about
+the intersection line of two picked face planes; Step 2: rotate within
+the plane Step 1 established; Step 3: translate along whatever's left)
+and 2 Points (pure translation) are wired up, WITH DOF tracking --
+applying Mate/Align a second and third time now consumes the
+remaining degrees of freedom instead of independently re-flushing
+against the newest pick (the original limitation that motivated this,
+via the hex-on-hex-shaft case -- see docs/DEVELOPMENT_LOG.md). Align
+Axis (for aligning two hole/cylinder axes directly) is its own,
+separate 3-step sequence per the original design and still needs its
+own axis-picking machinery -- not built yet.
 
 UNDO MODEL: dm.set_component_location() sets an ABSOLUTE local
 location (not a relative delta -- see Session 14, it rebuilds the
@@ -79,6 +83,20 @@ class PositionDialog(QDialog):
         self._picking_for = None    # 'mate_align' or 'two_points'
         self._last_mode = "mate"    # 'mate' or 'align' -- for Reverse
         self._last_picks = None     # (pick1, pick2) from the most recent Mate/Align apply
+        self._last_step_applied = None  # which compute_stepN_move was last used (0/1/2)
+
+        # 3-2-1 DOF tracking for Mate/Align. _mate_align_step counts how
+        # many of the 3 steps have been applied (0 = none yet, 3 = fully
+        # constrained). _mated_normal is Step 1's result (the axis Step
+        # 2 rotates about); _step2_wall_normal is Step 2's result (the
+        # second plane's normal, needed for Step 3's free-direction
+        # calculation). Reset to a "Clean Slate" whenever the user
+        # switches to a different Method -- per the original design,
+        # constraint accounting only makes sense as one continuous
+        # Mate/Align session.
+        self._mate_align_step = 0
+        self._mated_normal = None
+        self._step2_wall_normal = None
 
         self.setWindowTitle("Position")
         self._build_ui()
@@ -160,8 +178,10 @@ class PositionDialog(QDialog):
         self._mate_btn = QRadioButton("Mate")
         self._align_btn = QRadioButton("Align")
         self._align_axis_btn = QRadioButton("Align Axis")
-        self._align_axis_btn.setEnabled(False)  # Step 2/3 not ported yet
-        self._align_axis_btn.setToolTip("Not available yet -- coming after Step 1 is proven")
+        self._align_axis_btn.setEnabled(False)  # own axis-picking, not built yet
+        self._align_axis_btn.setToolTip(
+            "Not available yet -- needs its own hole/cylinder axis-picking, "
+            "separate from Mate/Align's face-picking")
         for i, btn in enumerate([self._mate_btn, self._align_btn, self._align_axis_btn]):
             self._constraint_group.addButton(btn, i)
             constraints_layout.addWidget(btn)
@@ -201,8 +221,20 @@ class PositionDialog(QDialog):
         self._reverse_btn.setEnabled(self._last_pick_pair_available())
 
     def _last_pick_pair_available(self):
-        return bool(self._history) and self._picking_for == "mate_align" \
-            and self._last_picks is not None
+        # Step 3 (index 2) is pure translation -- no mate/align choice
+        # exists to reverse.
+        return (bool(self._history) and self._picking_for == "mate_align"
+                and self._last_picks is not None
+                and self._last_step_applied != 2)
+
+    def _reset_mate_align_dof(self):
+        """Clean Slate: called whenever the user switches to a
+        different Method. Per the original design, constraint
+        accounting only makes sense as one continuous Mate/Align
+        session -- switching away and back starts over."""
+        self._mate_align_step = 0
+        self._mated_normal = None
+        self._step2_wall_normal = None
 
     # -----------------------------------------------------------------
     # Constraint selection (starts picking)
@@ -216,6 +248,11 @@ class PositionDialog(QDialog):
         if not self._mate_align_btn.isChecked():
             self._mate_align_btn.setChecked(True)
         self._last_mode = mode
+        if self._mate_align_step >= 3:
+            self.main_win.statusBar().showMessage(
+                "Already fully constrained (3 of 3 steps applied) -- "
+                "click Back to remove a step first.", 6000)
+            return
         self._start_face_picking()
 
     # -----------------------------------------------------------------
@@ -230,7 +267,9 @@ class PositionDialog(QDialog):
         self._pick2 = None
         self.main_win.registerCallback(self._face_pick_callback)
         self.main_win.canvas._display.SetSelectionModeFace()
-        self.main_win.statusBar().showMessage("Pick face 1 (moving part).")
+        step_num = self._mate_align_step + 1
+        self.main_win.statusBar().showMessage(
+            f"Step {step_num} of 3: pick face 1 (moving part).")
 
     def _face_pick_callback(self, shapeList, *args):
         for shape in shapeList:
@@ -249,17 +288,47 @@ class PositionDialog(QDialog):
                 return
 
     def _apply_mate_align(self):
+        """Dispatches to whichever of Step 1/2/3's math applies, based
+        on how many steps have already been applied this session
+        (self._mate_align_step). Each successful step records what it
+        established (self._mated_normal / self._step2_wall_normal) for
+        the NEXT step to use."""
         self.main_win.clearCallback()
         mate = (self._last_mode == "mate")
-        move = position_math.compute_step1_move(self._pick1, self._pick2, mate=mate)
+        step = self._mate_align_step
+
+        if step == 0:
+            move = position_math.compute_step1_move(self._pick1, self._pick2, mate=mate)
+        elif step == 1:
+            move = position_math.compute_step2_move(
+                self._pick1, self._pick2, self._mated_normal, mate=mate)
+        elif step == 2:
+            move = position_math.compute_step3_move(
+                self._pick1, self._pick2, self._mated_normal, self._step2_wall_normal)
+        else:
+            self.main_win.statusBar().showMessage(
+                "Already fully constrained (3 of 3 steps applied) -- "
+                "click Back to remove a step first.", 6000)
+            return
+
         if move is None:
             self.main_win.statusBar().showMessage("Couldn't compute move -- try again.", 5000)
             return
+
         self._last_picks = (self._pick1, self._pick2)
+        self._last_step_applied = step
         ok = self._apply_world_move(move)
         if ok:
+            self._record_step_success(step, mate)
             label = "Mate" if mate else "Align"
-            self.main_win.statusBar().showMessage(f"{label} applied.", 5000)
+            remaining = 3 - self._mate_align_step
+            if remaining > 0:
+                self.main_win.statusBar().showMessage(
+                    f"{label} applied (step {self._mate_align_step} of 3, "
+                    f"{remaining} DOF left). Pick Mate or Align again to continue.", 8000)
+            else:
+                self.main_win.statusBar().showMessage(
+                    f"{label} applied -- fully constrained (3 of 3).", 6000)
         self._update_ui_state()
 
     # -----------------------------------------------------------------
@@ -269,6 +338,7 @@ class PositionDialog(QDialog):
     def _start_two_points_picking(self):
         self.main_win.canvas.detach_manipulator()
         self._nudge_box.setVisible(False)
+        self._reset_mate_align_dof()
         self._picking_for = "two_points"
         self._pick1 = None
         self._pick2 = None
@@ -308,6 +378,7 @@ class PositionDialog(QDialog):
 
     def _start_dynamic_mode(self):
         self.main_win.clearCallback()
+        self._reset_mate_align_dof()
         self._picking_for = "dynamic"
         if self._reattach_manipulator():
             self._nudge_box.setVisible(True)
@@ -474,9 +545,15 @@ class PositionDialog(QDialog):
         """Re-apply the last Mate/Align move with the opposite mode,
         using the SAME two picks (per Doug's design: 'The Reverse
         button will toggle between Mate and Align'), rather than
-        re-prompting for new picks."""
+        re-prompting for new picks. Works for whichever step (1 or 2 --
+        Step 3 is pure translation, no mode to flip, and is excluded
+        by _last_pick_pair_available) was last applied, not just Step 1."""
         if not self._last_picks or not self._history:
             return
+        step = self._last_step_applied
+        if step is None or step == 2:
+            return
+
         # Undo the last move first (restore pre-move local location),
         # then re-apply with the flipped mode from the same picks.
         # IMPORTANT: capture the uid this restore call returns --
@@ -491,21 +568,50 @@ class PositionDialog(QDialog):
             self._update_ui_state()
             return
         self.uid = restored_uid
+        # Step the DOF tracker back to before this step, clearing what
+        # it established -- we're about to recompute it with the
+        # flipped mode, which may change what gets recorded (e.g. a
+        # flipped Step 1 mated_normal points the opposite way).
+        self._mate_align_step = step
+        if step == 0:
+            self._mated_normal = None
+        elif step == 1:
+            self._step2_wall_normal = None
         self._refresh_display()
 
         self._last_mode = "align" if self._last_mode == "mate" else "mate"
         pick1, pick2 = self._last_picks
         mate = (self._last_mode == "mate")
-        move = position_math.compute_step1_move(pick1, pick2, mate=mate)
+        if step == 0:
+            move = position_math.compute_step1_move(pick1, pick2, mate=mate)
+        elif step == 1:
+            move = position_math.compute_step2_move(pick1, pick2, self._mated_normal, mate=mate)
+        else:
+            move = None
+
         if move is None:
             self.main_win.statusBar().showMessage(
                 "Reverse failed: could not recompute move.", 5000)
             self._update_ui_state()
             return
-        self._apply_world_move(move)
+        ok = self._apply_world_move(move)
+        if ok:
+            self._record_step_success(step, mate)
         label = "Mate" if mate else "Align"
         self.main_win.statusBar().showMessage(f"Reversed to {label}.", 5000)
         self._update_ui_state()
+
+    def _record_step_success(self, step, mate):
+        """After successfully applying Mate/Align step 0/1/2, record
+        what it established for the NEXT step to use, and advance the
+        DOF counter. Shared by _apply_mate_align and _on_reverse so
+        the bookkeeping can't drift between the two."""
+        if step == 0:
+            self._mated_normal = (-self._last_picks[1].direction if mate
+                                  else self._last_picks[1].direction)
+        elif step == 1:
+            self._step2_wall_normal = self._last_picks[1].direction
+        self._mate_align_step = step + 1
 
     def _on_back(self):
         if not self._history:
@@ -523,7 +629,16 @@ class PositionDialog(QDialog):
             self.uid = new_uid
             self._refresh_display()
             self.main_win.statusBar().showMessage("Step undone.", 5000)
+            # Step the DOF tracker backward too, clearing whatever
+            # that step had established for the NEXT step to use.
+            if self._mate_align_step > 0:
+                self._mate_align_step -= 1
+                if self._mate_align_step == 1:
+                    self._step2_wall_normal = None
+                elif self._mate_align_step == 0:
+                    self._mated_normal = None
         self._last_picks = None
+        self._last_step_applied = None
         if was_dynamic:
             self._reattach_manipulator()
         self._update_ui_state()

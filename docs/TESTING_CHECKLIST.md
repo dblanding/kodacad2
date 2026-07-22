@@ -103,6 +103,23 @@ silently come back.
       (Session 16 -- Qt `toggled` vs `clicked` bug.)
 - [ ] Reverse re-applies the last Mate/Align move with the opposite
       mode using the SAME picks, without re-prompting.
+- [ ] Mate/Align Steps 2 and 3 (Session 33, UNTESTED as of this
+      writing): apply Mate or Align a SECOND time on the same item
+      (not switching Method in between) -- confirm it rotates WITHIN
+      the plane Step 1 already established (about the same axis),
+      not a fresh independent flush-rotation that could undo Step 1's
+      constraint. Status bar should read "step 2 of 3, 1 DOF left."
+      Apply a THIRD time -- should be pure translation along the one
+      remaining free direction, status bar reading "fully constrained
+      (3 of 3)." Try a 4th Mate/Align attempt at that point -- should
+      refuse with a clear message, not silently do something. Test
+      Back after 2-3 steps -- confirm it correctly steps back through
+      Step 3->2->1->0, not just undoing position while leaving the
+      step counter wrong. Test Reverse after Step 2 specifically
+      (previously only worked correctly for Step 1). Switch to 2
+      Points or Dynamic mid-sequence (after Step 1 or 2), then back to
+      Mate Align -- confirm it starts over at Step 1 (Clean Slate),
+      not continuing where it left off.
 - [ ] Back undoes the last applied step and restores the exact prior
       position.
 - [ ] Status bar messages are short enough to read in full, not
@@ -197,9 +214,11 @@ haven't gotten WORSE)
   sharing between NAUO1/NAUO2) was never confirmed. Set aside after
   diminishing returns; revisit the open question above before
   assuming it's fixed OR assuming it's a new bug.
-- Mate/Align only implements Step 1 of the 3-2-1 workflow -- applying
-  Mate twice in a row does NOT preserve the first mate's constraint
-  (no DOF-tracking yet; Step 2/3 not built). Expected limitation, not
-  a bug -- see Session 16.
-- "Align Axis" constraint is disabled -- Step 2/3 territory, not built
-  yet.
+- Mate/Align's full 3-2-1 workflow (Steps 1/2/3, with real DOF
+  tracking) was built in Session 33 -- UNTESTED as of this writing.
+  Until confirmed working, treat the old Session 16 limitation
+  ("applying Mate twice in a row does NOT preserve the first mate's
+  constraint") as possibly still present.
+- "Align Axis" constraint is disabled -- needs its own hole/cylinder
+  axis-picking machinery, separate from Mate/Align's face-picking,
+  not built yet.

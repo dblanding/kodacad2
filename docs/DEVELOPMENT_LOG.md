@@ -2511,3 +2511,73 @@ the consequence. Worth treating "search for a match" helpers as
 needing an explicit disambiguation rule from the start whenever the
 underlying data model allows more than one truthful answer, not just
 when a bug report eventually reveals it.
+
+## Session 33: Mate/Align Steps 2 and 3, with real DOF tracking
+
+Ported `compute_step2_move` and `compute_step3_move` from Basicad's
+`pose.py` into `position_math.py` (verified against the source
+directly, not recalled from memory, same discipline as Step 1's
+port). Step 2 rotates WITHIN the plane Step 1 already established
+(about the same mated-normal axis, not a new intersection line) and
+translates to close the gap -- consumes 2 of the 3 DOF remaining
+after Step 1. Step 3 (wall case only -- the "hole" case needs Align
+Axis's own axis-picking, not built) translates along the single
+remaining free direction (`mated_normal x wall_normal`) -- consumes
+the last DOF.
+
+**The one thing worth generalizing on the way in, not after:**
+Basicad's Step 2 hardcodes its target to Align (parallel) only. This
+was flagged as a real limitation back when the hex-on-hex-shaft case
+came up -- applying a second constraint that should be a Mate
+required reaching for Reverse to fix a wrong guess. Generalized Step
+2 to accept `mate: bool` directly, the same way Step 1 already does.
+
+### The actual missing piece: DOF tracking
+
+Every prior Mate/Align application was a standalone flush-rotation
+with no memory of what a previous application had already
+constrained -- a second Mate could silently undo the first one's
+result instead of narrowing what's left. Added real state to
+`PositionDialog`: `_mate_align_step` (0-3, how many of the 3 steps
+have been applied), `_mated_normal` (Step 1's result, needed by Step
+2), `_step2_wall_normal` (Step 2's result, needed by Step 3).
+`_apply_mate_align` now dispatches to whichever step's math applies
+based on the current count, and each successful application records
+what it established for the next step via a shared
+`_record_step_success` helper (factored out specifically so
+`_apply_mate_align` and `_on_reverse` can't drift out of sync with
+each other's bookkeeping).
+
+**Clean Slate**, per the original design: switching to a different
+Method (2 Points or Dynamic) resets the DOF tracker via
+`_reset_mate_align_dof()` -- constraint accounting only makes sense
+as one continuous Mate/Align session.
+
+**Back and Reverse both had to learn about DOF, not just position:**
+`_on_back` now steps `_mate_align_step` backward too, clearing
+whichever step's contribution is being undone (so a stale
+`_mated_normal` from an undone Step 1 doesn't leak into a
+subsequent Step 2 attempt). `_on_reverse` now dispatches to whichever
+step was actually last applied (previously hardcoded to always
+recompute via `compute_step1_move`, which would have been silently
+wrong the moment Step 2/3 existed) -- undoes, decrements, recomputes
+with the flipped mode via the correct step's math, then re-advances
+the counter and re-records via the same shared helper `_apply_mate_
+align` uses. Reverse is disabled entirely when the last-applied step
+was Step 3, since pure translation has no mate/align choice to flip.
+
+**Not yet tested.** Doug specifically wants to run this and find
+issues empirically rather than have the design over-specified first
+-- shipped without further attempts to anticipate edge cases beyond
+what's described above.
+
+### Lesson for future development
+
+**Undo/redo logic needs to be updated in lockstep with any new
+state a feature introduces, not just the state that existed when
+undo/redo were first built.** `_on_back` and `_on_reverse` were
+written when Mate/Align had no DOF concept at all; adding one without
+revisiting both would have left Back "working" (positions would
+still restore correctly) while silently corrupting the DOF tracker's
+count -- a bug that wouldn't surface until several steps later and
+would have been confusing to trace back to its origin.

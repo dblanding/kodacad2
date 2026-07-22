@@ -300,3 +300,125 @@ def compute_step1_move(pick1: PickResult, pick2: PickResult,
     t = gp_Trsf()
     t.SetRotation(ax, angle)
     return TopLoc_Location(t)
+
+
+def compute_step2_move(pick1: PickResult, pick2: PickResult,
+                       mated_normal: Vec3, mate: bool = False):
+    """
+    Step 2 of the 3-2-1 workflow: rotate WITHIN the plane Step 1
+    already established (about mated_normal itself, NOT a new
+    intersection line), then translate within that plane to close the
+    gap. Consumes 2 of the 3 DOF remaining after Step 1; leaves 1
+    (translation along whatever line Step 3 will resolve).
+
+    mate=True: the two picked faces' in-plane directions become
+    opposed. mate=False (default): they become parallel -- "shove
+    against a wall" semantics, matching Basicad's original design.
+    Basicad hardcoded Align only for this step; generalized here the
+    same way Step 1 already is, so applying Mate a second time doesn't
+    require Reverse to fix a wrong guess (see docs/DEVELOPMENT_LOG.md,
+    the hex-on-hex-shaft discussion that first flagged this).
+
+    Returns a TopLoc_Location (world-space delta), or None if the
+    picks aren't usable.
+    """
+    from OCP.gp import gp_Ax1, gp_Trsf, gp_Vec
+    from OCP.TopLoc import TopLoc_Location
+
+    P1, D1 = pick1.point, pick1.direction
+    P2, D2 = pick2.point, pick2.direction
+    N = mated_normal.normalized()
+
+    if D1 is None or D2 is None:
+        print("[position_math] Step 2 requires directed picks (faces).")
+        return None
+
+    d1_proj = D1 - N * D1.dot(N)
+    d2_proj = D2 - N * D2.dot(N)
+
+    if d1_proj.length < 1e-6 or d2_proj.length < 1e-6:
+        # Picked faces are perpendicular to the mated plane -- no
+        # well-defined in-plane direction to align. Fall back to a
+        # pure in-plane translation (matches Basicad's own fallback).
+        delta = P2 - P1
+        delta_in_plane = delta - N * delta.dot(N)
+        t = gp_Trsf()
+        t.SetTranslation(gp_Vec(delta_in_plane.X, delta_in_plane.Y, delta_in_plane.Z))
+        return TopLoc_Location(t)
+
+    d1_proj = d1_proj.normalized()
+    d2_proj = d2_proj.normalized()
+    target = -d2_proj if mate else d2_proj
+
+    dot = max(-1.0, min(1.0, d1_proj.dot(target)))
+    angle = math.acos(dot)
+    cross = d1_proj.cross(target)
+    sign = 1.0 if cross.dot(N) > 0 else -1.0
+
+    rot_trsf = gp_Trsf()
+    if abs(angle) > 1e-6:
+        ax = gp_Ax1(P1.to_gp_pnt(), (N * sign).to_gp_dir())
+        rot_trsf.SetRotation(ax, angle)
+    rot_loc = TopLoc_Location(rot_trsf)
+
+    # Translate along D2's in-plane direction to close the remaining gap.
+    delta = P2 - P1
+    delta_in_plane = delta - N * delta.dot(N)
+    d2_in_plane = D2 - N * D2.dot(N)
+    if d2_in_plane.length > 1e-6:
+        d2_in_plane = d2_in_plane.normalized()
+        delta_perp = d2_in_plane * delta_in_plane.dot(d2_in_plane)
+    else:
+        delta_perp = delta_in_plane
+
+    trans_trsf = gp_Trsf()
+    if delta_perp.length > 1e-6:
+        trans_trsf.SetTranslation(gp_Vec(delta_perp.X, delta_perp.Y, delta_perp.Z))
+    trans_loc = TopLoc_Location(trans_trsf)
+
+    return trans_loc.Multiplied(rot_loc)
+
+
+def compute_step3_move(pick1: PickResult, pick2: PickResult,
+                       mated_normal: Vec3, wall_normal: Vec3):
+    """
+    Step 3 of the 3-2-1 workflow ("wall" case only -- the "hole" case,
+    for when Step 2 aligned two hole/cylinder axes instead of a flat
+    face, needs Align Axis's own axis-picking machinery, not yet
+    built): removes the LAST remaining DOF after Steps 1+2.
+
+    After Steps 1+2, the only motion left is translation along the
+    single line where the mated plane (Step 1) and the wall plane
+    (Step 2) intersect:
+        free_dir = mated_normal x wall_normal
+    Projects the delta between the two picks onto free_dir and
+    translates by that amount only -- no rotation and no other
+    translation is possible without violating a constraint Steps 1/2
+    already established.
+
+    Returns a TopLoc_Location (world-space delta), or None if
+    mated_normal and wall_normal are parallel (no well-defined free
+    direction -- shouldn't normally happen if Steps 1/2 were genuinely
+    independent constraints).
+    """
+    from OCP.gp import gp_Trsf, gp_Vec
+    from OCP.TopLoc import TopLoc_Location
+
+    P1, P2 = pick1.point, pick2.point
+    N = mated_normal.normalized()
+    W = wall_normal.normalized()
+
+    free_dir = N.cross(W)
+    if free_dir.length < 1e-6:
+        print("[position_math] Step 3: mated_normal and wall_normal are "
+              "parallel -- no well-defined free direction.")
+        return None
+    free_dir = free_dir.normalized()
+
+    delta = P2 - P1
+    translation = free_dir * delta.dot(free_dir)
+
+    t = gp_Trsf()
+    if translation.length > 1e-6:
+        t.SetTranslation(gp_Vec(translation.X, translation.Y, translation.Z))
+    return TopLoc_Location(t)
