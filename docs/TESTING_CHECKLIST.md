@@ -120,6 +120,25 @@ silently come back.
       Points or Dynamic mid-sequence (after Step 1 or 2), then back to
       Mate Align -- confirm it starts over at Step 1 (Clean Slate),
       not continuing where it left off.
+- [ ] Align Axis (Session 35, UNTESTED as of this writing -- per
+      Doug's original PDF design, NOT Basicad's standalone version):
+      Mate/Align a face first (Step 1), then choose Align Axis
+      instead of Mate/Align again -- pick a hole on the moving part,
+      then a hole on the fixed part. Confirm it pins the two holes'
+      axis-vs-mated-plane intersection points together (translation
+      only, no rotation) and status bar reads "step 2 of 3, 1 DOF
+      left." Try Align Axis BEFORE Step 1 (fresh Position, no Mate/
+      Align yet) -- should refuse with a clear message, not start
+      picking. Complete with a final Align (face pick) -- should be
+      pure rotation (spin) about the mated axis, pivoting at the
+      pinned hole point, not translating the part as a side effect.
+      Confirm Reverse is disabled (greyed out) immediately after
+      Align Axis's own pin step, since there's no mate/align choice
+      to flip there. Confirm Back correctly unwinds Step 3 -> Align
+      Axis pin -> Step 1 -> start. Also worth trying: pick a non-
+      circular edge (e.g. a straight edge) when Align Axis is
+      expecting a hole -- should show a friendly rejection message,
+      not crash.
 - [ ] Back undoes the last applied step and restores the exact prior
       position.
 - [ ] Status bar messages are short enough to read in full, not

@@ -141,6 +141,204 @@ class PickResult:
     label: str = ""
 
 
+@dataclass
+class CircleFit:
+    """Result of resolving a picked edge as a circle: center, axis
+    (unit normal to the circle's plane), radius, and max_residual (how
+    far the worst sampled point's distance-to-center deviates from the
+    fitted radius -- 0.0 for a genuine CIRCLE-typed edge, used to
+    decide whether a fitted result should be trusted)."""
+    center: Vec3
+    axis: Vec3
+    radius: float
+    max_residual: float
+
+
+# Tolerance for accepting a circle-fit on a non-circle-typed edge.
+# Compared against max_residual relative to the fitted radius (so it
+# scales sensibly for both small holes and large shafts) rather than
+# an absolute distance. Matches Basicad's own CIRCLE_FIT_RELATIVE_TOLERANCE.
+CIRCLE_FIT_RELATIVE_TOLERANCE = 0.01  # 1% of fitted radius
+
+
+def _fit_circle_to_edge(edge, num_samples: int = 12) -> CircleFit:
+    """
+    Sample points along ANY edge and fit a circle to them via least
+    squares, regardless of the edge's actual curve type. Ported from
+    Basicad's src/pose.py _fit_circle_to_edge -- same Kasa least-
+    squares algebraic method, same collinear-points guard (a REAL,
+    confirmed failure mode there: sampling a STRAIGHT edge makes every
+    cross product in the normal-estimation step zero, and normalizing
+    a zero vector raises an uncatchable-by-ValueError OCCT error that
+    silently escaped every handler built around the original function
+    -- detected explicitly here, before ever attempting that normalize).
+
+    Samples by evenly-spaced PARAMETER value (not exact arc length,
+    unlike Basicad's build123d-based position_at() which normalizes by
+    arc length) -- a reasonable simplification for a first port; fine
+    for anything close to circular, which is the only case this
+    function's result gets trusted for anyway (see CIRCLE_FIT_RELATIVE_
+    TOLERANCE below).
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+    curve = BRepAdaptor_Curve(edge)
+    u0, u1 = curve.FirstParameter(), curve.LastParameter()
+    points = []
+    for i in range(num_samples):
+        u = u0 + (u1 - u0) * (i / num_samples)
+        gp_pt = curve.Value(u)
+        points.append(Vec3.from_gp(gp_pt))
+
+    centroid = Vec3(0, 0, 0)
+    for p in points:
+        centroid = centroid + p
+    centroid = centroid * (1.0 / len(points))
+
+    normal_accum = Vec3(0, 0, 0)
+    for i in range(len(points)):
+        a = points[i] - centroid
+        b = points[(i + 1) % len(points)] - centroid
+        normal_accum = normal_accum + a.cross(b)
+
+    if normal_accum.length < 1e-9:
+        raise ValueError(
+            "Cannot fit a circle: sampled points are collinear (or "
+            "otherwise produce a degenerate/zero normal) -- this edge "
+            "is not circular, even approximately.")
+    normal = normal_accum.normalized()
+
+    arbitrary = Vec3(0, 0, 1) if abs(normal.dot(Vec3(0, 0, 1))) < 0.9 else Vec3(0, 1, 0)
+    u_ax = (arbitrary - normal * arbitrary.dot(normal)).normalized()
+    v_ax = normal.cross(u_ax)
+
+    xy = []
+    for p in points:
+        rel = p - centroid
+        xy.append((rel.dot(u_ax), rel.dot(v_ax)))
+
+    n = len(xy)
+    sum_x = sum(p[0] for p in xy)
+    sum_y = sum(p[1] for p in xy)
+    sum_xx = sum(p[0] ** 2 for p in xy)
+    sum_yy = sum(p[1] ** 2 for p in xy)
+    sum_xy = sum(p[0] * p[1] for p in xy)
+    sum_xxx = sum(p[0] ** 3 for p in xy)
+    sum_yyy = sum(p[1] ** 3 for p in xy)
+    sum_xyy = sum(p[0] * p[1] ** 2 for p in xy)
+    sum_xxy = sum(p[0] ** 2 * p[1] for p in xy)
+
+    A1 = sum_xx - sum_x * sum_x / n
+    B1 = sum_xy - sum_x * sum_y / n
+    C1 = sum_yy - sum_y * sum_y / n
+    D1 = 0.5 * (sum_xyy - sum_x * sum_yy / n + sum_xxx - sum_x * sum_xx / n)
+    E1 = 0.5 * (sum_xxy - sum_y * sum_xx / n + sum_yyy - sum_y * sum_yy / n)
+
+    denom = A1 * C1 - B1 * B1
+    if abs(denom) < 1e-12:
+        return CircleFit(center=centroid, axis=normal, radius=0.0, max_residual=float("inf"))
+
+    cx = (D1 * C1 - B1 * E1) / denom
+    cy = (A1 * E1 - B1 * D1) / denom
+    center_2d = (cx + sum_x / n, cy + sum_y / n)
+    radius = (sum(((p[0] - cx) ** 2 + (p[1] - cy) ** 2) for p in xy) / n) ** 0.5
+
+    center_3d = centroid + u_ax * center_2d[0] + v_ax * center_2d[1]
+    max_residual = max(abs((p - center_3d).length - radius) for p in points)
+
+    return CircleFit(center=center_3d, axis=normal, radius=radius, max_residual=max_residual)
+
+
+def resolve_circle_pick(edge) -> PickResult:
+    """
+    Resolve a picked TopoDS_Edge into a PickResult (circle center +
+    axis direction) for Align Axis. Ported from Basicad's
+    _resolve_circle: use OCCT's own circle data directly when the
+    edge's curve type is genuinely GeomAbs_Circle (fast, exact path),
+    otherwise fall back to _fit_circle_to_edge() and only accept the
+    fit if its residual is small relative to the fitted radius -- so a
+    truly non-circular edge still gets correctly rejected rather than
+    this fallback silently accepting anything vaguely curved.
+
+    Raises ValueError if the edge does not appear to be circular, even
+    approximately -- callers should catch this the same way
+    _face_pick_callback already catches a wrong-shape-type pick.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAbs import GeomAbs_Circle
+
+    curve = BRepAdaptor_Curve(edge)
+    if curve.GetType() == GeomAbs_Circle:
+        circ = curve.Circle()
+        center = Vec3.from_gp(circ.Location())
+        axis = Vec3.from_gp(circ.Axis().Direction())
+        return PickResult(point=center, direction=axis, label="circle axis")
+
+    fit = _fit_circle_to_edge(edge)
+    if fit.radius <= 0 or fit.max_residual > CIRCLE_FIT_RELATIVE_TOLERANCE * fit.radius:
+        raise ValueError(
+            f"Edge is not circular (fit residual={fit.max_residual:.6g}, "
+            f"fitted radius={fit.radius:.6g}) -- pick a hole or circular edge.")
+    return PickResult(point=fit.center, direction=fit.axis, label="circle axis (fitted)")
+
+
+def line_plane_intersection(line_point: Vec3, line_dir: Vec3,
+                            plane_point: Vec3, plane_normal: Vec3):
+    """Where the line (line_point + t*line_dir) crosses the plane
+    (points X such that (X - plane_point).dot(plane_normal) == 0).
+    Returns the intersection Vec3, or None if the line is parallel to
+    the plane (line_dir perpendicular to plane_normal, no
+    intersection or infinitely many)."""
+    denom = line_dir.dot(plane_normal)
+    if abs(denom) < 1e-9:
+        return None
+    t = (plane_point - line_point).dot(plane_normal) / denom
+    return line_point + line_dir * t
+
+
+def compute_align_axis_pin_move(hole1: PickResult, hole2: PickResult,
+                                mated_normal: Vec3, plane_point: Vec3):
+    """
+    Align Axis, used as Step 2 within the 3-2-1 Mate/Align sequence
+    (per Doug's original design -- see docs/PositionForKodacad2.pdf,
+    the "2nd option": pin 2 points together rather than a full 4-DOF
+    axis alignment).
+
+    Each hole's own axis is intersected with the plane Step 1 already
+    established (defined by plane_point + mated_normal) -- "those
+    points are defined as the intersection of the cylindrical hole and
+    the constrained (mated or aligned) face." The moving part is then
+    translated WITHIN that plane so its hole's intersection point
+    coincides with the fixed hole's -- consuming x and y of the 2D DOF
+    remaining after Step 1, leaving only theta_z for a final Align
+    (Step 3's "spin" case -- see compute_step3_move).
+
+    Returns a TopLoc_Location (world-space in-plane translation), or
+    None if either hole's axis is parallel to the mated plane (no
+    well-defined intersection point).
+    """
+    from OCP.gp import gp_Trsf, gp_Vec
+    from OCP.TopLoc import TopLoc_Location
+
+    N = mated_normal.normalized()
+    p1 = line_plane_intersection(hole1.point, hole1.direction.normalized(),
+                                 plane_point, N)
+    p2 = line_plane_intersection(hole2.point, hole2.direction.normalized(),
+                                 plane_point, N)
+    if p1 is None or p2 is None:
+        print("[position_math] Align Axis: a hole's axis is parallel to "
+              "the mated plane -- no well-defined intersection point.")
+        return None
+
+    delta = p2 - p1
+    delta_in_plane = delta - N * delta.dot(N)  # already ~in-plane, but be safe
+
+    t = gp_Trsf()
+    if delta_in_plane.length > 1e-9:
+        t.SetTranslation(gp_Vec(delta_in_plane.X, delta_in_plane.Y, delta_in_plane.Z))
+    return TopLoc_Location(t)
+
+
 def resolve_face_pick(face) -> PickResult:
     """Resolve a picked planar TopoDS_Face into a PickResult (centroid
     + outward normal). Reuses the exact face_normal() helper already
@@ -380,32 +578,74 @@ def compute_step2_move(pick1: PickResult, pick2: PickResult,
 
 
 def compute_step3_move(pick1: PickResult, pick2: PickResult,
-                       mated_normal: Vec3, wall_normal: Vec3):
+                       mated_normal: Vec3, wall_normal: Optional[Vec3] = None,
+                       spin_pivot: Optional[Vec3] = None):
     """
-    Step 3 of the 3-2-1 workflow ("wall" case only -- the "hole" case,
-    for when Step 2 aligned two hole/cylinder axes instead of a flat
-    face, needs Align Axis's own axis-picking machinery, not yet
-    built): removes the LAST remaining DOF after Steps 1+2.
+    Step 3 of the 3-2-1 workflow: removes the LAST remaining DOF after
+    Steps 1+2. Exactly one of wall_normal/spin_pivot should be given,
+    matching which kind of Step 2 preceded this:
 
-    After Steps 1+2, the only motion left is translation along the
-    single line where the mated plane (Step 1) and the wall plane
-    (Step 2) intersect:
+    wall_normal given ("wall" case -- Step 2 was a normal face-align):
+    the only motion left is translation along the single line where
+    the mated plane (Step 1) and the wall plane (Step 2) intersect:
         free_dir = mated_normal x wall_normal
     Projects the delta between the two picks onto free_dir and
-    translates by that amount only -- no rotation and no other
-    translation is possible without violating a constraint Steps 1/2
-    already established.
+    translates by that amount only.
 
-    Returns a TopLoc_Location (world-space delta), or None if
-    mated_normal and wall_normal are parallel (no well-defined free
-    direction -- shouldn't normally happen if Steps 1/2 were genuinely
-    independent constraints).
+    spin_pivot given ("axis"/spin case -- Step 2 was Align Axis's pin
+    move): the only motion left is ROTATION about mated_normal,
+    through spin_pivot (the point Align Axis's Step 2 pinned -- using
+    either pick's own point instead would translate the part as a side
+    effect of the rotation, undoing Step 2's constraint). Rotates until
+    the two picked faces' in-plane directions are parallel, choosing
+    whichever of the direct or flipped target gives the smaller angle
+    (no mate/align choice here -- either resulting alignment is
+    equally valid for pure spin, so the smaller rotation wins).
+
+    Returns a TopLoc_Location (world-space delta), or None if the
+    picks/inputs aren't usable.
     """
-    from OCP.gp import gp_Trsf, gp_Vec
+    from OCP.gp import gp_Ax1, gp_Trsf, gp_Vec
     from OCP.TopLoc import TopLoc_Location
 
-    P1, P2 = pick1.point, pick2.point
     N = mated_normal.normalized()
+
+    if spin_pivot is not None:
+        D1, D2 = pick1.direction, pick2.direction
+        if D1 is None or D2 is None:
+            print("[position_math] Step 3 (spin) requires directed picks (faces).")
+            return None
+        d1 = D1 - N * D1.dot(N)
+        d2 = D2 - N * D2.dot(N)
+        if d1.length < 1e-6 or d2.length < 1e-6:
+            print("[position_math] Step 3 (spin): picked faces are "
+                  "perpendicular to the mated plane.")
+            return None
+        d1 = d1.normalized()
+        d2 = d2.normalized()
+
+        dot_pos = max(-1.0, min(1.0, d1.dot(d2)))
+        dot_neg = max(-1.0, min(1.0, d1.dot(-d2)))
+        if abs(dot_pos) >= abs(dot_neg):
+            target, dot = d2, dot_pos
+        else:
+            target, dot = -d2, dot_neg
+
+        angle = math.acos(dot)
+        cross = d1.cross(target)
+        sign = 1.0 if cross.dot(N) > 0 else -1.0
+
+        t = gp_Trsf()
+        if abs(angle) > 1e-6:
+            ax = gp_Ax1(spin_pivot.to_gp_pnt(), (N * sign).to_gp_dir())
+            t.SetRotation(ax, angle)
+        return TopLoc_Location(t)
+
+    if wall_normal is None:
+        print("[position_math] Step 3: need either wall_normal or spin_pivot.")
+        return None
+
+    P1, P2 = pick1.point, pick2.point
     W = wall_normal.normalized()
 
     free_dir = N.cross(W)

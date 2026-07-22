@@ -2581,3 +2581,106 @@ revisiting both would have left Back "working" (positions would
 still restore correctly) while silently corrupting the DOF tracker's
 count -- a bug that wouldn't surface until several steps later and
 would have been confusing to trace back to its origin.
+
+## Session 34: Mate/Align 3-2-1 confirmed working end-to-end
+
+Doug ran the full sequence live: Mate/Align through all 3 steps
+(choosing Mate or Align independently at each step -- the
+generalization added in Session 33 rather than inheriting Basicad's
+hardcoded-Align-on-Step-2 limitation), Back three times to unwind
+back to the start, then 2 Points, then Dynamic -- all in one session,
+all working correctly. First time all three Position methods have
+been exercised together in sequence.
+
+**Not yet confirmed: save/reload specifically for a multi-step
+Mate/Align result.** Every method individually has been through that
+check before, but Steps 2/3 (new this session) haven't yet -- asked
+Doug to confirm before treating the whole 3-2-1 workflow as fully
+closed out, given how many times "worked live" and "survives save/
+reload" have turned out to be different claims in this project.
+
+### Status of Position, updated
+
+- 2 Points: done.
+- Mate/Align: Steps 1/2/3 with real DOF tracking, confirmed working
+  live (Session 34); save/reload confirmation pending.
+- Dynamic: done (Session 23/25/32).
+- Align Axis: not built -- the one remaining piece of the original
+  design doc's scope.
+
+## Session 35: Align Axis, per Doug's original PDF design (not Basicad's)
+
+Doug's PDF describes Align Axis two ways: (1) chained after a face
+Mate/Align as an alternative Step 2 -- pin a hole-on-face intersection
+point, leaving only theta_z for a final Align -- and (2) a standalone,
+always-fresh 4-DOF axis alignment for a "bolt in a hole" scenario.
+Checked Basicad's actual, working implementation before building
+anything: it only implements (2), as a fully independent 3-step/6-DOF
+section, never chained onto Mate/Align. Doug confirmed explicitly:
+build (1), the PDF's original, more carefully-considered design --
+Basicad's version was noted as "a bit rough," useful for its
+algorithms, not its architecture.
+
+### What ported directly from Basicad (worth keeping regardless of
+architecture)
+
+`_resolve_circle`/`_fit_circle_to_edge` -- real, hard-won code,
+including a documented bug fix for a genuine failure mode (sampling a
+straight edge produces collinear points, whose cross products are all
+zero, and normalizing a zero vector throws an OCCT error that isn't a
+catchable ValueError -- explicitly guarded against, ported as-is).
+Adapted from build123d's `Edge.geom_type`/`position_at()` to raw
+`BRepAdaptor_Curve`/`GeomAbs_Circle` -- fast path for genuine circles,
+Kasa least-squares fit fallback (with a residual-vs-radius tolerance
+check) for anything else, same as the original.
+
+### What's new: Align Axis as an alternative Step 2
+
+The key realization that made this a clean fit rather than a bolt-on:
+Align Axis-as-Step-2 is just **Step 2 with different math**, plugging
+into the exact same 3-step counter built in Session 33.
+`compute_align_axis_pin_move()` intersects each picked hole's own
+axis with the plane Step 1 already established (a real line-plane
+intersection, `line_plane_intersection()`) and translates the moving
+part so the two intersection points coincide -- x/y consumed, theta_z
+left. `compute_step3_move()` gained the "spin" branch it was always
+going to need (ported from Basicad's `compute_step3_move`'s "hole"
+case, which existed but was never ported since Align Axis wasn't
+built yet) -- pure rotation about the mated normal, pivoting at the
+Align Axis pin point (not either picked face's own point, which would
+translate the part as an unwanted side effect of the rotation).
+
+New dialog state tracks which KIND of Step 2 happened
+(`_step2_wall_normal` for a normal face-align vs `_align_axis_pivot`
+for Align Axis), since Step 3 needs to know which `compute_step3_move`
+branch to call. Align Axis is validated as Step-2-only --
+`_on_constraint_chosen` refuses it with a clear message unless
+`_mate_align_step == 1`. Back/Reverse/Clean-Slate all extended to
+cover the new state the same way they already covered Step 1/2/3 --
+Reverse specifically disabled for Align Axis's own pin move (no
+mate/align choice exists there to flip).
+
+**Caught before shipping, not after:** the pivot for Step 3's spin
+needs to be the FIXED hole's own (unmoved) intersection point, not a
+recomputation from the moving hole's original pick -- recomputing from
+the moving side would use its stale, pre-move position. Worth noting
+as the kind of subtle correctness issue that's easy to get backwards
+in a first draft.
+
+**Completely untested.** New picking mode (circular edges via
+`SetSelectionModeEdge`), new geometry resolution, new math, new DOF-
+state branching -- genuinely more surface area than Session 33's
+Step 2/3 port, which reused existing face-picking machinery
+throughout.
+
+### Lesson for future development
+
+**Checking a reference implementation's actual behavior, not just its
+existence, caught a real architecture mismatch before any code got
+written.** Basicad's Align Axis "existing" wasn't enough to assume it
+matched the PDF's design -- reading its actual dialog wiring
+(`_active_section` as a mutually-exclusive selector) revealed it had
+evolved into something structurally different from what the PDF
+originally specified. Worth verifying not just "does a precedent
+exist" but "does the precedent's actual behavior match what's being
+asked for" before porting from it.
