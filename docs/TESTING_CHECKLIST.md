@@ -262,6 +262,29 @@ haven't gotten WORSE)
   only resolves one level of sharing ambiguity -- a shared child
   under a shared grandparent (nested two levels deep) could still hit
   a similar issue, not currently tested.
+- The AIS_Manipulator capturing LMB drags before any handle is
+  clicked, or continuing to capture drags after releasing a
+  translation handle, inducing unwanted rotation/scaling until a
+  background click "unsticks" it (needing Back to undo the spurious
+  move). CONFIRMED (Session 39) to also happen in Basicad -- a real
+  limitation of the manual `HasActiveMode()`-check pattern both
+  codebases share, not a Kodacad-specific porting error. Two fixes
+  applied: (1) scaling was never actually disabled -- the old code
+  guessed three wrong attribute names; fixed with the confirmed-
+  correct `AIS_MM_Scaling` import. (2) Added `DetectedInteractive()
+  == manipulator` as a second, more specific gate alongside
+  `HasActiveMode()` -- CONFIRMED this stops the spurious capture on
+  an empty-space drag right after entering Dynamic mode. HOWEVER,
+  this surfaced two further, DEFERRED problems (Doug's call, not
+  pursued further): the same empty-space drag doesn't fall through to
+  normal camera orbit the way it should, and the application crashed
+  a few seconds later with NO terminal output -- consistent with a
+  native-level crash (OCCT/OpenGL, not a catchable Python exception),
+  a harder class of problem than anything else fixed in this project
+  so far. Dynamic (drag + Nudge) remains genuinely useful for its
+  proven common case; 2 Points and Mate/Align are unaffected, fully
+  solid alternatives if this instability is a concern for a
+  particular session.
 - Positioning an imported hub assembly (`clamping-hub-assembly.step`)
   does not survive save/reload. DEFERRED (Session 22): confirmed its
   `NAUO1`/`NAUO2` blank names are present in the file's own original

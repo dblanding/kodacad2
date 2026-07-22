@@ -327,14 +327,18 @@ class KodaViewport(QWidget):
             manip.SetModeActivationOnDetection(True)
 
             # Disable scaling handles -- translate + rotate only.
-            for attr_name in ["Scaling", "Scale", "AIS_MM_Scaling"]:
-                try:
-                    part_type = getattr(AIS_Manipulator, attr_name)
-                    for axis in range(3):
-                        manip.SetPart(axis, part_type, False)
-                    break
-                except AttributeError:
-                    continue
+            # CONFIRMED (previously guessed and wrong): AIS_MM_Scaling
+            # is a top-level member of the separate AIS_ManipulatorMode
+            # enum, not an attribute of the AIS_Manipulator class --
+            # every name in the old try/except guess-loop
+            # ("Scaling"/"Scale"/"AIS_MM_Scaling" as attributes of
+            # AIS_Manipulator itself) failed silently, so scaling was
+            # never actually disabled. This is very likely why the
+            # Dynamic gizmo has been seen inducing scaling as well as
+            # rotation -- see docs/DEVELOPMENT_LOG.md, Session 39.
+            from OCP.AIS import AIS_MM_Scaling
+            for axis in range(3):
+                manip.SetPart(axis, AIS_MM_Scaling, False)
 
             manip.Attach(self._manip_leaf_shapes[0])
             self.context.Display(manip, False)
@@ -411,11 +415,29 @@ class KodaViewport(QWidget):
         # gesture" pattern as Session 12's RMB fix, this time deciding
         # between the gizmo and AIS_ViewController's rotate instead of
         # between our own click-to-fit and OCCT's built-in zoom.
+        #
+        # RELIABILITY NOTE (Session 39): a real OCCT forum thread shows
+        # HasActiveMode() alone can be unreliable in exactly this kind
+        # of manual context.MoveTo()+check pattern (confirmed: Doug
+        # reproduced spurious captured drags in BOTH Kodacad and
+        # Basicad, ruling out a Kodacad-specific porting error --
+        # this is a real limitation of the pattern itself, not
+        # something introduced in this port). Added DetectedInteractive()
+        # as a second, more specific gate: confirms the object
+        # context.MoveTo() actually found under the cursor IS
+        # specifically our manipulator, not just trusting HasActiveMode()
+        # in isolation. A genuine architectural fix (letting
+        # AIS_ViewController drive the manipulator directly, which a
+        # forum reply confirms removes the need for manual StartTransform/
+        # Transform/StopTransform calls entirely) may still be needed if
+        # this isn't sufficient -- not attempted here without a confirmed
+        # concrete example of how that wiring actually works internally.
         if event.button() == Qt.MouseButton.LeftButton and self._manipulator is not None:
             x, y = int(event.position().x()), int(event.position().y())
             try:
                 self.context.MoveTo(x, y, self.view, True)
-                is_manip = self._manipulator.HasActiveMode()
+                is_manip = (self._manipulator.HasActiveMode()
+                           and self.context.DetectedInteractive() == self._manipulator)
             except Exception:
                 is_manip = False
             if is_manip:
