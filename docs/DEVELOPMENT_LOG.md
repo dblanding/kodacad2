@@ -2750,3 +2750,50 @@ through both paths' constraint counts (3 vs. 4+1+1, both totaling 3
 applications) showed the existing framework already fit -- the real
 work was just making Step 1 and Step 3 branch on which path was
 taken, not rebuilding the counter itself.
+
+## Session 37: cylindrical surface misclassification -- the same bug
+class as circular edges, one level up
+
+Doug's first real test of standalone Align Axis (rod-assembly against
+a hole in the plate, as1-oc-214.stp) hit exactly the gap flagged as a
+risk but not built for: both the rod's and the hole's cylindrical
+surfaces reported as `GeomAbs_BSplineSurface`, not `GeomAbs_Cylinder`.
+The assumption that cylindrical surfaces are "reliably typed," stated
+in Session 36's docstring, was wrong -- confirmed directly, not
+theorized.
+
+### The fix: the same fallback pattern as circular edges, one level up
+
+Refactored `_fit_circle_to_edge`'s core Kasa least-squares fit into a
+shared `_fit_circle_to_points(points)`, taking a plain list of Vec3
+rather than sampling an edge itself -- so the same fitting math can
+be reused for a surface's cross-section, not just an edge's curve.
+
+`resolve_cylinder_pick` now falls back, when the surface isn't
+genuinely typed as `GeomAbs_Cylinder`, to sampling a cross-section and
+fitting a circle to it: for a true cylinder (even if BSpline-
+approximated), one iso-parametric direction traces a circle and the
+other a straight line. Which direction is which isn't a guaranteed
+convention, so both a fixed-V and a fixed-U sample are tried, and
+whichever fits within tolerance (reusing `CIRCLE_FIT_RELATIVE_
+TOLERANCE`, the same threshold already used for circular edges) is
+kept. The fitted circle's own center and axis normal directly give
+the cylinder's axis -- no separate cylinder-fitting math needed.
+
+**Not yet re-tested** against the actual failing case (rod-assembly
+vs. the plate hole).
+
+### Lesson for future development
+
+**"Surfaces are more reliably typed than edges" was an assumption
+carried over from general OCCT knowledge, not verified against this
+specific codebase's actual data -- and it was wrong the first time it
+got tested against a real file.** The circular-edge case had already
+demonstrated this exact failure mode for curves (Basicad's own hard-
+won fix); the surface case should have gotten the same fallback
+treatment from the start, on the strength of that precedent, rather
+than assuming a different (better) outcome without evidence. Same
+lesson as Session 28's minimal-repro discipline, in miniature: a
+claim about "how OCCT reliably behaves" is worth treating as
+unverified until tested against real, specific data, not just
+plausible in general.

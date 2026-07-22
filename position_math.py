@@ -161,35 +161,24 @@ class CircleFit:
 CIRCLE_FIT_RELATIVE_TOLERANCE = 0.01  # 1% of fitted radius
 
 
-def _fit_circle_to_edge(edge, num_samples: int = 12) -> CircleFit:
+def _fit_circle_to_points(points) -> CircleFit:
     """
-    Sample points along ANY edge and fit a circle to them via least
-    squares, regardless of the edge's actual curve type. Ported from
-    Basicad's src/pose.py _fit_circle_to_edge -- same Kasa least-
-    squares algebraic method, same collinear-points guard (a REAL,
-    confirmed failure mode there: sampling a STRAIGHT edge makes every
-    cross product in the normal-estimation step zero, and normalizing
-    a zero vector raises an uncatchable-by-ValueError OCCT error that
-    silently escaped every handler built around the original function
-    -- detected explicitly here, before ever attempting that normalize).
+    Core Kasa least-squares circle fit, given a list of Vec3 points
+    that should lie approximately on one circle. Shared by
+    _fit_circle_to_edge (samples a picked edge's curve) and
+    resolve_cylinder_pick's surface-cross-section fallback (samples a
+    cylindrical face's iso-line) -- the actual fitting math doesn't
+    care where the points came from.
 
-    Samples by evenly-spaced PARAMETER value (not exact arc length,
-    unlike Basicad's build123d-based position_at() which normalizes by
-    arc length) -- a reasonable simplification for a first port; fine
-    for anything close to circular, which is the only case this
-    function's result gets trusted for anyway (see CIRCLE_FIT_RELATIVE_
-    TOLERANCE below).
+    Ported from Basicad's src/pose.py _fit_circle_to_edge -- same
+    algorithm, same collinear-points guard (a REAL, confirmed failure
+    mode there: sampling points that turn out to be collinear makes
+    every cross product in the normal-estimation step zero, and
+    normalizing a zero vector raises an uncatchable-by-ValueError OCCT
+    error that silently escaped every handler built around the
+    original function -- detected explicitly here, before ever
+    attempting that normalize).
     """
-    from OCP.BRepAdaptor import BRepAdaptor_Curve
-
-    curve = BRepAdaptor_Curve(edge)
-    u0, u1 = curve.FirstParameter(), curve.LastParameter()
-    points = []
-    for i in range(num_samples):
-        u = u0 + (u1 - u0) * (i / num_samples)
-        gp_pt = curve.Value(u)
-        points.append(Vec3.from_gp(gp_pt))
-
     centroid = Vec3(0, 0, 0)
     for p in points:
         centroid = centroid + p
@@ -204,8 +193,8 @@ def _fit_circle_to_edge(edge, num_samples: int = 12) -> CircleFit:
     if normal_accum.length < 1e-9:
         raise ValueError(
             "Cannot fit a circle: sampled points are collinear (or "
-            "otherwise produce a degenerate/zero normal) -- this edge "
-            "is not circular, even approximately.")
+            "otherwise produce a degenerate/zero normal) -- not "
+            "circular, even approximately.")
     normal = normal_accum.normalized()
 
     arbitrary = Vec3(0, 0, 1) if abs(normal.dot(Vec3(0, 0, 1))) < 0.9 else Vec3(0, 1, 0)
@@ -247,6 +236,28 @@ def _fit_circle_to_edge(edge, num_samples: int = 12) -> CircleFit:
     max_residual = max(abs((p - center_3d).length - radius) for p in points)
 
     return CircleFit(center=center_3d, axis=normal, radius=radius, max_residual=max_residual)
+
+
+def _fit_circle_to_edge(edge, num_samples: int = 12) -> CircleFit:
+    """
+    Sample points along ANY edge and fit a circle to them via least
+    squares, regardless of the edge's actual curve type -- see
+    _fit_circle_to_points for the actual fitting algorithm.
+
+    Samples by evenly-spaced PARAMETER value (not exact arc length,
+    unlike Basicad's build123d-based position_at() which normalizes by
+    arc length) -- a reasonable simplification for a first port; fine
+    for anything close to circular, which is the only case this
+    function's result gets trusted for anyway (see CIRCLE_FIT_RELATIVE_
+    TOLERANCE below).
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+    curve = BRepAdaptor_Curve(edge)
+    u0, u1 = curve.FirstParameter(), curve.LastParameter()
+    points = [Vec3.from_gp(curve.Value(u0 + (u1 - u0) * (i / num_samples)))
+             for i in range(num_samples)]
+    return _fit_circle_to_points(points)
 
 
 def resolve_circle_pick(edge) -> PickResult:
@@ -304,27 +315,63 @@ def resolve_cylinder_pick(face) -> PickResult:
     circular edges -- see resolve_circle_pick for that, used by Align
     Axis's OTHER role, pinning holes after a face mate).
 
-    Unlike circular edges (which sometimes get misclassified as
-    BSPLINE, needing _fit_circle_to_edge's fallback), cylindrical
-    SURFACES are reliably typed as GeomAbs_Cylinder in OCCT -- no
-    fallback needed here, just a clear rejection if the picked face
-    genuinely isn't cylindrical.
+    Uses OCCT's own cylinder data directly when the surface's type is
+    genuinely GeomAbs_Cylinder (fast, exact path). CONFIRMED via real
+    testing (as1-oc-214.stp's rod and plate-hole surfaces both hit
+    this) that cylindrical surfaces are NOT reliably typed this way --
+    the same class of misclassification resolve_circle_pick's edge
+    case already handles (BSplineSurface instead of Cylinder), one
+    level up. Falls back to sampling a cross-section and fitting a
+    circle to it: for a true cylinder (even if BSpline-approximated),
+    one iso-parametric direction traces a circle and the other a
+    straight line -- which direction isn't a guaranteed convention, so
+    both are tried and whichever fits better is kept. The fitted
+    circle's own center/axis (from _fit_circle_to_points, shared with
+    resolve_circle_pick's edge fallback) directly gives the cylinder's
+    axis.
 
-    Raises ValueError if the face is not a cylindrical surface.
+    Raises ValueError if the face does not appear to be cylindrical,
+    even approximately, in either iso-direction.
     """
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.GeomAbs import GeomAbs_Cylinder
 
     surf = BRepAdaptor_Surface(face)
-    if surf.GetType() != GeomAbs_Cylinder:
+    if surf.GetType() == GeomAbs_Cylinder:
+        cyl = surf.Cylinder()
+        point_on_axis = Vec3.from_gp(cyl.Location())
+        axis_dir = Vec3.from_gp(cyl.Axis().Direction())
+        return PickResult(point=point_on_axis, direction=axis_dir, label="cylinder axis")
+
+    num_samples = 12
+    u0, u1 = surf.FirstUParameter(), surf.LastUParameter()
+    v0, v1 = surf.FirstVParameter(), surf.LastVParameter()
+
+    def _sample_fixed_v(v):
+        return [Vec3.from_gp(surf.Value(u0 + (u1 - u0) * (i / num_samples), v))
+               for i in range(num_samples)]
+
+    def _sample_fixed_u(u):
+        return [Vec3.from_gp(surf.Value(u, v0 + (v1 - v0) * (i / num_samples)))
+               for i in range(num_samples)]
+
+    candidates = []
+    for points in (_sample_fixed_v((v0 + v1) / 2.0), _sample_fixed_u((u0 + u1) / 2.0)):
+        try:
+            candidates.append(_fit_circle_to_points(points))
+        except ValueError:
+            continue
+
+    good = [f for f in candidates
+           if f.radius > 0 and f.max_residual <= CIRCLE_FIT_RELATIVE_TOLERANCE * f.radius]
+    if not good:
         raise ValueError(
-            f"Face is not a cylindrical surface (type={surf.GetType()}) -- "
-            f"pick a cylindrical face (a hole's inner wall or a shaft's "
-            f"outer surface).")
-    cyl = surf.Cylinder()
-    point_on_axis = Vec3.from_gp(cyl.Location())
-    axis_dir = Vec3.from_gp(cyl.Axis().Direction())
-    return PickResult(point=point_on_axis, direction=axis_dir, label="cylinder axis")
+            f"Face does not appear to be cylindrical, even approximately "
+            f"(type={surf.GetType()}, tried both iso-directions, neither "
+            f"fit a circle within tolerance) -- pick a cylindrical face "
+            f"(a hole's inner wall or a shaft's outer surface).")
+    best = min(good, key=lambda f: f.max_residual)
+    return PickResult(point=best.center, direction=best.axis, label="cylinder axis (fitted)")
 
 
 def _any_perpendicular(v: Vec3) -> Vec3:
