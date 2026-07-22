@@ -1,4 +1,5 @@
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
+# 1.1.0 - 7/22/2026: Position of parts & asssemblies added
 # 1.0.0 - 7/2026: Ported to OCP + PySide6 + uv. Creo-style workflow.
 #               Drag-to-assembly with shared instance propagation.
 #               No Conda required.
