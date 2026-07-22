@@ -262,6 +262,24 @@ haven't gotten WORSE)
   only resolves one level of sharing ambiguity -- a shared child
   under a shared grandparent (nested two levels deep) could still hit
   a similar issue, not currently tested.
+- The AIS_Manipulator captures LMB drags whenever the cursor has
+  HOVERED over it -- not requiring a click on a handle first -- and
+  keeps capturing until the cursor moves away without hovering it
+  again. CONFIRMED (Session 39) to also happen in Basicad -- a real
+  characteristic of the manual `HasActiveMode()`-check pattern both
+  codebases share, not a Kodacad-specific porting error. Doug's own
+  characterization (Session 39): predictable and avoidable in
+  practice once you know it's hover-based, not click-based -- "I
+  think I can live with that." Scaling was never actually disabled
+  (the old code guessed three wrong attribute names); fixed with the
+  confirmed-correct `AIS_MM_Scaling` import -- this part IS a real
+  fix, kept. A separate reliability attempt (`DetectedInteractive()`
+  as a second gate) correlated with an application crash (no terminal
+  output -- likely native-level) and was reverted (Session 39) rather
+  than pursued further. Test: hover the manipulator then drag from
+  elsewhere -- confirm it captures (expected, live-with-it behavior);
+  drag without ever hovering it -- confirm normal camera orbit works
+  (not captured). Confirm scaling handles no longer scale.
 - Positioning an imported hub assembly (`clamping-hub-assembly.step`)
   does not survive save/reload. DEFERRED (Session 22): confirmed its
   `NAUO1`/`NAUO2` blank names are present in the file's own original

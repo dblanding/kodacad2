@@ -17,13 +17,6 @@ Both developer and user contributions welcome.
 
 ## 3. Future development ideas
 
-### ViewCube in viewport corner
-Select show/hide from Utility menu ?
-Add `AIS_ViewCube` for click-to-orient (Top/Front/Right/Isometric).
-In Basicad this was implemented using `AIS_ViewCube` with
-`AIS_ViewCubeOwner` for face click detection. See
-`docs/DEVELOPMENT_LOG.md` (Session 5) for implementation notes.
-
 ### Workplane label in viewport
 Display "w1", "w2" etc. in the lower-left corner of each
 workplane boundary rectangle so the active workplane is always

@@ -2914,3 +2914,100 @@ property of that call, not something specific to session loading --
 grepping for every call site before considering the fix complete
 caught two other places that would have hit the identical bug later,
 reported as separate-seeming issues if left unfixed.
+
+## Session 39: manipulator spurious-capture -- confirmed shared with
+Basicad, one real fix kept, one attempted fix crashed and was reverted
+
+Doug reported the Dynamic manipulator capturing LMB drags before any
+handle was clicked, or after releasing a translation handle -- both
+inducing unwanted rotation/scaling, requiring Back to undo. Confirmed
+by Doug testing directly: this ALSO happens in Basicad, ruling out a
+Kodacad-specific porting error -- it's a real characteristic of the
+manual-detection pattern both codebases share, not something
+introduced in this port.
+
+### Confirmed and fixed: scaling was never actually disabled
+
+Session 23's scaling-disable code tried three guessed attribute names
+(`"Scaling"`, `"Scale"`, `"AIS_MM_Scaling"`) as attributes of the
+`AIS_Manipulator` class itself, silently falling through all three on
+failure. Confirmed via a real pythonocc-core stub file:
+`AIS_MM_Scaling` is a top-level member of the SEPARATE
+`AIS_ManipulatorMode` enum, not an `AIS_Manipulator` class attribute
+-- none of the three guesses could ever have matched. This is very
+likely why Doug saw scaling behavior at all; it was never disabled.
+Fixed with the confirmed-correct import. This fix is unrelated to
+everything below and was kept throughout.
+
+### Attempted: DetectedInteractive() as a second gate -- crashed,
+reverted
+
+Found a real OCCT forum thread describing almost exactly Doug's
+symptom, with a response noting `HasActiveMode()` alone can be
+unreliable in a manually-driven `context.MoveTo()` + check pattern.
+Added `context.DetectedInteractive() == self._manipulator` as an
+additional, more specific check alongside `HasActiveMode()`. This DID
+stop spurious capture on an empty-space drag right after entering
+Dynamic mode -- but surfaced two further problems: the same drag
+didn't fall through to normal camera orbit the way it should, and the
+application crashed a few seconds later with NOTHING printed to the
+terminal (consistent with a native-level crash in the OCCT/OpenGL
+layer, not a catchable Python exception -- a materially harder class
+of problem than anything fixed by reading a Python traceback so far
+in this project).
+
+Whether this specific change caused the crash, or just happened to be
+the first test scenario to trigger a pre-existing native-level issue,
+is genuinely unknown -- not enough evidence to attribute cause
+responsibly. Reverted via `git revert HEAD` (confirmed via `git show
+--stat HEAD` beforehand that the commit being undone was scoped to
+exactly this change plus its own doc entries, not the unrelated
+ViewCube work in the prior commit), then the scaling fix reapplied on
+its own, cleanly, on top of the reverted state. `mousePressEvent`'s
+manipulator gate is back to the simpler, `HasActiveMode()`-only check
+from Session 23/32.
+
+### The actual resolution: Doug's own characterization of the real
+behavior
+
+Doug's own hands-on testing found the actual mechanism, which the
+attempted fix above was never quite aimed at: the manipulator captures
+subsequent LMB drags whenever the cursor has HOVERED over it -- not
+requiring a click on a handle first -- and releases that capture once
+the cursor moves away without hovering it again. Predictable and
+avoidable in practice once known. Doug's own words: "I think I can
+live with that."
+
+### Status of Dynamic, honestly stated
+
+Hover-based capture (not click-based) is the actual behavior -- worth
+knowing rather than fighting, not a bug requiring more chasing.
+Scaling is now genuinely disabled. A crash risk remains, narrowly
+scoped to the reverted `DetectedInteractive()` code path which is no
+longer in use -- not currently believed to affect the reverted,
+shipped state, though this was never independently re-confirmed after
+reverting. The deeper architectural fix this session's research
+pointed toward (letting `AIS_ViewController` drive the manipulator
+directly, rather than manual `StartTransform`/`Transform`/
+`StopTransform` calls -- a forum reply confirms this removes the need
+for the manual calls entirely, but no confirmed concrete example of
+the internal wiring was found) remains available as real future work
+if hover-based capture ever becomes more than a "live with it" quirk.
+
+### Lesson for future development
+
+**Confirming a bug reproduces in the ORIGINAL codebase a port came
+from is valuable evidence, not just a formality** -- it immediately
+ruled out an entire category of explanation (porting error) and
+redirected the investigation toward the shared underlying pattern.
+**A user's own hands-on characterization of a UI quirk is sometimes
+more valuable than another round of source-diving** -- "hover, not
+click, and it releases when I look away" directly explained the
+original symptom through simple, direct observation, after an entire
+research-driven fix attempt had already crashed trying to solve the
+same thing a different way. **Recognizing when a bug has crossed from
+"debuggable with the tools at hand" into "needs different, heavier
+tools" is itself a useful diagnosis, even without a fix** -- a crash
+with zero output is qualitatively different from every other bug this
+project has solved, where there's always been a stack trace, a print
+statement, or a file to grep.

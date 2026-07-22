@@ -327,14 +327,18 @@ class KodaViewport(QWidget):
             manip.SetModeActivationOnDetection(True)
 
             # Disable scaling handles -- translate + rotate only.
-            for attr_name in ["Scaling", "Scale", "AIS_MM_Scaling"]:
-                try:
-                    part_type = getattr(AIS_Manipulator, attr_name)
-                    for axis in range(3):
-                        manip.SetPart(axis, part_type, False)
-                    break
-                except AttributeError:
-                    continue
+            # CONFIRMED (previously guessed and wrong): AIS_MM_Scaling
+            # is a top-level member of the separate AIS_ManipulatorMode
+            # enum, not an attribute of the AIS_Manipulator class --
+            # every name in the old try/except guess-loop
+            # ("Scaling"/"Scale"/"AIS_MM_Scaling" as attributes of
+            # AIS_Manipulator itself) failed silently, so scaling was
+            # never actually disabled. This is very likely why the
+            # Dynamic gizmo has been seen inducing scaling as well as
+            # rotation -- see docs/DEVELOPMENT_LOG.md, Session 39.
+            from OCP.AIS import AIS_MM_Scaling
+            for axis in range(3):
+                manip.SetPart(axis, AIS_MM_Scaling, False)
 
             manip.Attach(self._manip_leaf_shapes[0])
             self.context.Display(manip, False)
