@@ -296,6 +296,178 @@ def line_plane_intersection(line_point: Vec3, line_dir: Vec3,
     return line_point + line_dir * t
 
 
+def resolve_cylinder_pick(face) -> PickResult:
+    """
+    Resolve a picked TopoDS_Face into a PickResult (a point on its
+    axis + axis direction), for Align Axis's standalone "bolt in a
+    hole" first step (aligning two cylindrical FACES directly, not
+    circular edges -- see resolve_circle_pick for that, used by Align
+    Axis's OTHER role, pinning holes after a face mate).
+
+    Unlike circular edges (which sometimes get misclassified as
+    BSPLINE, needing _fit_circle_to_edge's fallback), cylindrical
+    SURFACES are reliably typed as GeomAbs_Cylinder in OCCT -- no
+    fallback needed here, just a clear rejection if the picked face
+    genuinely isn't cylindrical.
+
+    Raises ValueError if the face is not a cylindrical surface.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+
+    surf = BRepAdaptor_Surface(face)
+    if surf.GetType() != GeomAbs_Cylinder:
+        raise ValueError(
+            f"Face is not a cylindrical surface (type={surf.GetType()}) -- "
+            f"pick a cylindrical face (a hole's inner wall or a shaft's "
+            f"outer surface).")
+    cyl = surf.Cylinder()
+    point_on_axis = Vec3.from_gp(cyl.Location())
+    axis_dir = Vec3.from_gp(cyl.Axis().Direction())
+    return PickResult(point=point_on_axis, direction=axis_dir, label="cylinder axis")
+
+
+def _any_perpendicular(v: Vec3) -> Vec3:
+    """Return an arbitrary unit vector perpendicular to v (assumed
+    already unit length). Ported from Basicad's pose.py -- used as the
+    "flip" rotation axis in compute_axis_step2_move and the 180-degree
+    case in compute_align_axis_move: any direction perpendicular to
+    the main cylinder axis works equally well for a 180-degree flip,
+    since what's being (anti-)aligned is a direction along the axis,
+    not any particular in-plane direction."""
+    fallback = Vec3(0, 0, 1) if abs(v.dot(Vec3(0, 0, 1))) < 0.9 else Vec3(0, 1, 0)
+    return (fallback - v * fallback.dot(v)).normalized()
+
+
+def compute_align_axis_move(pick1: PickResult, pick2: PickResult):
+    """
+    Align Axis used as a STANDALONE Step 1 ("bolt in a hole" -- see
+    Doug's design PDF's other Align Axis use, distinct from
+    compute_align_axis_pin_move's chained-after-a-face-mate role):
+    two cylindrical axes become fully coincident -- both direction (2
+    rotational DOF) and position perpendicular to the axis (2
+    translational DOF). Ported from Basicad's compute_align_axis_move,
+    which built this via a general from-plane/to-plane transform
+    (build123d Planes); reimplemented directly here as "rotate pick1's
+    axis direction onto pick2's, then translate pick1's point onto
+    pick2's" -- equivalent result, no build123d dependency needed.
+
+    The rotation's spin (about the now-shared axis) is intentionally
+    arbitrary -- whatever falls out of the axis-to-axis rotation is
+    fine, because it gets completely superseded by the next two
+    constraints (compute_axis_step2_move for axial position, then
+    compute_step3_move's spin case for rotation) regardless of what it
+    was. The 2 DOF this step does NOT constrain -- translation along
+    the now-shared axis, and spin about it -- are left for those two
+    steps.
+
+    Returns a TopLoc_Location (world-space delta), or None if either
+    pick lacks a direction (i.e. isn't actually a resolved
+    cylindrical face).
+    """
+    from OCP.gp import gp_Ax1, gp_Trsf, gp_Vec
+    from OCP.TopLoc import TopLoc_Location
+
+    if pick1.direction is None or pick2.direction is None:
+        print("[position_math] Align Axis requires directed picks (cylindrical faces).")
+        return None
+
+    D1 = pick1.direction.normalized()
+    D2 = pick2.direction.normalized()
+
+    dot = max(-1.0, min(1.0, D1.dot(D2)))
+    cross = D1.cross(D2)
+
+    rot_trsf = gp_Trsf()
+    if cross.length < 1e-9:
+        if dot < 0:
+            # Anti-parallel: 180-degree rotation about any axis
+            # perpendicular to D1 -- the specific choice of axis
+            # doesn't matter, since the resulting spin is arbitrary
+            # and gets superseded by the next 2 constraints anyway.
+            perp = _any_perpendicular(D1)
+            ax = gp_Ax1(pick1.point.to_gp_pnt(), perp.to_gp_dir())
+            rot_trsf.SetRotation(ax, math.pi)
+        # else: already parallel -- no rotation needed.
+    else:
+        angle = math.acos(dot)
+        ax = gp_Ax1(pick1.point.to_gp_pnt(), cross.normalized().to_gp_dir())
+        rot_trsf.SetRotation(ax, angle)
+
+    # Translate pick1's (now-rotated) point onto pick2's.
+    rotated_pt = pick1.point.to_gp_pnt()
+    rotated_pt.Transform(rot_trsf)
+    rotated_pick1_pt = Vec3.from_gp(rotated_pt)
+
+    delta = pick2.point - rotated_pick1_pt
+    trans_trsf = gp_Trsf()
+    if delta.length > 1e-9:
+        trans_trsf.SetTranslation(gp_Vec(delta.X, delta.Y, delta.Z))
+
+    return TopLoc_Location(trans_trsf).Multiplied(TopLoc_Location(rot_trsf))
+
+
+def compute_axis_step2_move(pick1: PickResult, pick2: PickResult,
+                            axis_point: Vec3, axis_dir: Vec3, mate: bool = True):
+    """
+    Align Axis (standalone path) -- Step 2: constrain the remaining
+    translational DOF along the axis Step 1 established, by making a
+    face on the moving part coplanar with a parallel face on the fixed
+    part. Ported from Basicad's compute_axis_step2_move.
+
+    mate=True: faces end up with OPPOSED normals (e.g. a shoulder
+    seating flush against a mounting face). mate=False: faces end up
+    with SAME-direction normals (e.g. a shaft end flush with a
+    housing's outer face).
+
+    Step 1 already fixed every rotational DOF except spin about the
+    axis (Step 3's job) -- so we can't rotate to satisfy mate vs.
+    align here the way compute_step1_move does. Instead: if the moving
+    part's CURRENT face relationship doesn't already match the
+    requested mate/align state, first flip the part 180 degrees about
+    an axis PERPENDICULAR to the main axis (through axis_point) -- the
+    standard CAD "mate alignment / anti-alignment flip" -- which
+    reverses the face's effective direction along the axis without
+    disturbing Step 1's axis coincidence (a 180-degree rotation about
+    any line through axis_point perpendicular to axis_dir maps the
+    axis line onto itself). Then translate along the axis to close the
+    remaining gap.
+
+    Returns a TopLoc_Location (world-space delta).
+    """
+    from OCP.gp import gp_Ax1, gp_Trsf, gp_Vec
+    from OCP.TopLoc import TopLoc_Location
+
+    A = axis_dir.normalized()
+    D1, D2 = pick1.direction, pick2.direction
+
+    flip_trsf = gp_Trsf()
+    needs_flip = False
+    if D1 is not None and D2 is not None:
+        currently_opposed = D1.dot(D2) < 0
+        needs_flip = (mate and not currently_opposed) or ((not mate) and currently_opposed)
+        if needs_flip:
+            perp = _any_perpendicular(A)
+            ax = gp_Ax1(axis_point.to_gp_pnt(), perp.to_gp_dir())
+            flip_trsf.SetRotation(ax, math.pi)
+
+    if needs_flip:
+        moving_pt = pick1.point.to_gp_pnt()
+        moving_pt.Transform(flip_trsf)
+        moving_point = Vec3.from_gp(moving_pt)
+    else:
+        moving_point = pick1.point
+
+    gap = (pick2.point - moving_point).dot(A)
+    translation_vec = A * gap
+    trans_trsf = gp_Trsf()
+    if translation_vec.length > 1e-9:
+        trans_trsf.SetTranslation(gp_Vec(translation_vec.X, translation_vec.Y,
+                                         translation_vec.Z))
+
+    return TopLoc_Location(trans_trsf).Multiplied(TopLoc_Location(flip_trsf))
+
+
 def compute_align_axis_pin_move(hole1: PickResult, hole2: PickResult,
                                 mated_normal: Vec3, plane_point: Vec3):
     """

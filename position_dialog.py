@@ -89,23 +89,36 @@ class PositionDialog(QDialog):
 
         # 3-2-1 DOF tracking for Mate/Align. _mate_align_step counts how
         # many of the 3 steps have been applied (0 = none yet, 3 = fully
-        # constrained). _mated_normal is Step 1's result (the axis Step
-        # 2 rotates about). Step 2 can be EITHER a face-align
-        # (_step2_wall_normal, needed for Step 3's free-direction
-        # calculation) OR Align Axis's pin move (_align_axis_pivot, the
-        # point Step 3 then spins about) -- per Doug's original design
-        # (docs/PositionForKodacad2.pdf, the "2nd option": mate a face,
-        # then pin a hole-on-face intersection instead of a second
-        # face-align, leaving only theta_z for a final Align). Reset to
-        # a "Clean Slate" whenever the user switches to a different
-        # Method -- constraint accounting only makes sense as one
-        # continuous Mate/Align session.
+        # constrained). Two different things can happen at Step 1, and
+        # two different things at Step 2/3 -- _step1_kind and
+        # _step3_kind are the explicit discriminators that tell later
+        # steps which math to use, rather than inferring it from which
+        # other variable happens to be non-None:
+        #
+        #   _step1_kind == "face": normal face Mate/Align (3 DOF).
+        #     _mated_normal / _step1_point record what it established.
+        #   _step1_kind == "axis": standalone Align Axis (Basicad's
+        #     "bolt in a hole" case -- 4 DOF at once). Same two
+        #     variables record the resulting shared axis instead.
+        #
+        #   _step3_kind == "wall": Step 2 was a normal face-align.
+        #     _step2_wall_normal is Step 3's free-direction input.
+        #   _step3_kind == "spin": Step 2 was EITHER Align Axis's pin
+        #     move (Doug's PDF "2nd option", chained after a face
+        #     mate) OR the axial-translate step after standalone Align
+        #     Axis -- both leave pure rotation as the only remaining
+        #     DOF. _align_axis_pivot is Step 3's spin-pivot input.
+        #
+        # Reset to a "Clean Slate" whenever the user switches to a
+        # different Method -- constraint accounting only makes sense
+        # as one continuous Mate/Align session.
         self._mate_align_step = 0
+        self._step1_kind = None
         self._mated_normal = None
-        self._step1_plane_point = None  # Step 1's own pick1.point -- needed by
-                                        # Align Axis's line-plane intersection
+        self._step1_point = None
+        self._step3_kind = None
         self._step2_wall_normal = None
-        self._align_axis_pivot = None   # set only if Step 2 was Align Axis
+        self._align_axis_pivot = None
 
         self.setWindowTitle("Position")
         self._build_ui()
@@ -246,8 +259,10 @@ class PositionDialog(QDialog):
         accounting only makes sense as one continuous Mate/Align
         session -- switching away and back starts over."""
         self._mate_align_step = 0
+        self._step1_kind = None
         self._mated_normal = None
-        self._step1_plane_point = None
+        self._step1_point = None
+        self._step3_kind = None
         self._step2_wall_normal = None
         self._align_axis_pivot = None
 
@@ -259,21 +274,37 @@ class PositionDialog(QDialog):
         """Mate/Align/Align Axis radio chosen -- start the appropriate
         picking flow. Mate/Align: 'Having chosen to apply a Mate or
         Align constraint, the user will be prompted to click on a
-        moving face and a fixed face.' Align Axis: per Doug's original
-        design, used specifically as Step 2 -- pin a hole-on-face
-        intersection instead of a second face-align -- so it's only
-        valid right after Step 1."""
+        moving face and a fixed face.' Align Axis has two distinct
+        roles, per Doug's original design:
+
+        - At Step 1 (mate_align_step == 0): standalone -- align two
+          cylindrical FACES directly ("a bolt in a hole"), 4 DOF at
+          once. Matches Basicad's own architecture for this specific
+          case.
+        - At Step 2 (mate_align_step == 1): chained after a face mate
+          -- pin two hole/circular-EDGE intersection points together,
+          2 DOF. The PDF's "2nd option," distinct from Basicad's.
+
+        Both leave exactly 2 more constraint-applications to reach
+        fully-constrained (3 total either way -- see _record_step_
+        success/_apply_align_axis_pin/_apply_align_axis_full for the
+        DOF accounting)."""
         if not self._mate_align_btn.isChecked():
             self._mate_align_btn.setChecked(True)
 
         if mode == "axis":
-            if self._mate_align_step != 1:
-                self.main_win.statusBar().showMessage(
-                    "Align Axis is used as Step 2 -- mate or align a "
-                    "face first (Step 1).", 6000)
+            if self._mate_align_step == 0:
+                self._start_axis_face_picking()
                 return
-            self._start_axis_picking()
-            return
+            elif self._mate_align_step == 1:
+                self._start_axis_pin_picking()
+                return
+            else:
+                self.main_win.statusBar().showMessage(
+                    "Align Axis is only used as Step 1 (aligning two "
+                    "cylindrical faces) or Step 2 (pinning holes after "
+                    "mating a face).", 6000)
+                return
 
         self._last_mode = mode
         if self._mate_align_step >= 3:
@@ -321,9 +352,10 @@ class PositionDialog(QDialog):
         on how many steps have already been applied this session
         (self._mate_align_step). Each successful step records what it
         established via _record_step_success() for the NEXT step to
-        use. Step 3 itself branches on whether Step 2 was a normal
-        face-align (_step2_wall_normal set) or Align Axis
-        (_align_axis_pivot set instead)."""
+        use. Step 2 branches on _step1_kind (was Step 1 a normal face
+        mate, or standalone Align Axis?); Step 3 branches on
+        _step3_kind (was Step 2 a normal face-align, or a spin-leaving
+        step -- either kind of Align Axis?)."""
         self.main_win.clearCallback()
         mate = (self._last_mode == "mate")
         step = self._mate_align_step
@@ -331,10 +363,15 @@ class PositionDialog(QDialog):
         if step == 0:
             move = position_math.compute_step1_move(self._pick1, self._pick2, mate=mate)
         elif step == 1:
-            move = position_math.compute_step2_move(
-                self._pick1, self._pick2, self._mated_normal, mate=mate)
+            if self._step1_kind == "axis":
+                move = position_math.compute_axis_step2_move(
+                    self._pick1, self._pick2, self._step1_point,
+                    self._mated_normal, mate=mate)
+            else:
+                move = position_math.compute_step2_move(
+                    self._pick1, self._pick2, self._mated_normal, mate=mate)
         elif step == 2:
-            if self._align_axis_pivot is not None:
+            if self._step3_kind == "spin":
                 move = position_math.compute_step3_move(
                     self._pick1, self._pick2, self._mated_normal,
                     spin_pivot=self._align_axis_pivot)
@@ -370,22 +407,23 @@ class PositionDialog(QDialog):
         self._update_ui_state()
 
     # -----------------------------------------------------------------
-    # Picking -- Align Axis (circular edges / holes), Step 2 only
+    # Picking -- Align Axis, chained pin (circular edges / holes),
+    # only valid as Step 2 -- Doug's original PDF design.
     # -----------------------------------------------------------------
 
-    def _start_axis_picking(self):
+    def _start_axis_pin_picking(self):
         self.main_win.canvas.detach_manipulator()
         self._nudge_box.setVisible(False)
         self._picking_for = "mate_align"
         self._picking_kind = "circle"
         self._pick1 = None
         self._pick2 = None
-        self.main_win.registerCallback(self._axis_pick_callback)
+        self.main_win.registerCallback(self._axis_pin_pick_callback)
         self.main_win.canvas._display.SetSelectionModeEdge()
         self.main_win.statusBar().showMessage(
             "Step 2 of 3 (Align Axis): pick a hole on the moving part.")
 
-    def _axis_pick_callback(self, shapeList, *args):
+    def _axis_pin_pick_callback(self, shapeList, *args):
         for shape in shapeList:
             try:
                 edge = TopoDS.Edge_s(shape)
@@ -411,7 +449,7 @@ class PositionDialog(QDialog):
         Align (Step 3's spin case)."""
         self.main_win.clearCallback()
         move = position_math.compute_align_axis_pin_move(
-            self._pick1, self._pick2, self._mated_normal, self._step1_plane_point)
+            self._pick1, self._pick2, self._mated_normal, self._step1_point)
         if move is None:
             self.main_win.statusBar().showMessage("Couldn't compute move -- try again.", 5000)
             return
@@ -428,11 +466,79 @@ class PositionDialog(QDialog):
             N = self._mated_normal.normalized()
             self._align_axis_pivot = position_math.line_plane_intersection(
                 self._pick2.point, self._pick2.direction.normalized(),
-                self._step1_plane_point, N)
+                self._step1_point, N)
+            self._step3_kind = "spin"
             self._mate_align_step = 2
             self.main_win.statusBar().showMessage(
                 "Align Axis applied (step 2 of 3, 1 DOF left). "
                 "Pick Mate or Align again for the final rotation.", 8000)
+        self._update_ui_state()
+
+    # -----------------------------------------------------------------
+    # Picking -- Align Axis, standalone (cylindrical faces), only
+    # valid as Step 1 -- Basicad's own architecture, matching the
+    # PDF's "bolt in a hole" example.
+    # -----------------------------------------------------------------
+
+    def _start_axis_face_picking(self):
+        self.main_win.canvas.detach_manipulator()
+        self._nudge_box.setVisible(False)
+        self._picking_for = "mate_align"
+        self._picking_kind = "cylinder"
+        self._pick1 = None
+        self._pick2 = None
+        self.main_win.registerCallback(self._axis_face_pick_callback)
+        self.main_win.canvas._display.SetSelectionModeFace()
+        self.main_win.statusBar().showMessage(
+            "Step 1 of 3 (Align Axis): pick a cylindrical face on the "
+            "moving part (e.g. a bolt shaft).")
+
+    def _axis_face_pick_callback(self, shapeList, *args):
+        for shape in shapeList:
+            try:
+                face = TopoDS.Face_s(shape)
+                pick = position_math.resolve_cylinder_pick(face)
+            except Exception as e:
+                print(f"[PositionDialog] pick was not a cylindrical face: {e}")
+                self.main_win.statusBar().showMessage(
+                    "Pick a cylindrical face, not that.", 4000)
+                continue
+            if self._pick1 is None:
+                self._pick1 = pick
+                self.main_win.statusBar().showMessage(
+                    "Cylindrical face 1 picked. Pick face 2 (fixed, e.g. a hole).")
+            else:
+                self._pick2 = pick
+                self._apply_align_axis_full()
+                return
+
+    def _apply_align_axis_full(self):
+        """Align Axis as a standalone Step 1 (Basicad's own
+        architecture for this specific case, matching Doug's "bolt in
+        a hole" example): aligns 2 cylindrical faces directly,
+        consuming 4 DOF (2 rotational + 2 translational) in one step.
+        The remaining 2 DOF -- axial translation and spin -- are left
+        for 2 more Align constraints (compute_axis_step2_move, then
+        compute_step3_move's spin case -- the same spin case Align
+        Axis's OTHER role, the chained pin, also leaves for Step 3)."""
+        self.main_win.clearCallback()
+        move = position_math.compute_align_axis_move(self._pick1, self._pick2)
+        if move is None:
+            self.main_win.statusBar().showMessage("Couldn't compute move -- try again.", 5000)
+            return
+
+        self._last_picks = (self._pick1, self._pick2)
+        self._last_step_applied = 0
+        self._last_step_kind = "axis"  # Reverse doesn't apply -- no mate/align choice here
+        ok = self._apply_world_move(move)
+        if ok:
+            self._mated_normal = self._pick2.direction
+            self._step1_point = self._pick2.point
+            self._step1_kind = "axis"
+            self._mate_align_step = 1
+            self.main_win.statusBar().showMessage(
+                "Align Axis applied (step 1 of 3, 2 DOF left). "
+                "Pick Mate or Align to constrain the axial position.", 8000)
         self._update_ui_state()
 
     # -----------------------------------------------------------------
@@ -679,7 +785,8 @@ class PositionDialog(QDialog):
         self._mate_align_step = step
         if step == 0:
             self._mated_normal = None
-            self._step1_plane_point = None
+            self._step1_point = None
+            self._step1_kind = None
         elif step == 1:
             self._step2_wall_normal = None
         self._refresh_display()
@@ -690,7 +797,12 @@ class PositionDialog(QDialog):
         if step == 0:
             move = position_math.compute_step1_move(pick1, pick2, mate=mate)
         elif step == 1:
-            move = position_math.compute_step2_move(pick1, pick2, self._mated_normal, mate=mate)
+            if self._step1_kind == "axis":
+                move = position_math.compute_axis_step2_move(
+                    pick1, pick2, self._step1_point, self._mated_normal, mate=mate)
+            else:
+                move = position_math.compute_step2_move(
+                    pick1, pick2, self._mated_normal, mate=mate)
         else:
             move = None
 
@@ -707,18 +819,29 @@ class PositionDialog(QDialog):
         self._update_ui_state()
 
     def _record_step_success(self, step, mate):
-        """After successfully applying Mate/Align step 0/1 (face-based
-        -- Align Axis's own Step-2-equivalent is recorded separately in
-        _apply_align_axis_pin), record what it established for the
-        NEXT step to use, and advance the DOF counter. Shared by
-        _apply_mate_align and _on_reverse so the bookkeeping can't
+        """After successfully applying Mate/Align step 0/1 via the
+        FACE-picking path (step 0: normal face mate; step 1: normal
+        face-align OR the axial-translate step after standalone Align
+        Axis -- both go through _apply_mate_align/_face_pick_callback).
+        Align Axis's OWN two entry points (_apply_align_axis_pin,
+        _apply_align_axis_full) record their own bookkeeping directly,
+        since it differs enough not to fit this shared shape. Shared
+        by _apply_mate_align and _on_reverse so the bookkeeping can't
         drift between the two."""
         if step == 0:
             self._mated_normal = (-self._last_picks[1].direction if mate
                                   else self._last_picks[1].direction)
-            self._step1_plane_point = self._last_picks[0].point
+            self._step1_point = self._last_picks[0].point
+            self._step1_kind = "face"
         elif step == 1:
-            self._step2_wall_normal = self._last_picks[1].direction
+            if self._step1_kind == "axis":
+                # Step 1 was standalone Align Axis -- this step just
+                # closed the axial gap, leaving only spin for Step 3.
+                self._step3_kind = "spin"
+                self._align_axis_pivot = self._step1_point
+            else:
+                self._step3_kind = "wall"
+                self._step2_wall_normal = self._last_picks[1].direction
         self._mate_align_step = step + 1
 
     def _on_back(self):
@@ -739,17 +862,19 @@ class PositionDialog(QDialog):
             self.main_win.statusBar().showMessage("Step undone.", 5000)
             # Step the DOF tracker backward too, clearing whatever
             # that step had established for the NEXT step to use --
-            # covers BOTH the normal face-align path and Align Axis
-            # (only one of _step2_wall_normal/_align_axis_pivot would
-            # ever actually be set, safe to clear both).
+            # covers all paths (only the relevant variables for
+            # whichever path was actually taken would ever be set,
+            # safe to clear all of them regardless).
             if self._mate_align_step > 0:
                 self._mate_align_step -= 1
                 if self._mate_align_step == 1:
+                    self._step3_kind = None
                     self._step2_wall_normal = None
                     self._align_axis_pivot = None
                 elif self._mate_align_step == 0:
+                    self._step1_kind = None
                     self._mated_normal = None
-                    self._step1_plane_point = None
+                    self._step1_point = None
         self._last_picks = None
         self._last_step_applied = None
         self._last_step_kind = None

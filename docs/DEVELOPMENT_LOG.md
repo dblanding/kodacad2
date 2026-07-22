@@ -2684,3 +2684,69 @@ evolved into something structurally different from what the PDF
 originally specified. Worth verifying not just "does a precedent
 exist" but "does the precedent's actual behavior match what's being
 asked for" before porting from it.
+
+## Session 36: standalone Align Axis -- Basicad's actual architecture,
+for the case the PDF used it that way too
+
+Doug's last piece: "bolt in a hole" -- aligning two cylindrical FACES
+directly (not circular edges, which the chained-pin role from Session
+35 uses) as a genuinely standalone first step, consuming 4 DOF at
+once. Confirmed this specific case DOES match Basicad's own
+architecture (an independent axis-coincidence move, not chained onto
+anything) -- unlike Session 35's other Align Axis role, which
+deliberately diverged from Basicad in favor of the PDF's original,
+more carefully-considered chaining design.
+
+### What ported from Basicad
+
+`compute_align_axis_move` (the 4-DOF coincidence -- reimplemented
+directly in Vec3/TopLoc_Location rather than via build123d's Plane
+machinery, since the spin resulting from a from-plane/to-plane
+transform is arbitrary and gets superseded by later steps regardless
+of how it's computed) and `compute_axis_step2_move` (axial
+translation along the now-shared axis, with the real "180-degree flip
+if the current face relationship doesn't match the requested mate/
+align state" logic Basicad's original has -- ported faithfully,
+including the `_any_perpendicular` helper it depends on).
+`resolve_cylinder_pick` is new (no build123d equivalent needed
+porting -- cylindrical surfaces are reliably typed as GeomAbs_Cylinder
+in OCCT, no BSpline-misclassification fallback needed the way circular
+edges sometimes require).
+
+### The state model, reorganized around explicit discriminators
+
+Two different things can now happen at Step 1 (normal face mate, or
+standalone Align Axis) and two different things at Step 2/3 (normal
+face-align leaving a wall_normal, or either kind of Align Axis leaving
+a spin pivot instead). Introduced `_step1_kind` and `_step3_kind` as
+explicit fields set at the point each step succeeds, rather than
+inferring "which path was this" from which of several other variables
+happens to be non-None -- the kind of implicit-state inference that's
+caused real, hard-to-trace bugs earlier in this project (Session 24's
+misdiagnosis being a version of exactly this class of mistake:
+drawing a conclusion from indirect evidence about program state
+instead of tracking the state directly).
+
+Same button ("Align Axis") now serves both roles depending on
+`_mate_align_step` at the moment it's clicked -- 0 routes to the
+standalone cylindrical-face flow, 1 routes to Session 35's chained
+circular-edge pin flow, anything else refuses with a clear message.
+Both DOF paths total exactly 3 constraint-applications either way
+(3 for normal Mate/Align-Align-Align, or 4+1+1 for Align Axis-Align-
+Align) -- meaning the existing "step X of 3" UI language and the
+existing `_mate_align_step` counter needed zero changes to
+accommodate this, once the accounting was worked through on paper
+first.
+
+**Completely untested**, same as Session 35.
+
+### Lesson for future development
+
+**Working out the DOF accounting on paper before writing any dialog
+code avoided what would have been a much bigger rewrite.** The
+initial instinct was that a 4-DOF-first path would need a different
+step-counting model from the existing 3-step one. Actually tracing
+through both paths' constraint counts (3 vs. 4+1+1, both totaling 3
+applications) showed the existing framework already fit -- the real
+work was just making Step 1 and Step 3 branch on which path was
+taken, not rebuilding the counter itself.

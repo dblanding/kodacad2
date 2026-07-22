@@ -139,6 +139,27 @@ silently come back.
       circular edge (e.g. a straight edge) when Align Axis is
       expecting a hole -- should show a friendly rejection message,
       not crash.
+- [ ] Standalone Align Axis (Session 36, UNTESTED as of this writing
+      -- "bolt in a hole"): as the FIRST thing in a Position session
+      (no prior Mate/Align), choose Align Axis -- should pick
+      CYLINDRICAL FACES this time (not circular edges), e.g. a bolt
+      shaft's outer surface and a hole's inner wall. Confirm both
+      axes become coincident (position AND orientation), status bar
+      reading "step 1 of 3, 2 DOF left." Pick a non-cylindrical face
+      -- should reject cleanly. Continue with Mate or Align (face
+      picks) -- should translate along the now-shared axis only,
+      with a 180-degree flip if the current face relationship doesn't
+      match Mate vs Align (e.g. clicking Mate when the faces are
+      currently same-direction should visibly flip the part, not
+      just translate it wrong-way). Reverse should work here (this
+      step DOES have a real mate/align choice, unlike the axis
+      alignment itself). Finish with a final Align -- pure spin about
+      the shared axis. Confirm Back correctly unwinds all 3 steps.
+      Also confirm choosing Align Axis mid-sequence (after a normal
+      Mate/Align Step 1, i.e. mate_align_step==1) still correctly
+      goes to the OTHER Align Axis role (circular-edge pin, Session
+      35) rather than this one -- same button, different picking mode
+      depending on which step you're on.
 - [ ] Back undoes the last applied step and restores the exact prior
       position.
 - [ ] Status bar messages are short enough to read in full, not
