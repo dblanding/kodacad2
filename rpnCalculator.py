@@ -74,6 +74,25 @@ class Calculator(QDialog):
         self.zdisplay = self.display()
         self.tdisplay = self.display()
 
+        # Every register's display is a fully editable QLineEdit --
+        # nothing stops the user typing directly into it via the
+        # keyboard -- but every button handler (func, calculate, pr,
+        # etc.) reads/writes self.x/y/z/t directly, with nothing
+        # previously syncing the two. Confirmed directly on X: typing
+        # "30" via keyboard correctly updated the displayed text, but
+        # self.x silently stayed at whatever it was before, so x/2
+        # (and the X-register send-to-Kodacad button) computed against
+        # the STALE self.x, not the displayed 30. Originally fixed for
+        # X alone; generalized to all four registers here, since they
+        # all share the identical pattern. editingFinished fires once
+        # when a field loses focus (Enter, or clicking another
+        # button) -- exactly the moment before any button handler
+        # would next read the register.
+        for reg in ("x", "y", "z", "t"):
+            display = getattr(self, f"{reg}display")
+            display.editingFinished.connect(
+                lambda reg=reg: self._sync_register_from_display(reg))
+
         myblue1 = "steelblue"
         myblue2 = "darkslateblue"  # hsv(240,200,160)
         mygray = "rgb(120,120,120)"  # dimgray
@@ -237,6 +256,18 @@ class Calculator(QDialog):
             print(value)
         self.keip = False
         self.needrup = True
+
+    def _sync_register_from_display(self, register):
+        """Keep self.<register> in sync when the user types directly
+        into its display via the keyboard, instead of only through
+        the on-screen, button-driven keyin(). See __init__ for the
+        full story of why this is needed (originally found and fixed
+        on X alone, generalized to all four registers)."""
+        display = getattr(self, f"{register}display")
+        try:
+            setattr(self, register, float(display.text()))
+        except ValueError:
+            pass
 
     def keyin(self, c):
         if self.keip:

@@ -1605,8 +1605,7 @@ wasn't "which API call is correct" -- it was "does this reproduce on
 a component this function didn't create the label for." Once asked,
 one test settled it.
 
-## Session 20: regression pass -- fillet crash, status bar terseness,
-testing checklist
+## Session 20: regression pass -- fillet crash, status bar terseness, testing checklist
 
 Doug ran a broader regression pass (the Session 19 fix, plus the OCCT
 "Bottle" tutorial as an unrelated sanity check) and reported three
@@ -1958,8 +1957,7 @@ and the first time it was actually chosen wrong. Worth treating
 comment, every time, rather than a detail to default from a nearby
 example.
 
-## Session 25: Session 24's fix crashed -- the real problem was one
-level deeper
+## Session 25: Session 24's fix crashed -- the real problem was one level deeper
 
 Doug's next test crashed immediately:
 ```
@@ -2086,8 +2084,7 @@ became visible immediately. Isolation testing isn't just useful for
 finding NEW bugs -- it's the only way to actually confirm an old fix
 still holds, rather than assuming past success generalizes.
 
-## Session 27: round-trip theory confirmed dead; testing cross-document
-vs. same-document Extract_s instead
+## Session 27: round-trip theory confirmed dead; testing cross-document vs. same-document Extract_s instead
 
 Doug's re-test after Session 26 (round-trip removed) showed the exact
 same corruption -- blank name (this time "34"), reverted position.
@@ -2186,8 +2183,7 @@ way six sessions of varying fixes inside the full app couldn't
 achieve, because the full app never let us isolate "flat vs. nested"
 as a variable on its own.
 
-## Session 28 (cont'd): nesting confirmed as the trigger; re-clone
-experiment removed
+## Session 28 (cont'd): nesting confirmed as the trigger; re-clone experiment removed
 
 The extended `minimal_repro.py` (Scenario B: a wrapper assembly
 containing two sub-boxes, instead of a flat leaf shape) DID reproduce
@@ -2249,8 +2245,7 @@ oversight, not new evidence about the real bug. Worth explicitly
 separating "what the tool is telling us" from "what I forgot to set
 up correctly" before drawing conclusions from either.
 
-## Session 29: root cause fixed -- build assembly structure natively,
-Extract_s only for leaves
+## Session 29: root cause fixed -- build assembly structure natively, Extract_s only for leaves
 
 The corrected nested test (component names fixed, confirming the
 earlier `'=>0:1:1:3'` symptom was a test-script artifact, not a real
@@ -2315,8 +2310,7 @@ call Extract_s -- it's recognizing Extract_s was never the right tool
 for assembly-level structure in the first place, only for the leaf
 content underneath it.
 
-## Session 30: wrap-up decision -- revert the native-rebuild dead end,
-close out Position work for now
+## Session 30: wrap-up decision -- revert the native-rebuild dead end, close out Position work for now
 
 Doug's call, and the right one: after Session 29's native-rebuild
 approach failed an isolated re-test identically to every prior
@@ -2400,8 +2394,7 @@ alongside seven other closed hypotheses, is what actually protects
 the project's overall integrity here -- exactly the concern Doug
 raised in asking for this cleanup.
 
-## Session 31: propagation restored -- Sessions 24/25 were fixing a
-misdiagnosis, not a real bug
+## Session 31: propagation restored -- Sessions 24/25 were fixing a misdiagnosis, not a real bug
 
 Doug pushed back, correctly: the Session 19-era behavior he wants is
 propagation -- move a shared child once (e.g. the L-bracket inside
@@ -2455,8 +2448,7 @@ close together. Doug catching this by asking a direct question
 fix is exactly the kind of check that would have caught this sooner
 if asked earlier.
 
-## Session 32: the actual gizmo-jump fix -- uid recovery preferred
-whichever parent the tree walk visits first
+## Session 32: the actual gizmo-jump fix -- uid recovery preferred whichever parent the tree walk visits first
 
 Doug retested immediately: propagation confirmed correct (2 Points on
 a shared L-bracket updated both l-bracket-assembly_1 and _2, exactly
@@ -2685,8 +2677,7 @@ originally specified. Worth verifying not just "does a precedent
 exist" but "does the precedent's actual behavior match what's being
 asked for" before porting from it.
 
-## Session 36: standalone Align Axis -- Basicad's actual architecture,
-for the case the PDF used it that way too
+## Session 36: standalone Align Axis -- Basicad's actual architecture, for the case the PDF used it that way too
 
 Doug's last piece: "bolt in a hole" -- aligning two cylindrical FACES
 directly (not circular edges, which the chained-pin role from Session
@@ -2751,8 +2742,7 @@ applications) showed the existing framework already fit -- the real
 work was just making Step 1 and Step 3 branch on which path was
 taken, not rebuilding the counter itself.
 
-## Session 37: cylindrical surface misclassification -- the same bug
-class as circular edges, one level up
+## Session 37: cylindrical surface misclassification -- the same bug class as circular edges, one level up
 
 Doug's first real test of standalone Align Axis (rod-assembly against
 a hole in the plate, as1-oc-214.stp) hit exactly the gap flagged as a
@@ -2798,8 +2788,7 @@ claim about "how OCCT reliably behaves" is worth treating as
 unverified until tested against real, specific data, not just
 plausible in general.
 
-## Session 38: AIS_ViewCube with RGB-colored axes, ported from Basicad
-plus a real forum-confirmed addition
+## Session 38: AIS_ViewCube with RGB-colored axes, ported from Basicad plus a real forum-confirmed addition
 
 Doug wanted CAD Assistant's corner ViewCube (Basicad already has one,
 without axis coloring) with RGB X/Y/Z axis indicators added on top.
@@ -2853,8 +2842,7 @@ this project (WriteNames, GeomAbs_Cylinder's reliability). A forum
 answer confirms the APPROACH is right; it doesn't excuse skipping the
 binding-specific verification step.
 
-## Session 38 (cont'd): the actual bug -- DatumAspect() returns null
-until explicitly assigned
+## Session 38 (cont'd): the actual bug -- DatumAspect() returns null until explicitly assigned
 
 Doug's terminal output pinpointed it exactly: `'NoneType' object has
 no attribute 'ShadingAspect'` -- `vc.Attributes().DatumAspect()`
@@ -2886,8 +2874,7 @@ file. When it fails, searching for the SPECIFIC error message
 directly (rather than re-searching the general topic) found the exact
 missing piece fast.
 
-## Session 38 (cont'd again): ViewCube vanishing on redraw -- fixed at
-the actual source, not just the reported symptom
+## Session 38 (cont'd again): ViewCube vanishing on redraw -- fixed at the actual source, not just the reported symptom
 
 Doug reported the ViewCube disappearing after loading a session.
 Traced to `redraw()`'s `context.RemoveAll(False)`, which wipes
@@ -2915,8 +2902,7 @@ grepping for every call site before considering the fix complete
 caught two other places that would have hit the identical bug later,
 reported as separate-seeming issues if left unfixed.
 
-## Session 39: manipulator spurious-capture -- confirmed shared with
-Basicad, one real fix kept, one attempted fix crashed and was reverted
+## Session 39: manipulator spurious-capture -- confirmed shared with Basicad, one real fix kept, one attempted fix crashed and was reverted
 
 Doug reported the Dynamic manipulator capturing LMB drags before any
 handle was clicked, or after releasing a translation handle -- both
@@ -3012,8 +2998,7 @@ with zero output is qualitatively different from every other bug this
 project has solved, where there's always been a stack trace, a print
 statement, or a file to grep.
 
-## Session 41: Bottle tutorial regression pass -- four issues, four
-separately-chunkable fixes
+## Session 41: Bottle tutorial regression pass -- four issues, four separately-chunkable fixes
 
 Doug went through the Bottle tutorial again with a careful eye,
 catching several real issues in the early sketch/create steps -- the
@@ -3113,8 +3098,7 @@ uniformly, since a bug with a full traceback and a code-level
 explanation is already a different category of confirmed than one
 with neither.
 
-## Session 41 (cont'd): calculator entry glitch -- narrowed to a
-specific, useful lead
+## Session 41 (cont'd): calculator entry glitch -- narrowed to a specific, useful lead
 
 Doug's "clineH stopped working" turned out to be unrelated to the
 Session 41 m2d.py edit (confirmed: the edit only touched arc3p's
@@ -3131,3 +3115,75 @@ whenever this gets picked up -- worth comparing exactly how the two
 input paths differ in how they update the calculator's internal
 value vs. its displayed text. Not investigated further this
 session -- Doug's call, deferred.
+
+## Session 42: RPN calculator keyboard-entry bug -- root cause found and fixed
+
+Doug's Session 41 lead ("laptop keyboard entry, not the calculator's
+own buttons") was exactly the right clue. `rpnCalculator.py`'s
+`xdisplay` (the X-register's QLineEdit) is fully editable -- nothing
+stops direct keyboard typing into it -- but every button handler
+(`func`, `calculate`, `pr`, `mm2in`, `in2mm`, `storex`, `trimx`,
+`swapxy`, `putx`) reads and writes `self.x` directly, and nothing
+connected the widget's own text back to that variable. Typing "30"
+via keyboard correctly updated what's DISPLAYED; `self.x` (the actual
+value every calculation and the X-register send-to-Kodacad button
+use) silently stayed at whatever it was before -- confirmed exactly
+matching Doug's report: displayed 30, but `x/2` computed against a
+stale `self.x`, producing 0.0.
+
+Fixed by connecting `xdisplay.editingFinished` (Qt's standard signal
+for "user finished editing this field," firing once on Enter or focus
+loss -- not per-keystroke, so no risk of a feedback loop with the
+existing `setText()` calls scattered throughout the rest of the
+class) to a small handler that parses the current display text into
+`self.x`. Clicking away to another button naturally triggers a focus-
+loss before that button's own handler runs, so `self.x` is correctly
+synced before any subsequent calculation reads it.
+
+Deliberately NOT made read-only -- direct keyboard entry is Doug's
+normal workflow, not a misuse of the widget; the fix makes it actually
+work correctly rather than blocking it.
+
+Y/Z/T displays share the same editable-QLineEdit-with-no-sync
+pattern, in principle, though Doug's report and testing were specific
+to X. Not touched this session -- worth the same fix later if the
+same symptom ever shows up on those registers.
+
+### Lesson for future development
+
+**A specific, narrowed lead from a prior session (Session 41's
+"laptop keyboard, not buttons") turned what could have been another
+open-ended investigation into a direct, half-hour trace to the exact
+missing signal connection.** Worth treating Doug's own narrowing work
+as seriously as a stack trace when deciding where to look first.
+
+## Session 43: calculator fix generalized to all 4 registers; dev log heading formatting fixed throughout
+
+Generalized Session 42's X-register fix to Y/Z/T as well, per Doug's
+request to do all four at once rather than wait for the same bug
+report three more times. One shared `_sync_register_from_display()`
+handler, wired to all four displays' `editingFinished` signals via a
+loop (matching the existing `lambda state, r=...: ...` default-arg
+pattern already used elsewhere in this file for button wiring, to
+avoid the classic Python late-binding closure bug).
+
+Separately, Doug flagged that this log's own `## Session N: ...`
+headings lose their heading styling wherever the heading text wraps
+onto a second line in the raw markdown -- Markdown headings are
+single-line by definition, so a literal newline partway through one
+silently ends the heading and starts an ordinary paragraph. Affected
+17 of this document's 51 headings (long descriptive titles wrapped for
+raw-text readability, without realizing this would break rendering).
+Fixed programmatically -- joined every split heading back onto one
+line -- rather than by hand across 3000+ lines; verified afterward
+that all 51 headings survived with none still split.
+
+### Lesson for future development
+
+**A markdown-formatting convention that looks fine in a text editor
+can silently break at render time, and it's worth checking the
+RENDERED output occasionally, not just the raw source.** Wrapping
+long lines for readability while writing is a reasonable habit in
+general, but headings are one of the few Markdown constructs where
+that habit actively breaks something -- worth remembering for any
+future long entries.
