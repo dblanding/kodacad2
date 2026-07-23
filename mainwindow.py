@@ -574,11 +574,35 @@ class MainWindow(QMainWindow):
                         f"Part: uid: {uid}; name: {name}; entry: {entry}; ref_entry: {ref_ent}"
                     )
 
+    def _get_clicked_or_current_item(self):
+        """Returns self.itemClicked if it's still valid, else falls
+        back to self.treeView.currentItem() -- the correct version of
+        the "self.itemClicked or self.treeView.currentItem()" pattern
+        every RMB handler used to use directly.
+
+        self.itemClicked can go stale: if the tree gets rebuilt (e.g.
+        extrude() -> build_tree()) after an item was clicked but
+        before an RMB action is taken on it, the underlying C++
+        QTreeWidgetItem is destroyed even though the Python reference
+        in self.itemClicked is untouched. A dead shiboken wrapper is
+        still Python-truthy (`or` doesn't fall through to
+        currentItem() the way the old code assumed), so calling
+        anything on it -- even .text(0) -- raised "Internal C++
+        object already deleted." Confirmed directly (Doug hit this
+        immediately after creating a part, which rebuilds the tree,
+        then tried to RMB-delete it).
+        """
+        from shiboken6 import Shiboken
+        item = self.itemClicked
+        if item is not None and not Shiboken.isValid(item):
+            item = None
+        return item or self.treeView.currentItem()
+
     def setClickedActive(self):
         """Set item clicked in treeView Active.
         Falls back to currentItem() so RMB works without prior left-click.
         """
-        item = self.itemClicked or self.treeView.currentItem()
+        item = self._get_clicked_or_current_item()
         if item:
             self.setItemActive(item)
             self.treeView.clearSelection()
@@ -636,7 +660,7 @@ class MainWindow(QMainWindow):
 
     def deleteItem(self):
         """Delete the (workplane, part, or assembly) item clicked."""
-        item = self.itemClicked or self.treeView.currentItem()
+        item = self._get_clicked_or_current_item()
         if not item:
             print("No item selected. Try first left clicking item then right clicking.")
             return
@@ -677,7 +701,7 @@ class MainWindow(QMainWindow):
 
     def setTransparent(self):
         """Set treeView item clicked transparent"""
-        item = self.itemClicked or self.treeView.currentItem()
+        item = self._get_clicked_or_current_item()
         if item:
             uid = item.text(1)
             if uid in dm.part_dict:
@@ -690,7 +714,7 @@ class MainWindow(QMainWindow):
 
     def setOpaque(self):
         """Set treeView item clicked opaque"""
-        item = self.itemClicked or self.treeView.currentItem()
+        item = self._get_clicked_or_current_item()
         if item:
             uid = item.text(1)
             if uid in dm.part_dict:
@@ -703,7 +727,7 @@ class MainWindow(QMainWindow):
 
     def editName(self):
         """Edit name of treeView item clicked"""
-        item = self.itemClicked or self.treeView.currentItem()
+        item = self._get_clicked_or_current_item()
         if item:
             name = item.text(0)
             uid = item.text(1)
