@@ -482,8 +482,15 @@ class M2D:
         if self.win.shapeStack:
             while self.win.shapeStack:
                 shape = self.win.shapeStack.pop()
-                if shape in wp.edgeList:
-                    wp.edgeList.remove(shape)
+                # Use IsSame() instead of Python 'in'/remove() -- TopoDS
+                # shapes may be different Python objects but the same
+                # underlying geometry (same class of bug already fixed
+                # in kodacad.py's fillet()). Confirmed directly: the
+                # pick worked, but 'shape in wp.edgeList' silently never
+                # matched, so nothing was ever actually removed.
+                matching = next((e for e in wp.edgeList if e.IsSame(shape)), None)
+                if matching is not None:
+                    wp.edgeList.remove(matching)
             self.win.redraw()
         else:
             self.win.registerCallback(self.delElC)

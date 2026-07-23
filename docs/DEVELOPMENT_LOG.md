@@ -3187,3 +3187,13 @@ long lines for readability while writing is a reasonable habit in
 general, but headings are one of the few Markdown constructs where
 that habit actively breaks something -- worth remembering for any
 future long entries.
+
+## Session 44: delEl (delete profile element) silently not deleting -- same bug class as fillet, fixed the same way
+
+Doug found `delEl` picks a profile edge cleanly but never actually deletes it. Root cause: `if shape in wp.edgeList: wp.edgeList.remove(shape)` used Python's default equality on TopoDS shapes -- the exact same bug class already fixed once in `kodacad.py`'s `fillet()` (Session 20-era): a freshly-picked `TopoDS_Edge` can be a different Python wrapper object around the identical underlying geometry, so `in`/`remove()` silently never matches even when the edge genuinely is in the list. The pick worked; the membership check just never found it, so nothing was ever removed, and `redraw()` ran harmlessly on an unchanged list -- explaining exactly why this looked like "selection works, deletion doesn't."
+
+Fixed with the same `IsSame()`-based matching already proven in `fillet()`. Checked the rest of the codebase for the same pattern before considering this done -- only one `.remove()` call exists anywhere in `m2d.py`/`kodacad.py`/`mainwindow.py`/`workplane.py`, and it's the one just fixed, so this isn't a multi-site bug like the RMB handlers or `RemoveAll()` wipe were.
+
+### Lesson for future development
+
+**A bug fixed once in one function is worth remembering as a pattern to check for elsewhere the next time something "silently doesn't work" rather than crashes** -- the symptom here (pick succeeds, action silently no-ops) was different from fillet's crash, but the underlying cause was identical. Recognizing "this smells like the TopoDS-equality issue" from the symptom alone, before even opening the file, made this a fast, confident fix rather than a fresh investigation.
