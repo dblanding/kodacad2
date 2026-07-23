@@ -256,7 +256,9 @@ def extrudeC(shapeList, *args):
     """Callback (collector) for extrude"""
 
     win.lineEdit.setFocus()
-    if len(win.lineEditStack) == 2:
+    if len(win.lineEditStack) == 1:
+        win.statusBar().showMessage("Length received. Enter part name.")
+    elif len(win.lineEditStack) == 2:
         extrude()
 
 
