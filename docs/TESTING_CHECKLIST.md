@@ -53,6 +53,15 @@ silently come back.
 - [ ] Delete a leaf part, an assembly with children, one instance of a
       SHARED part (confirm the other instance survives untouched), and
       a workplane.
+- [ ] Click a tree item, then create a new part (extrude/revolve/etc,
+      which rebuilds the tree), then immediately RMB -> Set Active /
+      Rename / Set Transparent / Set Opaque / Delete WITHOUT clicking
+      a tree item again first -- confirm none of these crash with
+      "Internal C++ object already deleted" (Session 41: the clicked
+      item's underlying Qt object is destroyed by the tree rebuild;
+      all 5 RMB handlers now correctly fall back to
+      `treeView.currentItem()` in this case instead of using the
+      stale reference).
 
 ## Shared Instances
 

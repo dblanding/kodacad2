@@ -432,7 +432,7 @@ class M2D:
             self.win.registerCallback(self.arc3pC)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
-            statusText = "Pick start point on arc, then end then 3rd point on arc."
+            statusText = "Pick 3 points on arc, 1st and last picks are end points"
             self.win.statusBar().showMessage(statusText)
 
     def arc3pC(self, shapeList, *args):

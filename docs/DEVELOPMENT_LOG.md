@@ -3011,3 +3011,123 @@ tools" is itself a useful diagnosis, even without a fix** -- a crash
 with zero output is qualitatively different from every other bug this
 project has solved, where there's always been a stack trace, a print
 statement, or a file to grep.
+
+## Session 41: Bottle tutorial regression pass -- four issues, four
+separately-chunkable fixes
+
+Doug went through the Bottle tutorial again with a careful eye,
+catching several real issues in the early sketch/create steps -- the
+same value of "run something unrelated as a regression check" that
+caught the fillet crash back in Session 20.
+
+### 1. `arc3p` status bar text -- wording fix
+
+Changed to Doug's exact preferred wording: "Pick 3 points on arc, 1st
+and last picks are end points". `m2d.py`.
+
+### 2. ViewCube unresponsive during 2D sketching -- investigated,
+deliberately not fixed
+
+2D sketch operations call `SetSelectionModeVertex()` and similar --
+exclusive selection modes on the whole AIS context. This very likely
+suppresses the ViewCube's own hover/click detection as a side effect,
+since it relies on the same context's detection pipeline. A proper
+fix would need the ViewCube to hold its own persistent activation
+mode independent of whatever selection mode sketching currently has
+active -- real complexity, touching every place that currently just
+calls `SetSelectionModeXxx()` directly. Doug explicitly said not
+worth it if the fix adds complexity; documented as a known, accepted
+limitation rather than touched.
+
+### 3. `extrude` status bar not acknowledging the first value --
+fixed
+
+`extrudeC()` (the callback fired each time a value is submitted) only
+acted once BOTH the length and the name were in -- nothing updated
+the status bar between them, so it sat on the original "Enter
+extrusion length, then enter part name" text with no acknowledgment.
+Added an intermediate message when the length lands, prompting for
+the name. `kodacad.py`.
+
+### 4. RMB tree actions crashing with "Internal C++ object already
+deleted" -- fixed at the root; not independently reproducible on
+later attempts, kept anyway (see reasoning below)
+
+Doug's original report included a complete, unambiguous Python
+traceback -- not a vague symptom. That gave a clear mechanism to
+trace: `self.itemClicked or self.treeView.currentItem()`, used
+identically in FIVE handlers (`setClickedActive`, `deleteItem`,
+`setTransparent`, `setOpaque`, `editName`), all equally vulnerable.
+`self.itemClicked` goes stale whenever the tree is rebuilt (e.g.
+`extrude()` -> `build_tree()`) after an item was clicked but before
+an RMB action is taken on it -- the underlying C++ QTreeWidgetItem is
+destroyed, but the dead shiboken wrapper is still Python-truthy, so
+`or` never falls through to `currentItem()` the way the old code
+assumed, and calling `.text(0)` on it raises the crash directly.
+
+Fixed with `shiboken6.Shiboken.isValid()`, the documented, correct
+way to check whether a wrapper's underlying C++ object is still
+alive. Added one shared `_get_clicked_or_current_item()` helper and
+updated all 5 call sites to use it.
+
+**On follow-up, Doug could not reproduce the crash** with a more
+careful, deliberate sequence across several attempts (at one point
+deleting the workplane instead of the bottle by mistake, then
+successfully deleting the bottle cleanly). Doug raised a genuinely
+good question, worth answering directly rather than just deferring to
+caution: given it didn't reproduce, is the fix still needed?
+
+Yes, kept -- this is a different situation from something like the
+Dynamic manipulator's silent crash (Session 39), which we genuinely
+had no diagnostic handle on and rightly deferred. Here, the original
+traceback gave a complete, understood mechanism (a stale Qt reference
+that's Python-truthy despite being C++-dead), confirmed present
+identically in five places by reading the code directly -- independent
+of whether Doug's later, more careful manual attempts happened to hit
+the exact triggering sequence again. This class of bug is inherently
+sequence-dependent (the crash needs: click an item, THEN rebuild the
+tree via some other action, THEN RMB the same stale item without
+re-clicking) -- not retriggering it in careful, deliberate testing is
+exactly what you'd expect from a real timing bug, not evidence it
+isn't real. The fix itself is minimal, grounded in a documented API,
+and can't make anything WORSE even if the original diagnosis somehow
+turns out to be wrong (the fallback behavior -- using
+`currentItem()` -- is unchanged for every case where `itemClicked`
+was already valid).
+
+### Lesson for future development
+
+**A crash traceback naming one specific function is a starting point
+for a grep, not necessarily the full scope of the fix** -- four other
+handlers had the identical vulnerability, just hadn't been the one
+exercised in this particular test session. **A confirmed mechanism
+from a real traceback doesn't need repeated reproduction to justify
+keeping the fix** -- that bar makes sense for vague, diagnosis-free
+symptoms (where "I can't tell if this is even real" is the honest
+state of things), but here the mechanism was independently verified
+by reading the code, not inferred from the symptom alone. Doug's own
+discipline of writing down a first occurrence and attempting to
+reproduce it before treating it as a confirmed, standing issue is
+exactly right in general -- worth applying per-bug rather than
+uniformly, since a bug with a full traceback and a code-level
+explanation is already a different category of confirmed than one
+with neither.
+
+## Session 41 (cont'd): calculator entry glitch -- narrowed to a
+specific, useful lead
+
+Doug's "clineH stopped working" turned out to be unrelated to the
+Session 41 m2d.py edit (confirmed: the edit only touched arc3p's
+status text, nowhere near clineH; class structure verified intact).
+Traced by Doug himself to the RPN calculator widget: entering 30, then
+clicking x/2, produced 0.0 instead of 15 -- something after a
+stumbled entry (saw "300", removed a digit) left the calculator
+holding a value that displayed as 30 but wasn't actually 30.
+
+**Follow-up narrowed the trigger further**: happens specifically when
+a value is entered via the LAPTOP KEYBOARD, not the calculator
+widget's own on-screen buttons. A real, specific starting point for
+whenever this gets picked up -- worth comparing exactly how the two
+input paths differ in how they update the calculator's internal
+value vs. its displayed text. Not investigated further this
+session -- Doug's call, deferred.
