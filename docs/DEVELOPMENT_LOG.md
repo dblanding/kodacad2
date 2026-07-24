@@ -3197,3 +3197,15 @@ Fixed with the same `IsSame()`-based matching already proven in `fillet()`. Chec
 ### Lesson for future development
 
 **A bug fixed once in one function is worth remembering as a pattern to check for elsewhere the next time something "silently doesn't work" rather than crashes** -- the symptom here (pick succeeds, action silently no-ops) was different from fillet's crash, but the underlying cause was identical. Recognizing "this smells like the TopoDS-equality issue" from the symptom alone, before even opening the file, made this a fast, confident fix rather than a fresh investigation.
+
+## Session 45: tidying up -- boilerplate headers, version consistency, menu order
+
+Doug caught the file headers still referencing the original pyocc-era "kodacad" repo (no "2") and asked whether to fix the URL or drop the boilerplate. Found real precedent already in the repo: `docmodel.py` had been updated at some point to a shorter form -- project name corrected, full GPL paragraph and stale URL both dropped -- rather than just patching the URL. Confirmed a `LICENSE` file (GPLv3) already exists in the repo root, and confirmed Doug wanted to follow standard GPL practice: a short per-file notice, full legal text living once in `LICENSE`, not repeated six times. Applied `docmodel.py`'s pattern to the other five files (`kodacad.py`, `m2d.py`, `mainwindow.py`, `rpnCalculator.py`, `workplane.py`), and added one small, standard addition to all six for full consistency: a one-line license reference (FSF's own recommended short-form notice includes this; `docmodel.py`'s version hadn't had it either). Worth noting for the record: the old boilerplate referenced GPLv2, while the actual `LICENSE` file is GPLv3 -- a real mismatch, moot now that the old text is gone, but good to have caught.
+
+Also fixed real version inconsistencies beyond the one Doug had already caught (`version.py` -> `1.0.0`): `README.md` had "KodaCAD 3.0" in two places (title and body text), and `pyproject.toml` had `version = "0.1.0"`, a third, disconnected number. All three now agree.
+
+Moved "Position" one spot right in the menubar, after "Modify Active Part" -- worth noting this reverts to the exact order the original PDF design mockup showed, which an earlier session had deliberately deviated from (reasoning Position fit better woven into the Create-3D-to-Modify flow) and Doug had validated at the time. Not clear whether this is a reconsideration or just a preference shift -- noted for the record either way, not questioned further.
+
+### Lesson for future development
+
+**A previously-made, undocumented style change (docmodel.py's shortened header) is worth surfacing as precedent before making a fresh decision from scratch.** Doug's question presented two options (fix the URL, or drop the boilerplate); the actual best answer was a third one already sitting in the repo, just not the file that happened to prompt the question.

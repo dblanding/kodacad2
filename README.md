@@ -1,4 +1,4 @@
-# KodaCAD 3.0
+# KodaCAD 1.0
 
 A 3D CAD application for Python, built on
 [OCCT](https://www.opencascade.com/) via the
@@ -41,7 +41,7 @@ same XDE root label.
 
 ## Installation
 
-KodaCAD 3.0 uses [uv](https://github.com/astral-sh/uv) for dependency
+KodaCAD uses [uv](https://github.com/astral-sh/uv) for dependency
 management. No Conda required.
 
 ```bash

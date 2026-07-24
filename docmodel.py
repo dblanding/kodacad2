@@ -4,6 +4,7 @@
 # Ported to OCP/PySide6 2026
 #
 # This file is part of kodacad2.
+# Licensed under the GNU General Public License v3 -- see LICENSE.
 # OCP port: OCC.Core.X -> OCP.X, PyQt5 -> PySide6
 # API changes:
 #   binxcafdrivers_DefineFormat(app) -> BinXCAFDrivers.DefineFormat_s(app)

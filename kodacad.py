@@ -2,23 +2,8 @@
 #
 # Copyright 2022 Doug Blanding (dblanding@gmail.com)
 #
-# This file is part of kodacad.
-# The latest  version of this file can be found at:
-# //https://github.com/dblanding/kodacad
-#
-# kodacad is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# kodacad is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# if not, write to the Free Software Foundation, Inc.
-# 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# This file is part of kodacad2.
+# Licensed under the GNU General Public License v3 -- see LICENSE.
 #
 
 
@@ -768,8 +753,6 @@ if __name__ == "__main__":
     win.add_menu("Create 3D")
     win.add_function_to_menu("Create 3D", "Extrude", extrude)
     win.add_function_to_menu("Create 3D", "Revolve", revolve)
-    win.add_menu("Position")
-    win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Modify Active Part")
     win.add_function_to_menu("Modify Active Part", "Rotate Act Part", rotateAP)
     win.add_function_to_menu("Modify Active Part",
@@ -779,6 +762,8 @@ if __name__ == "__main__":
     win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
     win.add_function_to_menu("Modify Active Part", "Shell", shell)
     win.add_function_to_menu("Modify Active Part", "Fuse", fuse)
+    win.add_menu("Position")
+    win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")
     win.add_function_to_menu("Utility", "print label_dict", print_uid_dict)
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
