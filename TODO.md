@@ -17,20 +17,21 @@ Both developer and user contributions welcome.
 
 ## 3. Future development ideas
 
+### Create a new assembly
+
+### Copy part/assembly (both shared or copied)
+Add "Duplicate" to the RMB context menu. Should create an
+independent copy at the same world position, ready to reposition.
+
 ### Workplane label in viewport
 Display "w1", "w2" etc. in the lower-left corner of each
 workplane boundary rectangle so the active workplane is always
 identifiable. Possible approach: `AIS_TextLabel`
 
-### Copy part/assembly
-Add "Duplicate" to the RMB context menu. Should create an
-independent copy at the same world position, ready to reposition.
-
 ### More workplane creation modes
-Currently only "On Face" (two face picks) is supported. Add:
-- At origin (global XY/XZ/YZ planes)
+Add:
 - Offset from existing face
-- Through three points
+- Point & Direction (+U direction)
 
 ### Project part edges onto workplane as construction lines
 Pick an edge on a part and project it onto the active workplane

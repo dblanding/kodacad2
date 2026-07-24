@@ -3209,3 +3209,13 @@ Moved "Position" one spot right in the menubar, after "Modify Active Part" -- wo
 ### Lesson for future development
 
 **A previously-made, undocumented style change (docmodel.py's shortened header) is worth surfacing as precedent before making a fresh decision from scratch.** Doug's question presented two options (fix the URL, or drop the boilerplate); the actual best answer was a third one already sitting in the repo, just not the file that happened to prompt the question.
+
+## Session 46: Nudge ignoring the user's chosen units -- confirmed missing, fixed
+
+Doug switched Kodacad to inches for a real project (2x4 lumber), typed 0.75 into Nudge meaning 3/4", and the part moved 0.75 MM instead -- Nudge was silently ignoring the units setting entirely. Confirmed directly: `position_dialog.py` never referenced `win.unitscale` anywhere, while every other numeric entry point in the app (extrude, mill, pull, fillet, shell, all 2D sketch entry) already follows the established, documented convention in `mainwindow.py`: "(user input values) * unitscale = value in mm." Nudge's translation fields were the one typed-numeric-value entry point in the whole Position dialog that never got wired into it -- everything else in that dialog (2 Points, Mate/Align, Align Axis) works from picked geometry, which is inherently already in mm, so this specific gap never showed up until someone actually typed a distance by hand in a non-mm session.
+
+Fixed by multiplying dx/dy/dz by `self.main_win.unitscale` right after parsing, before they're used in the translation. Rotation values (rX/rY/rZ, always degrees) are correctly left alone -- angles don't have a length-unit dependency. Checked the rest of `position_dialog.py` for any other raw `float(...text())` parsing before considering this complete -- Nudge's six fields are the only typed-value entry point in the file.
+
+### Lesson for future development
+
+**An established, documented convention used consistently everywhere else in a codebase is worth checking explicitly for in any new numeric-input feature, not just assumed to be inherited automatically.** Nudge was built in Session 23, well after the unitscale convention was already standard practice across `kodacad.py` and `m2d.py` -- it just never got connected, because nothing about building it made the omission obvious until a real, non-mm use case exposed it directly.

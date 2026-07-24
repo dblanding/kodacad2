@@ -664,6 +664,20 @@ class PositionDialog(QDialog):
         if dx == dy == dz == rx == ry == rz == 0:
             return
 
+        # Convert translation from the user's displayed units into mm
+        # (Kodacad's internal storage unit) -- the same convention
+        # every other numeric entry point in the app already follows
+        # (extrude, mill, pull, fillet, shell, all 2D sketch entry):
+        # "(user input values) * unitscale = value in mm" (see
+        # mainwindow.py). CONFIRMED MISSING here directly: Doug
+        # switched to inches, typed 0.75 (meaning 3/4"), and the part
+        # moved 0.75 MM instead. Rotation values are in degrees and
+        # unit-independent -- correctly left alone.
+        unitscale = self.main_win.unitscale
+        dx *= unitscale
+        dy *= unitscale
+        dz *= unitscale
+
         import math
         from OCP.gp import gp_Trsf, gp_Vec, gp_Ax1, gp_Pnt, gp_Dir
         from OCP.TopLoc import TopLoc_Location
