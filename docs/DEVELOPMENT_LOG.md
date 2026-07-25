@@ -3219,3 +3219,66 @@ Fixed by multiplying dx/dy/dz by `self.main_win.unitscale` right after parsing, 
 ### Lesson for future development
 
 **An established, documented convention used consistently everywhere else in a codebase is worth checking explicitly for in any new numeric-input feature, not just assumed to be inherited automatically.** Nudge was built in Session 23, well after the unitscale convention was already standard practice across `kodacad.py` and `m2d.py` -- it just never got connected, because nothing about building it made the omission obvious until a real, non-mm use case exposed it directly.
+
+## Session 47: deleted parts orphaned instead of removed -- confirmed via CAD Assistant, fixed
+
+Doug used as1-oc-214.stp as a starting point for a real project, deleted the original components, and found them still present in the saved STEP file (viewed in CAD Assistant) as free shapes sitting alongside `as1`, even though Kodacad's own tree correctly showed them gone. Doug's own diagnosis was exactly right: `delete_component()`'s `RemoveComponent` call only drops the one component *reference* -- correctly so, since that's what has to happen for shared instances (breaking a sibling that still legitimately references the same part would be worse) -- but nothing ever checked whether that was the *last* reference, so a component with no siblings just became an orphaned, unreferenced free shape instead of being fully removed. XCAF writes every free shape to STEP regardless of whether anything points at it, which is exactly what showed up as siblings of `as1` in CAD Assistant.
+
+Fixed by checking `GetUsers_s()` (the same method already used for shared-instance detection since Session 22) immediately after removing the component reference -- if zero users remain, the now-orphaned referred shape is removed too via `RemoveShape`. Verified against OCCT's own reference documentation before trusting this: `RemoveShape` explicitly "returns False (and does nothing) if shape is not free or is not top-level shape" -- a real safety guarantee independent of the `GetUsers_s` check, so even if that check somehow missed something, `RemoveShape` itself refuses to touch anything still genuinely in use. Two independent layers of protection, not one relying on the other being perfect.
+
+### Lesson for future development
+
+**A fix that's correct for the shared case can still be incomplete for the common case, and it's worth checking both rather than stopping once the harder case is handled.** `RemoveComponent` alone was the *right* choice for not breaking shared instances -- the gap was never testing what happens when there's nothing shared to protect. Doug catching this by cross-checking the saved file in a second, independent tool (CAD Assistant) rather than trusting Kodacad's own tree view is exactly the kind of verification that's caught several of this project's real bugs before.
+
+## Session 47 (cont'd): existing orphans need a one-time external cleanup -- Kodacad's own tree can't see them
+
+Doug asked the right follow-up question: will the orphans already baked into his saved (pre-fix) session file go away on their own, or does he need to redo the work? Checked `parse_doc()` directly to answer precisely: it uses `shape_tool.GetShapes(labels); root_label = labels.Value(1)` -- only ever looking at the FIRST free/top-level shape in the document as "the root." Any additional free shapes -- including the orphans from before Session 47's fix -- are invisible in Kodacad's own tree and unreachable through the app's normal UI, regardless of the fix now being in place for future deletions.
+
+Built `cleanup_orphans.py`, a standalone, two-step script (matching the same safe pattern as `occt_bug_repro.py`/`minimal_repro.py`): Step 1 lists every free shape in a file (read-only); Step 2 removes everything except explicitly-named entries to keep, writing to a NEW file rather than overwriting the original. Never guesses which shape is the "real" root -- Doug confirms that himself from the Step 1 listing.
+
+Caught and fixed one mistake before shipping it: the entry-extraction helper initially passed a plain Python string to `TDF_Tool.Entry_s` as an out-parameter, which can't work (Python strings are immutable) -- fixed to match `docmodel.py`'s own proven pattern (a mutable `TCollection_AsciiString` object) before it ever got run.
+
+**Worth a separate design conversation, not resolved here:** should Kodacad's own tree-building show every free shape in a document (making a stray orphan visible and manageable through the normal UI, if one ever occurs again for some other reason), or is enforcing "exactly one root" a deliberate simplification worth keeping? Not changed this session -- a bigger, more invasive change than fixing the immediate problem needed, with unclear ripple effects on other code that may assume a single root.
+
+### Lesson for future development
+
+**A fix that prevents a problem going forward doesn't automatically clean up damage the problem already caused, and it's worth checking explicitly whether it does before telling someone the issue is resolved.** Session 47's `delete_component()` fix is complete and correct for anything deleted from now on -- but Doug's file was already saved before that fix existed, and the fix has no mechanism (and, by design, no way) to retroactively reach back into an already-written file. Worth stating this distinction plainly rather than letting "fixed" imply "and your existing file is fine now too."
+
+## Session 47 (cont'd again): orphan cleanup needed to recurse, not just check one level -- fixed in both places
+
+Doug's first cleanup run left new orphans behind: removing `rod-assembly` and `l-bracket-assembly` (both correctly identified as orphaned) exposed their OWN children -- `rod`, `nut-bolt-assembly`, `l-bracket` -- as newly-orphaned free shapes one level deeper, since `RemoveShape(label, True)` doesn't cascade orphan-detection through nested levels on its own. Doug's own diagnosis and proposed fix ("a -r option, or rerun until stable") was exactly right.
+
+Fixed in both places this affects:
+
+- `cleanup_orphans.py` now loops automatically (up to 20 passes) -- each pass re-checks `GetFreeShapes()` rather than computing the removal list once, so it keeps going until a full pass removes nothing new. No manual re-running needed.
+- **The same gap almost certainly exists in the main app's `delete_component()` fix from earlier this session** -- it only checked one level of orphaning, so deleting a multi-level nested assembly (like `l-bracket-assembly`, which contains `nut-bolt-assembly`) would very likely leave the same kind of deeper orphan behind. Fixed with a new, recursive `remove_shape_and_orphaned_descendants()` helper: captures a shape's children's referred labels *before* removing it (removal destroys the component references needed to find them), then recursively checks each captured child for orphan status and cleans it up too. `delete_component()` now uses this instead of a bare `RemoveShape()` call, for both the "component under an assembly" and "free root shape" cases.
+
+### Lesson for future development
+
+**A fix confirmed correct for the reported case can still have the same structural gap one level deeper, and it's worth checking explicitly for recursion rather than assuming a single level was the whole problem.** The earlier delete_component() fix (checking GetUsers_s once, after one RemoveComponent) was correct as far as it went -- it just didn't go far enough for nested assemblies, and nothing about testing a single-level deletion would have revealed that. Doug's own cleanup script run, on real multi-level data, is what actually exposed it.
+
+## Session 48: recursive orphan fix still leaving l-bracket-assembly behind -- hypothesis attempted, diagnostic added, not yet confirmed
+
+Doug tested Session 47's recursive `delete_component()` fix directly: loaded as1-oc-214.stp, deleted BOTH shared instances of l-bracket-assembly, saved, checked in CAD Assistant. Still present as an orphan -- the fix did not resolve this case.
+
+**Best-reasoned hypothesis attempted, not confirmed:** `UpdateAssemblies()` was only called once, at the very end of `delete_component()`, after the orphan-detection decision had already been made. Added an explicit `UpdateAssemblies()` call immediately after `RemoveComponent()`, before checking `GetUsers_s` -- on the theory that XCAF's internal bookkeeping about what's now free might need an explicit refresh right after removing a component reference, before `GetUsers_s`/`RemoveShape` can correctly see the change reflected. `RemoveShape` explicitly documents that it refuses to act on anything not genuinely free/top-level, so a stale view at exactly this point would produce precisely Doug's symptom -- appearing to silently do nothing.
+
+**Also added a diagnostic print** reporting the actual `n_users` count `GetUsers_s` sees at the moment the removal decision is made. Not removed even if the hypothesis above turns out to be right, since it's cheap and directly answers the one question needed to confirm or rule out this line of reasoning without another round of blind guessing.
+
+**Explicitly not confirmed working.** This is being shipped as a well-reasoned attempt with a built-in diagnostic, not a verified fix -- worth being honest about that distinction given how many prior sessions on this exact class of bug (component deletion / shared-instance orphaning) turned out to need more than one attempt.
+
+### Lesson for future development
+
+**When a fix doesn't work and the reason isn't obvious, pairing the next attempt with a diagnostic that directly answers the open question is better than either guessing again silently or asking for another round of raw terminal output first.** If this attempt is also wrong, the printed `n_users` value tells us immediately whether the orphan-detection logic itself is sound (and something else is the problem) or whether `GetUsers_s` genuinely isn't seeing what it should at that point -- narrowing the next attempt considerably either way.
+
+## Session 48 (cont'd): confirmed working -- likely a stale-process false alarm on the first test
+
+Doug retested the exact same scenario (delete both l-bracket-assembly instances one at a time via RMB, letting the tree refresh between each) and this time it worked correctly -- confirmed via the `[save_step_doc]` pre-write dump showing exactly one free shape (`as1`, with only `rod-assembly_1` and `plate_1` as children, no orphaned sibling), and confirmed again in CAD Assistant.
+
+Doug's own theory is the most likely explanation: Kodacad wasn't restarted between receiving the Session 47/48 code and the first test, so that run was very likely still executing the pre-fix `delete_component()` regardless of what was already saved to disk -- Python doesn't hot-reload a running process's already-imported modules.
+
+**One loose end, not chased further right now:** the terminal output from the successful run does NOT show the `[delete] orphan check: ref_label users=N` diagnostic added in Session 48's `UpdateAssemblies()`-timing attempt -- meaning this successful run may still have been on Session 47's code alone (without Session 48's addition), which would mean the recursive-removal fix by itself was already sufficient, and the `UpdateAssemblies()` timing theory was never actually tested. Worth a clean-restart confirmation to know for certain which specific change deserves credit, but not urgent -- either way, deletion + save now produces a correct result for this exact scenario.
+
+### Lesson for future development
+
+**"Did you restart the app after the code changed?" is worth asking early when a fix appears not to work, before investigating further** -- a stale, already-running process executing old code is a mundane, extremely common explanation that produces symptoms indistinguishable from a genuinely unfixed bug, and costs nothing to rule out first.

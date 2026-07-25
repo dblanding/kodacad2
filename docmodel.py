@@ -460,9 +460,18 @@ class DocModel:
             ref_label = TDF_Label()
             has_ref = shape_tool.GetReferredShape_s(comp_label, ref_label)
             shape_tool.RemoveComponent(comp_label)
+            # Refresh XCAF's own bookkeeping BEFORE checking orphan
+            # status -- hypothesis being tested (Doug's report: deleting
+            # BOTH shared instances of l-bracket-assembly still left it
+            # behind as an orphan): GetUsers_s/RemoveShape may be
+            # working off a stale view of what's free immediately after
+            # RemoveComponent, without an explicit refresh here.
+            shape_tool.UpdateAssemblies()
             if has_ref and not ref_label.IsNull():
                 users = TDF_LabelSequence()
                 n_users = shape_tool.GetUsers_s(ref_label, users, False)
+                print(f"[delete] orphan check: ref_label users={n_users} "
+                     f"(0 means the underlying shape should now be removed too)")
                 if n_users == 0:
                     remove_shape_and_orphaned_descendants(shape_tool, ref_label)
         else:
