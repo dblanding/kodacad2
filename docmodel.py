@@ -117,6 +117,47 @@ def get_last_component(shape_tool, assembly_label):
     return comps.Value(comps.Length())
 
 
+def remove_shape_and_orphaned_descendants(shape_tool, label):
+    """Remove `label` completely, AND recursively clean up any of its
+    own children that become newly orphaned as a result.
+
+    RemoveShape(label, True) alone does not correctly cascade orphan-
+    detection through nested levels -- confirmed directly (Session 47
+    cont'd): cleanup_orphans.py's first pass removed a top-level
+    orphaned assembly (e.g. l-bracket-assembly) but left ITS OWN
+    children (e.g. nut-bolt-assembly, l-bracket) behind as NEW orphans,
+    requiring repeated passes to fully clean up. This is the same
+    class of issue delete_component() already handles for a single
+    level -- here it's handled recursively, so a multi-level nested
+    assembly is fully cleaned up in one call rather than needing the
+    caller to loop.
+
+    Captures each child's referred label BEFORE removing `label`
+    itself (since removing label destroys the component references
+    that point at them), then checks each captured child for orphan
+    status (GetUsers_s == 0) and recurses into it if so.
+    """
+    from OCP.TDF import TDF_Label, TDF_LabelSequence
+    child_refs = []
+    if shape_tool.IsAssembly_s(label):
+        children = TDF_LabelSequence()
+        shape_tool.GetComponents_s(label, children, False)
+        for i in range(1, children.Length() + 1):
+            child_comp = children.Value(i)
+            child_ref = TDF_Label()
+            if (shape_tool.GetReferredShape_s(child_comp, child_ref)
+                    and not child_ref.IsNull()):
+                child_refs.append(child_ref)
+
+    shape_tool.RemoveShape(label, True)
+
+    for child_ref in child_refs:
+        users = TDF_LabelSequence()
+        n_users = shape_tool.GetUsers_s(child_ref, users, False)
+        if n_users == 0:
+            remove_shape_and_orphaned_descendants(shape_tool, child_ref)
+
+
 def create_doc():
     """Create (and return) XCAF doc and app
 
@@ -381,11 +422,31 @@ class DocModel:
 
         A component under an assembly is removed with RemoveComponent
         (drops that one reference -- other shared instances of the
-        same part/assembly elsewhere in the tree are unaffected). A
-        free root shape (no parent) is removed with RemoveShape.
-        Mirrors the removal step already used in reparent_component().
+        same part/assembly elsewhere in the tree are unaffected). If
+        that was the LAST reference to its underlying shape (checked
+        via GetUsers_s, the same method already used for shared-
+        instance detection since Session 22), the now-orphaned
+        referred shape is removed too -- RECURSIVELY, via
+        remove_shape_and_orphaned_descendants(), since a multi-level
+        nested assembly (e.g. l-bracket-assembly, which itself
+        contains nut-bolt-assembly) can have its OWN children become
+        newly orphaned one level deeper -- a single RemoveShape() call
+        does not cascade orphan-detection through nested levels on its
+        own (confirmed directly via cleanup_orphans.py hitting the
+        identical issue). Otherwise an orphan lingers in the document
+        as an unreferenced free shape, which XCAF still writes out to
+        STEP regardless of nothing pointing at it. Confirmed directly:
+        Doug deleted several original components from as1 and saved,
+        and CAD Assistant showed them still present as free shapes
+        alongside as1 in the file, even though Kodacad's own tree
+        correctly showed them gone.
+
+        A free root shape (no parent) is removed the same recursive
+        way. Mirrors the removal step already used in
+        reparent_component().
         """
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_Label, TDF_LabelSequence
         if uid not in self.label_dict:
             print(f"[delete] Unknown uid {uid}")
             return False
@@ -396,9 +457,16 @@ class DocModel:
             return False
         current_parent_uid = self.label_dict[uid].get('parent_uid')
         if current_parent_uid:
+            ref_label = TDF_Label()
+            has_ref = shape_tool.GetReferredShape_s(comp_label, ref_label)
             shape_tool.RemoveComponent(comp_label)
+            if has_ref and not ref_label.IsNull():
+                users = TDF_LabelSequence()
+                n_users = shape_tool.GetUsers_s(ref_label, users, False)
+                if n_users == 0:
+                    remove_shape_and_orphaned_descendants(shape_tool, ref_label)
         else:
-            shape_tool.RemoveShape(comp_label, True)
+            remove_shape_and_orphaned_descendants(shape_tool, comp_label)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
         return True

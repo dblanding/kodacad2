@@ -88,6 +88,10 @@ independent copy at the same world position, ready to reposition.
 
 #### Auto append of '_n' to part names. Why is that?
 
+#### Remove test items in "Modify Active Part" menu
+* "Rotate Active Part"
+* "Reverse Rotate Active Part"
+
 ---
 
 ## 3. Future development ideas (Big jobs - Not likely any time soon)
