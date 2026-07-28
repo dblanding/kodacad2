@@ -1,7 +1,7 @@
 # KodaCAD Development Log
 
 This document is a chronological record of the development sessions for
-KodaCAD 3.0. It documents the hard-won knowledge acquired during each
+kodacad2. It documents the hard-won knowledge acquired during each
 session: what broke, what was discovered, what was fixed, and why.
 
 It is written primarily for developers (and for "future Claude") who need
@@ -3282,3 +3282,40 @@ Doug's own theory is the most likely explanation: Kodacad wasn't restarted betwe
 ### Lesson for future development
 
 **"Did you restart the app after the code changed?" is worth asking early when a fix appears not to work, before investigating further** -- a stale, already-running process executing old code is a mundane, extremely common explanation that produces symptoms indistinguishable from a genuinely unfixed bug, and costs nothing to rule out first.
+
+## Session 49: undo/redo and native save/load -- smoke tests written, not yet run
+
+Doug's Quaoar tutorial insight: OCAF has BOTH undo/redo and native document save/load built in, and Kodacad already creates its documents in BinXCAF format -- OCAF's own native persistence format, not just a format STEP happens to use internally. Worth genuinely investigating rather than assuming either "too hard" (Doug's original impression from early in the port) or "just works" (unverified optimism) -- exactly the kind of claim this project has learned to verify empirically before building on.
+
+Researched both APIs before writing anything. Undo/redo: `SetUndoLimit()` (disabled by default, takes effect on the next `NewCommand()`), `NewCommand()` (commits the current transaction and opens a new one), `Undo()`/`Redo()` (one step each). Confirmed directly: undo/redo history does NOT persist across save/load (a real OCCT forum thread confirms this explicitly) -- a session-only feature by design, matching how most CAD tools work anyway, not a limitation specific to this approach.
+
+Native save/load: `TDocStd_Application::SaveAs`/`Open`, `PCDM_StoreStatus`/`PCDM_ReaderStatus`. Found a genuinely mixed signal worth being honest about rather than glossing over: a real, confirmed GitHub issue (CadQuery/OCP#182, CadQuery/cadquery#1599) reports `Open()` returning an EMPTY document specifically in OCP's wrapping, as recently as last year -- while other real code (CadQuery/OCP#55) shows `SaveAs` working correctly. This is exactly the kind of uncertain-until-tested-on-THIS-specific-setup situation Doug's smoke-test instinct is built for.
+
+**Two smoke tests written, testing real operations rather than trivial cases:**
+
+- `smoke_test_save_load.py` -- builds an assembly with a genuinely SHARED instance (not just a bare leaf part), saves via `SaveAs`, reopens in a completely fresh document via `Open`, and dumps the result for comparison. Sharing was specifically included because that's exactly the kind of thing that's gone wrong with STEP round-trips in this project before -- worth checking whether native persistence handles it correctly rather than assuming it does just because it's "native."
+- `smoke_test_undo_redo.py` -- tests undo/redo against the SPECIFIC XCAF operations `docmodel.py` actually performs: `AddComponent` (the normal part-add path) and the `RemoveComponent`+`AddComponent` reposition pattern (`set_component_location()`, Session 22 onward) -- not a trivial attribute change, since what matters is whether OCAF's transaction system correctly tracks the actual operations Kodacad uses, not whether undo/redo works in the abstract.
+
+**Not yet run.** Written and compiled, but the real answer -- whether either capability is usable in Kodacad's actual environment -- can only come from Doug running them and sharing the output, the same as every other empirical question in this project.
+
+### Lesson for future development
+
+**A "maybe this is achievable" question is worth researching thoroughly enough to find the REAL uncertainty (a confirmed, contradictory GitHub issue) before writing any test code**, rather than either taking the OCCT documentation at face value or assuming a clean answer exists. The mixed signal found here isn't a reason to avoid testing -- it's the precise reason a smoke test is the right next step, and it's also valuable context to hand back to Doug rather than silently writing tests as if the outcome were already known.
+
+## Session 49 (cont'd): results in -- undo/redo confirmed working, native save/load confirmed blocked by a real OCP bug
+
+Doug ran both smoke tests. Split result, both conclusive:
+
+**Undo/redo: CONFIRMED WORKING.** Every step of the real-operations test passed exactly as expected -- 2 available undos after 2 committed transactions, `Undo()` x2 correctly reverted the reposition then the `AddComponent` back to an empty assembly, `Redo()` x2 correctly replayed both, ending in a state matching the original "after reposition" dump exactly. OCAF's transaction system correctly tracks the actual XCAF operations `docmodel.py` performs (`AddComponent`, the `RemoveComponent`+`AddComponent` reposition pattern) -- this is a real, usable foundation for an undo/redo feature, not just a documented capability that might not apply to Kodacad's specific usage.
+
+**Native save/load: CONFIRMED BLOCKED.** `SaveAs` returns `PCDM_SS_OK`, `Open` returns `PCDM_RS_OK` -- both report success -- but the reopened document has ZERO free shapes. Completely empty despite both status codes claiming success. This matches a real, previously-found GitHub issue (CadQuery/OCP#182, "Empty document when trying to use TDocStd_Application::Open wrapped by OCP") closely enough to be confident it's the same underlying binding-layer bug, not something specific to this test or a mistake in how it was set up. This is a genuine limitation in the OCP binding itself, not something fixable from Kodacad's side without either a workaround or an upstream OCP fix.
+
+### What this means going forward
+
+Undo/redo is worth pursuing as a real feature -- the mechanism is confirmed sound on real operations. Integrating it into Kodacad would mean wiring `NewCommand()` calls around user-initiated operations throughout `kodacad.py`/`m2d.py`/`position_dialog.py`, plus UI wiring (Ctrl+Z/Ctrl+Y, menu items, keeping the UI in sync after an Undo/Redo changes the document without going through the normal operation handlers) -- a real integration effort, but built on a confirmed-solid foundation rather than an open question.
+
+Native document save/load is blocked for now. STEP export remains the only viable persistence path, with its own already-documented, already-worked-around limitations (the assembly-import-persistence issue from Sessions 17-30, now also the subject of the ongoing OCCT discussion thread). Worth revisiting if OCP fixes the underlying issue upstream, or if a workaround surfaces -- not investigated further this session pending Doug's call on whether that's worth the effort.
+
+### Lesson for future development
+
+**Writing the smoke test before committing to integration work paid off exactly as intended -- one path confirmed genuinely viable, one path confirmed genuinely blocked, both on real evidence rather than documentation-reading or optimism.** Worth noting the asymmetry: a positive smoke-test result (undo/redo) still requires real integration effort to become a feature, while a negative result (save/load) closes the question cleanly and immediately, saving what would have been a much more expensive discovery mid-integration.
