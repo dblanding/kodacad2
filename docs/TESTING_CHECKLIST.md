@@ -247,7 +247,14 @@ haven't gotten WORSE)
   aside as a known, well-understood (if unresolved) limitation rather
   than chased further for now. Items NATIVE to the session file
   (never imported) are unaffected, including shared instances --
-  see the Session Save/Reload section above.
+  see the Session Save/Reload section above. The LEAF-part-survives
+  side of this was further confirmed (Session 50) against real,
+  externally-authored content -- two FreeCAD-exported parts imported,
+  repositioned, and correctly surviving save/reload through the real
+  application workflow, not just synthetic test geometry. Importing
+  and positioning individual parts is a fully reliable workflow today;
+  the limitation is specifically scoped to repositioning an imported
+  ASSEMBLY as a unit.
 - Repositioning a child within a shared parent assembly (e.g. moving
   `l-bracket` inside `l-bracket-assembly_2`) PROPAGATES to every
   instance of that parent (`l-bracket-assembly_1` too) -- this is

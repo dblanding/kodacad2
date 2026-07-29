@@ -3319,3 +3319,15 @@ Native document save/load is blocked for now. STEP export remains the only viabl
 ### Lesson for future development
 
 **Writing the smoke test before committing to integration work paid off exactly as intended -- one path confirmed genuinely viable, one path confirmed genuinely blocked, both on real evidence rather than documentation-reading or optimism.** Worth noting the asymmetry: a positive smoke-test result (undo/redo) still requires real integration effort to become a feature, while a negative result (save/load) closes the question cleanly and immediately, saving what would have been a much more expensive discovery mid-integration.
+
+## Session 50: leaf-part import/reposition persistence confirmed via real external data (FreeCAD)
+
+Doug tested with genuinely external, real-world STEP files for the first time on this question: imported 2 FreeCAD-authored parts (simple, no internal assembly structure) into an as1-oc-214.stp session, repositioned them from their at-origin import locations to the plate's corners, deleted everything else, saved, and reloaded. Positions survived correctly.
+
+This confirms, via real external data through the actual application workflow, the same leaf-vs-assembly distinction the `minimal_repro.py` investigation established back in Session 28 (Scenario A: flat leaf shape import + move, WORKS; Scenario B: nested assembly import + move, FAILS) -- and further confirmed by `occt_bug_repro.py`'s Case 2 control case. What's new here isn't the underlying diagnosis, which was already well-characterized -- it's independent, real-world confirmation that the diagnosis holds for actual FreeCAD-authored content through Kodacad's real UI (import, Position dialog, delete, save/reload), not just synthetic test geometry run through a standalone script.
+
+**Practically useful, worth stating plainly:** importing and repositioning individual parts is a fully reliable workflow today, independent of the ongoing OCCT discussion thread. The known limitation is specifically scoped to repositioning an imported assembly (something with its own internal component structure) as a unit -- not to importing external STEP content in general.
+
+### Lesson for future development
+
+**Confirming an existing diagnosis against real, independently-sourced data (a different CAD tool's actual export, not synthetic test geometry) is worth doing even when the underlying mechanism is already well understood** -- it turns "we believe this is scoped correctly, based on our own test cases" into "we've confirmed this holds against real external content too," which is a meaningfully stronger claim to stand behind, and a genuinely useful thing to know is true before recommending a workaround to rely on.
