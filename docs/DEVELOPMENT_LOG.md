@@ -3331,3 +3331,180 @@ This confirms, via real external data through the actual application workflow, t
 ### Lesson for future development
 
 **Confirming an existing diagnosis against real, independently-sourced data (a different CAD tool's actual export, not synthetic test geometry) is worth doing even when the underlying mechanism is already well understood** -- it turns "we believe this is scoped correctly, based on our own test cases" into "we've confirmed this holds against real external content too," which is a meaningfully stronger claim to stand behind, and a genuinely useful thing to know is true before recommending a workaround to rely on.
+
+## Session 51: FreeCAD's actual source confirms a real alternative strategy -- smoke test built to verify it, carefully, given Session 29's history
+
+Doug's FreeCAD experiment (Session 50-adjacent) succeeded where Kodacad has struggled -- imported two assemblies, repositioned one, exported, and both survived a full round trip with names and locations intact. Doug asked whether FreeCAD's open source could show us how. It can, and does, directly.
+
+Read FreeCAD's actual `ExportOCAF::saveShape()` source (confirmed via GitHub, not inferred): FreeCAD never uses `XCAFDoc_Editor::Extract_s` or any cross-document label copying. On import, it reads shape/name/location out of the source document as plain data into its own separate `App::DocumentObject` model (confirmed via FreeCAD's own architecture documentation), discarding the original document entirely. On export, it rebuilds a completely fresh XCAF document from scratch using ordinary same-document `AddShape`/`AddComponent` calls. Every shape FreeCAD writes is, from that document's own perspective, natively created -- exactly matching the case already confirmed reliable in Kodacad (native session content never shows this bug; only `Extract_s`-based cross-document import does).
+
+**Explicit caution carried into this session:** Session 29 already attempted something in this spirit (native-rebuild-with-recursion) and it regressed internal sharing within imported files -- rebuilding naively duplicated shared geometry instead of preserving it. Doug's own prior finding (the p-curve filesize discovery) increased confidence that FreeCAD's OCAF handling is generally careful and well-considered, but that's still a reason to verify rather than a substitute for it.
+
+Built `smoke_test_freecad_strategy.py`: constructs a source assembly with a genuinely shared leaf part (two instances, different locations), rebuilds it natively into a destination document via a recursive `rebuild_natively()` function using a memo dict keyed by source entry (so a shared part is rebuilt once and referenced twice, not duplicated -- the specific thing Session 29 got wrong), adds it as a component of existing destination content, repositions it via the exact `RemoveComponent`+`AddComponent` pattern that has been the failure point in every prior attempt, writes to STEP, and reads back fresh. Added an explicit sharing-verification step (comparing the reloaded instances' referred-entry strings directly) rather than leaving sharing correctness to be inferred from a name/location dump alone.
+
+**Not yet run.** This is the test that will tell us whether Kodacad should adopt this strategy for `add_component_from_label` -- real answer pending Doug running it.
+
+### Lesson for future development
+
+**A competitor/peer project's success at something we've struggled with is worth investigating at the actual source level, not just observing the outcome and guessing at the mechanism.** Reading FreeCAD's real export code turned "they must be doing something different" into a specific, checkable, three-sentence description of exactly what's different -- which is what made it possible to design a precise smoke test around the exact risk (sharing preservation) rather than a generic "does this work" test.
+
+## Session 51 (cont'd): FreeCAD-strategy hypothesis disproven -- new, sharper question isolated
+
+Doug ran smoke_test_freecad_strategy.py. Surprising, valuable negative result: the fully native rebuild (AddShape/AddComponent only, zero Extract_s anywhere) failed IDENTICALLY to the original bug -- blank/auto-generated name, identity location. This directly disproves the "cross-document Extract_s copying is the root cause" hypothesis this whole investigation (including the OCCT discussion thread) has been built on -- a native rebuild in the SAME document hits the exact same failure.
+
+This conflicts with something already well-established in this project: l-bracket-assembly (itself containing nested nut-bolt-assembly children) has been repositioned via this exact RemoveComponent+AddComponent pattern reliably, confirmed surviving save/reload many times across many sessions (Sessions 33-36 and after). So "reposition an assembly" is not inherently broken -- something else differs between that confirmed-working case and this newly-failing one.
+
+One real difference identified: l-bracket-assembly's structure was read WHOLESALE by STEPCAFControl_Reader from an existing STEP file. smoke_test_freecad_strategy.py's rebuild, and add_component_from_label's real usage, both construct NEW label structure via explicit Python-level AddShape/AddComponent calls within the current session. Built smoke_test_pure_native_assembly.py to isolate this specific variable: an assembly built via AddShape/AddComponent from the very start, in ONE document, no cross-document anything at all -- as pure a native case as this project has tested for an ASSEMBLY specifically (leaf parts already confirmed fine via occt_bug_repro.py's Case 2; this is the assembly equivalent).
+
+If this also fails: the bug isn't about import/Extract_s/rebuilding at all -- it's specifically about repositioning any assembly-typed component via RemoveComponent+AddComponent, and l-bracket-assembly's success must depend specifically on being reader-constructed. That would be a significant pivot in understanding this entire limitation, seven-plus sessions in. If it succeeds, the dividing line is specifically "built via Python calls this session" vs. "read wholesale by the STEP reader" -- also a real, actionable finding, just a narrower one.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**A hypothesis that looked well-evidenced (confirmed via reading real, working competitor source code) can still be wrong, and disproving it cleanly is worth just as much as confirming one would have been.** The FreeCAD-strategy test wasn't wasted effort even though it failed -- it eliminated an entire plausible explanation with a single clean data point, and in doing so pointed at a sharper, more specific question (construction method, not document boundary) that a vaguer "why doesn't this work" investigation might not have found as directly.
+
+## Session 51 (cont'd again): pure native assembly ALSO fails, worse than before -- new hypothesis, instrumented test built
+
+Doug ran smoke_test_pure_native_assembly.py. Result: the component is COMPLETELY ABSENT after the round trip -- not blank-name/identity-location like every prior failure, but genuinely missing entirely. This rules out the "reader-constructed vs Python-constructed" hypothesis (since a genuinely pure, single-document, zero-import native case still fails) -- and it conflicts even more sharply with l-bracket-assembly's confirmed-reliable repositioning throughout this project.
+
+Worse-than-before is itself a meaningful clue, not just a bigger failure. New hypothesis: RemoveComponent() may silently prune the now-unreferenced underlying shape internally -- the same cleanup Session 47 had to add EXPLICITLY for delete_component() (GetUsers_s + RemoveShape). If OCAF does something like this internally for RemoveComponent too, the ref_label captured immediately beforehand (the exact pattern this project has used throughout for every reposition) could already be dangling by the time it's reused in the following AddComponent() call -- and OCAF may silently accept a component built on a dangling reference rather than raising an error, consistent with the pattern of silent no-ops this project has hit repeatedly elsewhere (guessed-wrong enum names, stale Qt references).
+
+Built smoke_test_removecomponent_timing.py to check this directly: captures the document's actual state (via GetFreeShapes) at the precise moment between RemoveComponent() and the next AddComponent(), rather than only checking the final round-trip result. If the referred assembly isn't present as a free/orphaned shape at that exact moment, that's a strong, direct confirmation of this hypothesis -- and would mean the fix is to re-resolve or re-validate the referred label immediately before reuse, not to change where the original content came from at all.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**When a new test's result is WORSE than a previously-understood failure, not just a repeat of it, that difference is itself informative and worth chasing specifically rather than folding into "yet another instance of the same bug."** A single symptom category ("name/location lost on reposition") had been treated as one bug for many sessions; "completely absent" versus "present but blank" turned out to be the detail that pointed toward a genuinely different, more specific mechanism (a stale reference from RemoveComponent's own internal behavior) rather than anything about import or construction history at all.
+
+## Session 51 (cont'd yet again): RemoveComponent-staleness hypothesis disproven -- pivoting to raw-file inspection
+
+Doug ran smoke_test_removecomponent_timing.py. Clean, important negative result: ref_label stays completely valid immediately after RemoveComponent(), GetFreeShapes() correctly shows it as an orphaned free shape, and the following AddComponent() succeeds perfectly -- the new component's own referred shape resolves correctly, and that shape's own child (sub_box_1_1) is exactly right. The in-memory state is 100% correct. This disproves the "RemoveComponent silently invalidates the label" hypothesis.
+
+Combined with smoke_test_pure_native_assembly.py's failure (component completely absent after a full write/read round trip using this exact same, now-confirmed-correct in-memory state), the conclusion narrows sharply: the bug is not in the reposition logic at all -- it's specifically in the STEP write or read step, for a case (pure single-document, natively-built assembly, repositioned) that has never actually been inspected at the RAW FILE TEXT level before. Every prior raw-file inspection in this project (going back to minimal_repro.py) was done on the cross-document Extract_s case specifically.
+
+Built smoke_test_raw_file_inspection.py: repeats the exact confirmed-correct build+reposition, writes to STEP, and greps the RAW FILE TEXT directly for NEXT_ASSEMBLY_USAGE_OCCURRENCE and CARTESIAN_POINT entities -- before ever involving a fresh reader pass. This separates two genuinely different possible failures cleanly: the WRITER never putting correct data in the file to begin with, versus the file being written correctly and the READER failing to reconstruct it.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**Disproving a specific, well-reasoned hypothesis with a clean instrumented test is real progress, not a wasted attempt** -- each of this session's three tests eliminated a distinct, plausible explanation (cross-document copying, construction-method history, RemoveComponent staleness) with actual evidence rather than leaving them as unexamined possibilities, narrowing what's left to investigate at every step rather than accumulating a pile of unresolved guesses.
+
+## Session 51 (cont'd once more): zero NAUO entities at all -- a much more severe result than expected, forcing reconsideration
+
+Doug ran smoke_test_raw_file_inspection.py. Severe result: ZERO NEXT_ASSEMBLY_USAGE_OCCURRENCE entities anywhere in the raw file text -- not malformed, not blank-named, completely absent. None of the CARTESIAN_POINT values show the (50,0,0) reposition translation anywhere either; the only points present are the two boxes' own corner coordinates. The writer isn't writing this assembly's structure incorrectly -- it isn't writing it at all.
+
+Confirmed Kodacad's real save_step_doc() uses the identical write pattern as every test script this session (STEPCAFControl_Writer(WS, False), Transfer(doc, STEPControl_AsIs), Write()) -- ruling out a missing call in the test scripts specifically.
+
+This forces an uncomfortable reconsideration of this whole session's working assumption. occt_bug_repro.py's Case 1 -- which DID show 'base' with a child present in the file (wrong name/location, but structurally there) -- went THROUGH XCAFDoc_Editor::Extract_s before the component was added. Every native test this session (never touching Extract_s) has shown either the same failure or worse. That raises the possibility that Extract_s isn't purely the villain this entire investigation (including the OCCT discussion thread) has assumed -- it may perform some necessary setup that purely manual AddComponent construction is missing, without which the writer can't recognize the assembly relationship at all.
+
+Built smoke_test_native_no_reposition.py to isolate REPOSITION as a variable directly: identical structure, added as a component ONCE and left alone -- no RemoveComponent+AddComponent at all. If this ALSO shows zero NAUO entities, reposition isn't the trigger -- ANY purely native, Extract_s-free, multi-level assembly fails to write its structure, a far more fundamental finding than anything this entire multi-session investigation has been built around. If it succeeds, the trigger is specifically reposition applied to a purely-native assembly -- still a new finding, but a narrower one.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**A severe, unexpected result (complete structural absence, not a degraded version of a known symptom) is a strong signal that a foundational assumption needs to be questioned, not just that the same bug got worse.** This session's tests were built to test variations on "does avoiding Extract_s fix the known bug" -- the actual result is forcing a check of whether the entire premise (Extract_s as the primary suspect) was correctly scoped in the first place. Worth remembering: seven-plus sessions and an ongoing OCCT discussion thread were built on that premise, and it may need revisiting rather than just extending.
+
+## Session 51 (yet another continuation): a real structural difference found between every test this session and Kodacad's actual document layout
+
+Doug ran smoke_test_native_no_reposition.py -- confirmed conclusively that reposition is NOT the trigger. Even a never-touched, purely native two-level assembly writes zero NAUO entities. This ruled out reposition as a variable entirely, and forced a check of whether the test scripts themselves were structurally representative of Kodacad's real document layout at all.
+
+Checked docmodel.py directly rather than continuing to theorize. Found two real, concrete differences between every test this session and Kodacad's actual code:
+
+1. Kodacad's real root ('/') is a DEDICATED, EMPTY compound -- created once via AddShape(empty_compound, True) -- and never given its own separate raw geometry afterward. Every test this session instead made 'base' a literal box (BRepPrimAPI_MakeBox) that ALSO had a component added to it -- mixing "has its own raw geometry" with "holds components" on the same label, something Kodacad's real code never does anywhere in the codebase.
+
+2. Kodacad's real native-part-add code (add_component()) uses the SHAPE-based AddComponent overload (AddComponent(root_label, raw_shape, True)) for adding a brand-new part -- not the label-based overload every test this session used throughout. Separately confirmed: set_component_location() (the reposition code, long confirmed correct for native content) deliberately uses the LABEL-based overload instead, with its own documented history explaining why (the shape-based overload was tried for repositioning and found to lose names, auto-numbering results as '22'/'25').
+
+Built smoke_test_dedicated_root.py to test both corrections together: a genuinely empty-compound root matching '/' exactly, the shape-based overload for the initial add (matching add_component()), and the label-based overload for the reposition step (matching set_component_location()'s own confirmed-correct usage). If this succeeds, the entire severe "zero NAUO" result this session was specific to how the test scripts were built, not a property of Kodacad's real document structure -- meaning real sessions were never at risk of this at all, and the original, narrower "imported assembly loses name/location on reposition" question (the subject of the OCCT discussion thread) remains the actual, correctly-scoped problem.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**When a minimal reproduction produces a much more severe or surprising result than the real application ever has, the reproduction's own structural fidelity to the real code is worth checking before trusting the result** -- this project's own established discipline (verify against the actual codebase, don't assume a simplified test accurately represents it) applied to itself, several tests deep into an investigation, rather than only ever being applied to OCCT API claims. A test can be internally consistent and still not actually be testing the thing it was built to test.
+
+## Session 51 (continued yet again): dedicated-root structure confirmed working for a leaf part -- now testing the actual question, an assembly-with-children
+
+Doug ran smoke_test_dedicated_root.py. Success -- 'leaf_moved' at (50,0,0), name and location both correctly surviving the full round trip. This resolves the scare from the prior two tests: the severe "zero structure at all" failures were specific to how those test scripts mixed raw geometry with components on one label, not a property of Kodacad's real document layout. Real sessions were never at risk of that particular failure.
+
+Important to be precise about scope, though: this test used a leaf part, matching what occt_bug_repro.py's Case 2 already confirmed works. It does not yet answer the actual question this entire investigation (and the OCCT discussion thread) has been about -- an assembly WITH ITS OWN CHILDREN, repositioned, losing name/location.
+
+Built smoke_test_corrected_assembly.py: a genuine two-level assembly ('/' -> sub_assembly -> sub_box_1_1), using the corrected structure throughout (dedicated empty-compound root, shape-based AddComponent overload for the initial add matching add_component(), label-based overload for reposition matching set_component_location()). Flagged a specific, real risk directly in the test rather than assuming it away: adding the sub-assembly under root requires passing its raw shape (via GetShape_s, which returns bare geometry with no XCAF structure attached) through the shape-based overload's expand=True path -- exactly the trap set_component_location()'s own Session 16 history warns produces auto-numbered, unnamed results. The test's own output (checking whether 'sub_box_1_1' survives even before any reposition or STEP write) will show directly whether this specific step is itself a problem, separate from anything about reposition or STEP writing.
+
+**Not yet run.** This is the test that actually answers the original question.
+
+### Lesson for future development
+
+**Precisely scoping what a passing test actually proved, rather than letting a success generalize further than the evidence supports, matters as much as chasing down a failure.** smoke_test_dedicated_root.py's success was real and worth the relief it provided, but it answered "does a leaf part work with the corrected structure" (already known) rather than "does an assembly-with-children work with the corrected structure" (the actual open question) -- worth stating that distinction explicitly rather than letting the good news be mistaken for more than it was.
+
+## Session 51 (the FreeCAD pivot): Doug's workflow observation isolates the one variable never tested -- the remove/re-add cycle itself
+
+Doug went back to FreeCAD and characterized its actual workflow precisely, with screenshots: manual-lathe was moved while still a FREE item (its Placement property set to (105, 66, 61) while sitting outside any assembly), and only THEN dragged into the newly-created Assembly -- added as a component exactly once, already at its final position. The "add as component, then reposition via RemoveComponent+AddComponent" two-step -- which every single failing test across this entire investigation has performed -- never happens in FreeCAD's workflow at all.
+
+This isolates a variable nothing has directly tested: is the fragility specifically in the remove/re-add CYCLE, rather than in NAUO placement itself, construction method, document boundaries, or root structure (all now ruled out by this session's earlier tests)?
+
+A mechanical detail sharpens the hypothesis further: the two AddComponent overloads differ in how location travels. The label-based overload takes a location parameter directly. The shape-based overload takes no location at all -- but a TopoDS_Shape can carry its own location (shape.Moved(loc)), and XCAF ingests a located shape by splitting it into prototype-at-identity plus instance-carrying-the-location -- which is exactly how STEPCAFControl_Reader itself constructs components when reading a file. That is the construction pattern underlying l-bracket-assembly, whose repositioning has been confirmed reliable throughout this project, and very likely what FreeCAD's export effectively produces (each object added once, already carrying its final placement).
+
+Built smoke_test_freecad_single_shot.py -- three cases, one variable each:
+- CASE A: label-based AddComponent, once, at the final location -- no prior add, no RemoveComponent, ever.
+- CASE B: shape-based AddComponent of a pre-located shape (shape.Moved(loc), expand=True) -- mimicking reader/FreeCAD construction directly.
+- CASE C: the known-failing remove+re-add cycle, but with UpdateAssemblies() sandwiched between the remove and the re-add -- a cheap probe of the "RemoveComponent leaves stale internal state that poisons the next AddComponent on the same referred shape" theory.
+
+If A and/or B pass where every reposition-based attempt has failed, the practical fix for Kodacad's set_component_location() is to make repositioning look like a single fresh add (or a located-shape add) rather than a remove-then-re-add -- a genuinely actionable, bounded change. If C also passes, the fix is even smaller (one UpdateAssemblies call). API note: Moved() chosen over the in-place Move() (both standard TopoDS_Shape methods; Move() already proven in this exact binding in docmodel.py/kodacad.py) specifically to avoid mutating the shape record stored under the source label.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**A user's precise characterization of a DIFFERENT tool's working workflow -- including what that workflow never does -- can isolate an untested variable that no amount of API-level investigation had surfaced.** Every prior hypothesis this session came from reading code and documentation; the one still standing came from Doug watching FreeCAD's actual sequence of operations and noticing the two-step add-then-reposition pattern simply never occurs there.
+
+## Session 51 (the breakthrough): ALL THREE single-shot cases PASS -- and the earlier freecad-strategy failure is now explained as confounded
+
+Doug ran smoke_test_freecad_single_shot.py. ALL THREE CASES PASSED -- name and location surviving the full round trip for a genuine assembly-with-children in every one, including CASE C, the remove/re-add reposition cycle itself (with UpdateAssemblies between the remove and re-add). Raw NAUO lines confirm it: 'sub_assembly_moved' correctly named in the file in all three cases.
+
+The coherent picture, finally: the NAUO placement mechanism is completely healthy. What matters is the HEALTH OF THE STRUCTURE being written -- label-based construction, reader-constructed content, and located-shape adds all produce healthy structures the writer handles correctly (including through reposition cycles); raw-geometry-with-expand roots and (per the original bug) Extract_s-imported content produce structures the writer cannot generate a proper NAUO for.
+
+**Critical retroactive realization:** smoke_test_freecad_strategy.py's earlier "failure" -- which had been logged as disproving the native-rebuild approach -- used a destination 'base' built as a raw box that also held components: the exact mixed-geometry-root flaw discovered only AFTERWARD in this same session. That failure was very likely confounded by the flawed destination structure, not a verdict on the rebuild approach at all. The rebuild-natively strategy remains viable -- and Kodacad's real '/' root already IS the dedicated empty compound the approach requires.
+
+Built smoke_test_production_fix.py -- the decisive, exact-production-scenario test: source assembly with a genuinely shared leaf part, dedicated-'/' destination already holding native content, memo-guarded native rebuild, add under '/' at identity, reposition via RemoveComponent + UpdateAssemblies + AddComponent at (50,0,0), STEP round trip, then verify all three criteria explicitly: name survives, location survives, sharing survives. Also fixed a real visibility gap while at it: every earlier test's dump() stopped at the instance level (never resolving component references), so the sub-part level was never actually shown; dump_full() here recurses through references, making the complete tree -- including the shared-leaf level -- visible in the output.
+
+If this passes, the fix goes into docmodel.py's add_component_from_label: replace Extract_s with the native rebuild.
+
+**Not yet run.**
+
+### Lesson for future development
+
+**When a later discovery invalidates the conditions under which an earlier negative result was obtained, the earlier conclusion needs explicit re-examination -- a logged "hypothesis disproven" can itself be wrong if the disproving test was confounded.** The freecad-strategy rebuild was declared a dead end hours before the mixed-geometry-root flaw was found; only holding both results side by side revealed that the "disproof" and the flaw were the same event seen from two angles.
+
+## Session 52: THE FIX IS IN -- production test passed all three criteria, docmodel.py updated
+
+Doug ran smoke_test_production_fix.py: ALL PASS CRITERIA MET. Name survived ('imported_assembly_moved'), location survived ((50,0,0)), and sharing survived (leaf_instance_1 and leaf_instance_2 both referencing entry 0:1:1:4 after reload). All four NAUOs in the raw file correctly named. The exact production scenario -- shared leaf part, dedicated '/' root already holding native content, memo-guarded native rebuild, import at identity, reposition via RemoveComponent + UpdateAssemblies + AddComponent, full STEP round trip -- validated end to end.
+
+Implemented in docmodel.py:
+
+- New module-level `rebuild_imported_structure(src_label, shape_tool, color_tool, memo)` -- the validated recursive native rebuild, reading source-document labels as data via the static (_s) accessors and recreating them via this document's own AddShape/AddComponent (label-based throughout). Memo keyed by source entry string preserves sharing within an imported file (shared part rebuilt once, referenced multiple times). Extended beyond the smoke test with best-effort COLOR transfer -- Extract_s carried colors, so the rebuild must too or imports would visibly lose them: source document's color tool resolved via XCAFDoc_DocumentTool.ColorTool_s(src_label) (same any-label mechanism as the ShapeTool_s(doc.Main()) calls throughout), shape-keyed GetColor matching parse_doc's proven read pattern (Surf first, Gen fallback), applied with the proven SetColor(label, color, XCAFDoc_ColorGen); wrapped so a color hiccup prints a warning but never breaks the import. One import bug caught pre-delivery: XCAFDoc_ShapeTool wasn't in module-level imports -- local import added in _transfer_color.
+- `add_component_from_label`: Extract_s replaced with the rebuild + label-based AddComponent under '/' at identity. Docstring's KNOWN LIMITATION section now records the resolution (Session 52) with the mechanism. Session 17's same-name suffix guard applied here too (the rebuilt referred label keeps the source's name, and the requested component name is often the identical string -- e.g. 'manual-lathe' -- exactly the case the writer leaves NAUO names blank for).
+- `set_component_location`: UpdateAssemblies() inserted between RemoveComponent and AddComponent, matching the validated sequence exactly (Case C insurance).
+- `load_stp_undr_top` (dead code, no callers) marked with an explicit warning that it still contains the Extract_s anti-pattern and must be ported to rebuild_imported_structure before ever being wired back in -- left in place rather than deleted without Doug's say.
+- Deliberately NOT changed: the Session 22 unshare path inside set_component_location still uses same-document Extract_s. That's cloning reader-constructed/native content within one document -- confirmed working for l-bracket across many sessions -- a different animal from the cross-document import case. Watch item: if unsharing a REBUILT imported component ever misbehaves, port that path to the rebuild too.
+
+Also retroactively explained by the Session 51/52 chain: Session 29's native-rebuild attempt very likely failed its export test for the same confounded reason as smoke_test_freecad_strategy.py (test destination structure), while its sharing regression was real -- the memo now handles what that attempt actually got wrong.
+
+Next: Doug tests the real workflow -- import manual-lathe and as1-oc-214 into a session, reposition, save, reload, verify names/locations/colors/sharing in Kodacad and CAD Assistant. Then update the OCCT discussion thread (#1395) with the root-cause finding: the issue is not reposition or import per se, but that Extract_s produces structures STEPCAFControl_Writer cannot generate proper NAUOs for -- reproducible, with the native-rebuild workaround validated.
+
+### Lesson for future development
+
+**The fix that finally worked was assembled almost entirely from previously-failed attempts whose failures were later understood: Session 29's rebuild (flawed only in sharing), the freecad_strategy test (confounded by its own destination), and the dedicated-root discovery (found by chasing a "worse" failure).** None of those dead ends were wasted -- each contributed a constraint the final fix had to satisfy, and the validated result is the intersection of all of them. Keeping honest records of WHY each attempt failed is what made reassembling them possible.
+
+## Session 52 (cont'd): REAL-WORLD CONFIRMATION -- and the one glitch (yellow first-import colors) diagnosed and fixed
+
+Doug ran the real workflow: imported manual-lathe into an as1-oc-214 session, repositioned it, saved, reloaded. Names survived, position survived, colors survived -- verified in Kodacad, CAD Assistant, AND FreeCAD. The Sessions 14-30 limitation is confirmed fixed on real data, not just the synthetic production test.
+
+One glitch: on FIRST import (before any save/reload), every lathe part displayed YELLOW; colors became correct after the round trip. Diagnosed from the symptom itself: yellow is Quantity_Color's default-constructor color (Quantity_NOC_YELLOW) -- the classic OCCT tell that a color lookup found nothing and the caller displayed the untouched default. parse_doc's display read is GetColor(shape, XCAFDoc_ColorSurf, ...) (line ~386), with no fallback to Gen -- but _transfer_color wrote only XCAFDoc_ColorGen. So: first import -> Surf read finds nothing -> default yellow; STEP write exports the Gen color; STEP reader re-registers it as Surf on reload -> correct colors thereafter. Fixed by writing BOTH types in _transfer_color (Gen kept for export-convention consistency with add_component(); Surf added so parse_doc's read finds it immediately).
+
+### Lesson for future development
+
+**OCCT's default-yellow is diagnostic gold: when something displays as pure yellow, the first hypothesis should be "a Quantity_Color was default-constructed and never filled" -- i.e. a color LOOKUP miss, not a color STORAGE problem.** Here the round-trip-fixes-it behavior plus the yellow tell pinpointed the exact mismatch (write-as-Gen vs read-as-Surf) without needing any new diagnostic scripts.

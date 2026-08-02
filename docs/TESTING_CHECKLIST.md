@@ -233,28 +233,35 @@ silently come back.
 ## Known Open Issues (not yet fixed -- don't re-report, do check they
 haven't gotten WORSE)
 
-- **Imported top-level assemblies don't survive save/reload.** An item
-  brought in via "Import STEP" survives correctly if it's a LEAF/
-  simple part, but NOT if it is itself an assembly with its own
-  children (confirmed: manual-lathe, a hub assembly, and a purpose-
-  built minimal test all fail the same way -- blank NAUO name,
-  identity location -- despite the in-memory document being confirmed
-  correct right up to the STEP write). Seven fix attempts across
-  Sessions 14-29 all failed identically on a fully isolated, headless
-  re-test (`minimal_repro.py`); the most invasive one (Session 29, a
-  full native-rebuild-with-recursion) additionally regressed internal
-  sharing within imported files and was reverted (Session 30). Set
-  aside as a known, well-understood (if unresolved) limitation rather
-  than chased further for now. Items NATIVE to the session file
-  (never imported) are unaffected, including shared instances --
-  see the Session Save/Reload section above. The LEAF-part-survives
-  side of this was further confirmed (Session 50) against real,
-  externally-authored content -- two FreeCAD-exported parts imported,
-  repositioned, and correctly surviving save/reload through the real
-  application workflow, not just synthetic test geometry. Importing
-  and positioning individual parts is a fully reliable workflow today;
-  the limitation is specifically scoped to repositioning an imported
-  ASSEMBLY as a unit.
+- **Imported top-level assemblies surviving save/reload -- FIXED
+  Session 52, pending real-world verification.** The long-standing
+  limitation (Sessions 14-30: an imported assembly-with-children came
+  back from save/reload with a blank NAUO name and identity location,
+  despite the in-memory document being correct right up to the write)
+  was root-caused in Sessions 51-52: XCAFDoc_Editor.Extract_s
+  produces label structures STEPCAFControl_Writer cannot generate
+  proper NAUOs for, while natively-built label-based structures round
+  trip correctly (including through RemoveComponent+AddComponent
+  reposition cycles). add_component_from_label now rebuilds imported
+  structure natively (rebuild_imported_structure, memo-guarded so
+  sharing within an imported file is preserved), validated end-to-end
+  by smoke_test_production_fix.py: name, location, AND sharing all
+  survived. VERIFY IN THE REAL APP after any change touching this
+  path -- and at least once now that the fix is new:
+  - Import manual-lathe.stp into an as1-oc-214 session; check every
+    nested part name appears correctly in the tree, and colors show.
+  - Reposition the imported assembly (Position dialog), save, reload:
+    name, location, and nested names must all survive. Cross-check in
+    CAD Assistant.
+  - Import a file containing an internally-SHARED sub-assembly;
+    confirm after save/reload that the shared instances still
+    reference ONE product (not silently duplicated).
+  - Watch item: unsharing (repositioning one of two shared instances)
+    of a REBUILT imported component still goes through the old
+    same-document Extract_s clone path -- confirmed fine for
+    reader-constructed content (l-bracket), untested for rebuilt
+    imports. If it misbehaves, port that path to
+    rebuild_imported_structure too.
 - Repositioning a child within a shared parent assembly (e.g. moving
   `l-bracket` inside `l-bracket-assembly_2`) PROPAGATES to every
   instance of that parent (`l-bracket-assembly_1` too) -- this is

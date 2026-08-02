@@ -117,6 +117,117 @@ def get_last_component(shape_tool, assembly_label):
     return comps.Value(comps.Length())
 
 
+def rebuild_imported_structure(src_label, shape_tool, color_tool, memo):
+    """Recursively read src_label's structure (from ANOTHER document)
+    as plain data and rebuild it NATIVELY in this document via
+    AddShape/AddComponent -- the validated replacement for
+    XCAFDoc_Editor.Extract_s in add_component_from_label (Session 52,
+    smoke_test_production_fix.py: name, location, AND sharing all
+    confirmed surviving a reposition + STEP round trip).
+
+    Why this works where Extract_s didn't: the Session 51 test chain
+    established that the STEP writer handles label-based natively-
+    built structures correctly (including through RemoveComponent+
+    AddComponent reposition cycles), while Extract_s-imported
+    structures are ones it cannot generate a proper NAUO for. This is
+    also how FreeCAD's ExportOCAF works -- it never label-copies
+    across documents; every shape it writes is natively created in
+    the document being written.
+
+    memo: dict mapping source entry string -> destination label. A
+    source shape referenced by MULTIPLE components (a genuinely
+    shared part within the imported file) is rebuilt ONCE and
+    referenced multiple times -- preserving sharing, the specific
+    thing Session 29's earlier rebuild attempt got wrong (that
+    attempt's actual flaw; its apparent export failure was later
+    shown to be confounded by a mixed-geometry-root test structure,
+    see Session 51).
+
+    Reads via the static (_s) accessors, which work on labels from
+    any document; writes via the instance methods of THIS document's
+    shape_tool. Colors are carried over best-effort (source document's
+    own color tool resolved via XCAFDoc_DocumentTool.ColorTool_s on
+    the source label itself; shape-keyed GetColor matching
+    parse_doc's proven read pattern, Surf first then Gen) -- a color
+    hiccup prints a warning but never breaks the structural rebuild.
+
+    Returns the destination label for src_label's underlying shape --
+    the caller adds it as a component wherever it belongs.
+    """
+    from OCP.TDF import TDF_Label, TDF_LabelSequence
+    from OCP.TopoDS import TopoDS_Compound
+    from OCP.BRep import BRep_Builder
+
+    entry = get_label_entry(src_label)
+    if entry in memo:
+        return memo[entry]
+
+    if shape_tool.IsAssembly_s(src_label):
+        empty = TopoDS_Compound()
+        BRep_Builder().MakeCompound(empty)
+        dst_label = shape_tool.AddShape(empty, True)
+        set_label_name(dst_label, get_label_name(src_label))
+        memo[entry] = dst_label
+
+        children = TDF_LabelSequence()
+        shape_tool.GetComponents_s(src_label, children, False)
+        for i in range(1, children.Length() + 1):
+            child_comp = children.Value(i)
+            child_ref = TDF_Label()
+            if not shape_tool.GetReferredShape_s(child_comp, child_ref):
+                continue
+            child_dst_label = rebuild_imported_structure(
+                child_ref, shape_tool, color_tool, memo)
+            child_loc = shape_tool.GetShape_s(child_comp).Location()
+            new_comp = shape_tool.AddComponent(dst_label, child_dst_label,
+                                               child_loc)
+            set_label_name(new_comp, get_label_name(child_comp))
+    else:
+        shape = shape_tool.GetShape_s(src_label)
+        dst_label = shape_tool.AddShape(shape, False)
+        set_label_name(dst_label, get_label_name(src_label))
+        memo[entry] = dst_label
+        _transfer_color(src_label, dst_label, color_tool)
+
+    return dst_label
+
+
+def _transfer_color(src_label, dst_label, color_tool):
+    """Best-effort color carry-over from a source-document label to
+    its rebuilt destination label. The source document's own color
+    tool is resolved from the source label itself
+    (XCAFDoc_DocumentTool.ColorTool_s accepts any label of the target
+    document -- the same mechanism as the ShapeTool_s(doc.Main())
+    calls throughout this file). Shape-keyed GetColor matches
+    parse_doc's proven read pattern; Surf is tried first (what
+    parse_doc displays), then Gen. Never raises -- a failure here
+    should cost a color, not the import."""
+    try:
+        from OCP.XCAFDoc import XCAFDoc_ShapeTool
+        src_color_tool = XCAFDoc_DocumentTool.ColorTool_s(src_label)
+        shape = XCAFDoc_ShapeTool.GetShape_s(src_label)
+        color = Quantity_Color()
+        if (src_color_tool.GetColor(shape, XCAFDoc_ColorSurf, color)
+                or src_color_tool.GetColor(shape, XCAFDoc_ColorGen, color)):
+            # Write BOTH color types. Gen matches add_component()'s
+            # existing convention and exports fine -- but parse_doc's
+            # display read is GetColor(shape, XCAFDoc_ColorSurf, ...),
+            # which does NOT fall back to Gen. Writing Gen alone made
+            # every freshly-imported part display as YELLOW (the
+            # Quantity_Color default-constructor color -- the classic
+            # OCCT tell for "color lookup found nothing") until one
+            # save/reload cycle, because the STEP reader re-registers
+            # colors as Surf on the way back in (confirmed: Doug's
+            # first real import showed all-yellow, then perfect colors
+            # after the round trip -- Session 52). Surf here makes the
+            # first-import display correct immediately.
+            color_tool.SetColor(dst_label, color, XCAFDoc_ColorGen)
+            color_tool.SetColor(dst_label, color, XCAFDoc_ColorSurf)
+    except Exception as e:
+        print(f"[rebuild_imported_structure] color transfer skipped for "
+              f"{get_label_name(src_label)!r}: {e}")
+
+
 def remove_shape_and_orphaned_descendants(shape_tool, label):
     """Remove `label` completely, AND recursively clean up any of its
     own children that become newly orphaned as a result.
@@ -662,6 +773,12 @@ class DocModel:
               f"{get_label_entry(ref_label)} name_before={ref_name_before!r}")
 
         shape_tool.RemoveComponent(comp_label)
+        # UpdateAssemblies between remove and re-add: the exact
+        # sequence validated by smoke_test_production_fix.py and
+        # smoke_test_freecad_single_shot.py Case C (Session 52).
+        # Cheap insurance that the document's assembly bookkeeping is
+        # consistent before the new component is created.
+        shape_tool.UpdateAssemblies()
         new_comp = shape_tool.AddComponent(parent_label, ref_label, new_local_loc)
 
         # Confirmed via file inspection (Session 17): when an
@@ -1038,17 +1155,33 @@ class DocModel:
         original bug wouldn't have mattered. Reverted in Session 30
         rather than kept as a worse trade for an unfixed bug.
 
-        Positioning parts and assemblies that are NOT imported this
-        way (native to the session file, e.g. everything in
-        as1-oc-214.stp) works correctly, INCLUDING shared instances
-        (Session 22) -- this is the confirmed, tested, working core of
-        the Position feature. The limitation above is specific to
-        imported top-level assemblies and is being tracked as a known
-        issue (see docs/TESTING_CHECKLIST.md) rather than chased
-        further for now.
+        RESOLVED (Session 52): the limitation above is fixed by
+        replacing XCAFDoc_Editor.Extract_s with a memo-guarded NATIVE
+        REBUILD of the imported structure (rebuild_imported_structure,
+        module level above) -- reading the source document's labels as
+        plain data and recreating them via this document's own
+        AddShape/AddComponent, the same way FreeCAD's ExportOCAF works
+        and the same construction STEPCAFControl_Reader itself
+        produces. Validated end-to-end by smoke_test_production_fix.py
+        (exact production scenario: shared leaf part, dedicated '/'
+        root holding native content, import at identity, reposition
+        via RemoveComponent + UpdateAssemblies + AddComponent, STEP
+        round trip): name survived, location survived, and sharing
+        survived -- both instances of the shared part still
+        referencing one product after reload, with all NAUOs correctly
+        named in the raw file. The Session 51 test chain established
+        WHY: the writer handles natively-built label-based structures
+        correctly (including through reposition cycles); Extract_s
+        produces structures it cannot generate a proper NAUO for.
+
+        Positioning parts and assemblies native to the session file
+        (e.g. everything in as1-oc-214.stp) was always correct,
+        INCLUDING shared instances (Session 22) -- imported content
+        now lands in the document in exactly that same healthy,
+        native form.
         """
-        from OCP.XCAFDoc import XCAFDoc_Editor
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
 
         # Get (or create) the '/' root assembly label (first free shape)
         free_labels = TDF_LabelSequence()
@@ -1061,17 +1194,35 @@ class DocModel:
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 
-        # Extract_s returns True/False (success), NOT the new label --
-        # it adds the copied content as the newest component of
-        # root_label, so retrieve it via get_last_component().
-        ok = XCAFDoc_Editor.Extract_s(source_label, root_label)
-        if not ok:
-            print("[add_component_from_label] XCAFDoc_Editor.Extract failed")
-            return None
-        component_label = get_last_component(shape_tool, root_label)
+        # NATIVE REBUILD (Session 52) -- replaces Extract_s. The
+        # rebuilt structure's top label comes back directly; add it
+        # under '/' at identity via the label-based AddComponent
+        # overload (the construction validated by the Session 51/52
+        # test chain). The memo is per-import: sharing WITHIN one
+        # imported file is preserved; separate imports of the same
+        # file remain independent copies (matching Extract_s's old
+        # behavior in that respect).
+        from OCP.TopLoc import TopLoc_Location
+        memo = {}
+        rebuilt_label = rebuild_imported_structure(source_label, shape_tool,
+                                                   color_tool, memo)
+        component_label = shape_tool.AddComponent(root_label, rebuilt_label,
+                                                  TopLoc_Location())
 
         entry = get_label_entry(component_label)
-        set_label_name(component_label, name)
+        # Session 17 finding (same guard as set_component_location):
+        # when an occurrence's name is IDENTICAL to its referred/
+        # product label's name, STEPCAFControl_Writer leaves the
+        # NAUO's descriptive-name field blank on export. The rebuilt
+        # referred label keeps the source's own name (e.g.
+        # 'manual-lathe'), and the requested component name is often
+        # the same string -- force the distinguishing suffix every
+        # working component in as1-oc-214.stp already follows.
+        ref_name = get_label_name(rebuilt_label)
+        comp_name = name
+        if comp_name == ref_name:
+            comp_name = f"{comp_name}_1"
+        set_label_name(component_label, comp_name)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
 
@@ -1275,7 +1426,16 @@ def load_stp_cmpnt(dm):
 
 
 def load_stp_undr_top(dm):
-    """Add step file as a component under Top (root) label of dm.doc"""
+    """Add step file as a component under Top (root) label of dm.doc
+
+    UNUSED (no callers as of Session 52) and NOT UPDATED for the
+    Session 52 fix: this still uses XCAFDoc_Editor.Extract_s, which
+    produces structures the STEP writer cannot generate proper NAUOs
+    for (blank name / identity location on save-reload -- the bug
+    fixed in add_component_from_label). If this function is ever
+    wired back in, port it to rebuild_imported_structure() first,
+    the same way add_component_from_label was.
+    """
     from OCP.XCAFDoc import XCAFDoc_Editor
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(dm.doc.Main())
 
