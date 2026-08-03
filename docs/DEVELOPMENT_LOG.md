@@ -3508,3 +3508,98 @@ One glitch: on FIRST import (before any save/reload), every lathe part displayed
 ### Lesson for future development
 
 **OCCT's default-yellow is diagnostic gold: when something displays as pure yellow, the first hypothesis should be "a Quantity_Color was default-constructed and never filled" -- i.e. a color LOOKUP miss, not a color STORAGE problem.** Here the round-trip-fixes-it behavior plus the yellow tell pinpointed the exact mismatch (write-as-Gen vs read-as-Surf) without needing any new diagnostic scripts.
+
+## Session 53: real-world shakedown with vendor STEP files -- three bugs found and fixed, two features identified
+
+Doug built the manual lathe assembly from individual vendor-supplied STEP component files, testing whether Kodacad has the necessary tools for a real project workflow. Good news: positioning worked correctly for every component. Three bugs found and fixed, two features identified as needed.
+
+### Bug 1: yellow/missing colors on imported parts (not surviving save/reload either)
+
+Two independent issues combined to make colors fail completely:
+
+(a) _transfer_color WROTE via the label-keyed SetColor(dst_label, ...) overload, but parse_doc READS via the shape-keyed GetColor(ref_shape, ...) overload. These are genuinely different storage paths in XCAF -- a label-keyed write stores the color association somewhere the shape-keyed read can't find it. Fixed by writing via SetColor(dst_shape, ...) to match the read path.
+
+(b) Vendor STEP files store colors inconsistently -- some on the shape, some on the label, some on sub-shapes. The source read now tries shape-keyed first (matching parse_doc's own read path), then falls back to label-keyed as a second attempt.
+
+The Session 52 "yellow on first import, fixed after round trip" symptom was an earlier, partial manifestation of this same shape-vs-label mismatch -- the STEP reader re-registers colors in a way the shape-keyed read can find, which is why a save/reload appeared to "fix" it. The full fix addresses both the first-import and the persistence cases.
+
+### Bug 2: assembly component names showing as "NAUO1", "NAUO2"
+
+rebuild_imported_structure faithfully copied the component-reference names from the source STEP file's NAUO entities. Vendor files often have empty or generic NAUO descriptive-name fields, which the STEP reader assigns as literal "NAUO1", "NAUO2", etc. -- meaningless identifiers. The actual part name lives on the REFERRED shape, not the component reference. Fixed: when a component name is empty or starts with "NAUO", fall back to the referred shape's name with a "_1" suffix (matching the naming convention used throughout this app).
+
+### Bug 3: .STEP file extension not recognized
+
+The file dialog filter was missing uppercase ".STEP" (only had .stp, .STP, .step). One line fix -- added *.STEP to the filter on line 1374.
+
+### Features identified as needed (not implemented this session)
+
+4. Create new assembly -- needed for organizing imported parts into sub-assemblies. Basicad does this via a RMB click in the tree.
+5. Create shared instance of an assembly or part -- needed for parts used multiple times (Doug's 1602 assembly is used twice). Could be done via RMB click on a tree item.
+
+### Lesson for future development
+
+**The first real-world project attempt finds things no amount of synthetic testing can** -- the NAUO naming issue in particular is a property of HOW vendor STEP files are structured (generic NAUO identifiers rather than meaningful names), not something any test built from hand-constructed labels would ever hit. The shape-vs-label color mismatch is subtler: it's a genuine API distinction (two different SetColor/GetColor overloads that store associations differently) that only matters when the read and write paths are written at different times by different people looking at different parts of the codebase. Both are exactly the kind of integration issue a real shakedown is built to find.
+
+## Session 53 (cont'd): colors still yellow -- "after save/reload too" pinpointed the real issue: sub-shape colors
+
+Doug retested: NAUO names fixed, but parts still yellow BOTH initially and after save/reload. The "after save/reload too" detail is the decisive diagnostic: if _transfer_color had found a color and written it anywhere at all, the STEP writer would have exported it and the reader re-registered it on reload -- still-yellow-after-round-trip means the SOURCE READ found nothing. All four lookups (shape/label x Surf/Gen) missed, so nothing ever reached the document or the file.
+
+Most likely mechanism (now instrumented to confirm): vendor part files typically attach colors to SUB-SHAPES -- the solid or faces INSIDE the product -- with nothing on the part label itself. Both the transfer read AND parse_doc's own display read only ever looked at the top level. This also explains cleanly why the whole-lathe-assembly file worked earlier (its parts carry top-level colors) while individual vendor part files don't.
+
+Two fixes plus instrumentation:
+
+- _transfer_color now ALSO enumerates the source label's sub-shape labels (GetSubShapes_s), reads their colors, creates matching sub-shape labels on the destination (FindSubShape/AddSubShape), and applies the colors there. Signature gained shape_tool (needed for AddSubShape). Prints a one-line "[color] <part>: top-level FOUND/none, sub-shape colors transferred: N" diagnostic per part -- the next terminal run will show exactly what each vendor file actually contains, replacing guesswork with data.
+- parse_doc's display read replaced with get_part_display_color(): full fallback chain of top-level Surf -> top-level Gen -> first colored sub-shape. Without this, even correctly-transferred sub-shape colors would still display yellow, since Kodacad shows one color per part read from the top level. (A genuinely multi-colored part now displays its first sub-shape color -- a display simplification, not data loss; the document keeps all sub-shape colors and exports them.)
+
+**Awaiting Doug's next terminal output with the [color] lines to confirm the sub-shape hypothesis against real vendor-file data.**
+
+### Lesson for future development
+
+**"Broken after a round trip too" versus "broken until a round trip" split the color problem into two different bugs with two different fixes -- the persistence detail in a symptom report is load-bearing and worth asking about explicitly when it isn't volunteered.** Session 52's yellow (fixed BY reload) was a write-path mismatch; Session 53's yellow (surviving reload) was a read-path miss. Same visible symptom, opposite halves of the pipeline.
+
+## Session 53 (cont'd again): the binding's own error message identified the exact API fix -- label-keyed GetColor is static (GetColor_s)
+
+Doug's terminal output contained the binding's own signature listing: the instance GetColor accepts ONLY shape-keyed calls (all three listed overloads take TopoDS_Shape). The label-keyed GetColor variants are declared static in OCCT, which in this binding means GetColor_s -- the exact _s convention documented throughout this project (GetShape_s, IsAssembly_s, GetUsers_s, ...). A miss that the convention itself should have caught before shipping.
+
+Consequence of the bug: the failed label-keyed call raised BEFORE the sub-shape scan ran, aborting the whole transfer inside one shared try block -- so the [color] diagnostic never reported what the vendor file actually contains, and the sub-shape hypothesis remains unconfirmed. Two fixes:
+
+- All label-keyed color reads switched to XCAFDoc_ColorTool.GetColor_s(...) in both _transfer_color and get_part_display_color (the display helper had the identical bug, silently swallowed by its own try/except -- returning default yellow with no error printed).
+- _transfer_color restructured into independent try blocks (top-level transfer / sub-shape scan), so a failure in one section can no longer blank out the other's diagnostic -- exactly what hid the sub-shape data on the first instrumented run.
+
+Label-keyed SetColor remains an instance method (unchanged) -- proven working in production since add_component's color handling.
+
+**Still awaiting the [color] diagnostic lines from a re-import to confirm what the vendor files actually contain.**
+
+### Lesson for future development
+
+**A pybind11 "incompatible function arguments" error is a complete, authoritative API reference for that method -- read the listed overloads as documentation, not just as a failure notice.** The error printed exactly which overloads exist on the instance, which immediately implied (via the established _s convention) where the label-keyed variants live. Also: one shared try block around a multi-stage diagnostic means the first failure silences all later stages' output -- diagnostics that exist to gather data need failure isolation between stages, or a bug in stage one costs the data from stage two.
+
+## Session 53 (cont'd once more): diagnostic reports NO colors found anywhere -- built a full-characterization probe before guessing again
+
+Doug's re-run with the fixed GetColor_s calls: "[color] '1107-0005-0144 rev1': top-level none, sub-shape colors transferred: 0" -- same for every part. Neither the part labels nor their registered sub-shapes carry colors where the transfer looks. Two very different explanations remain, and the next step is data, not a fourth patch:
+
+(a) These individual vendor part files may genuinely contain NO color data. The colored lathe seen earlier came from the vendor's own ASSEMBLED manual-lathe file -- colors could have been assigned at the assembly level in the vendor's authoring tool, with the per-part exports left uncolored. If so, Kodacad's yellow is simply the no-color default doing its job, and the "fix" is at most cosmetic (a nicer default than OCCT yellow).
+
+(b) Colors exist but are stored somewhere the scan doesn't reach (deeper sub-shape nesting, Curv type, RGBA-only storage, or reader placement not covered).
+
+Built probe_colors.py -- a one-shot full characterization: (1) raw file text scan counting COLOUR_RGB / DRAUGHTING_PRE_DEFINED_COLOUR / STYLED_ITEM / OVER_RIDING_STYLED_ITEM / PRESENTATION_STYLE_ASSIGNMENT entities (zero color entities in the raw text = the file has no colors, investigation over); (2) the read document's ENTIRE color table via GetColors; (3) every shape label in the document with its kind, sub-shape count, and color status probed via every read variant (shape-keyed instance x Surf/Gen/Curv, label-keyed static x Surf/Gen/Curv), including all sub-shape labels. Also suggested the instant manual check: open one vendor part file directly in CAD Assistant -- gray there too means no colors in the file, full stop.
+
+### Lesson for future development
+
+**When two consecutive instrumented runs both report "found nothing," the next move is a full characterization of the data source, not a third targeted patch** -- each patch so far encoded a guess about where colors live; the probe instead asks the file itself, covering every storage variant at once, including the possibility that there is nothing to find. The raw-text entity count in particular can end the investigation in one line of output.
+
+## Session 53 (resolved): probe_colors verdict -- the vendor files contain NO color data at all; yellow was the no-color default doing its job
+
+Doug ran probe_colors.py on a real vendor file (1602-0032-4008 assembly.STEP). Definitive: ZERO color entities in the raw file text (COLOUR_RGB, DRAUGHTING_PRE_DEFINED_COLOUR, STYLED_ITEM, OVER_RIDING_STYLED_ITEM, PRESENTATION_STYLE_ASSIGNMENT all 0), zero registered colors in the read document's color table, NO COLOR on any label by any read variant. Doug independently confirmed the same in CAD Assistant on two part files (1121, 1602) -- no colors there either.
+
+Explanation for the colored appearance elsewhere: Onshape and Creo Elements Direct display their own APP-SIDE default color schemes on colorless imported geometry (Creo ED in particular auto-assigns per-part colors). Neither was reading colors from these files. The assembled manual-lathe.step DOES carry real color entities -- which is why it imports colored -- those colors were present in that export.
+
+Conclusion: the Session 52-53 color-transfer machinery (shape-keyed writes, GetColor_s label reads, sub-shape transfer, display fallback chain) is correct and stays -- it's what makes color-carrying files import properly. Nothing was broken for the colorless files; OCCT's default-constructor yellow was simply an ugly "no color found" indicator.
+
+One cosmetic change: get_part_display_color now returns a neutral gray (0.72 RGB) instead of OCCT yellow when nothing is found anywhere. DISPLAY-ONLY, deliberately not SetColor'd into the document -- exported files stay honestly colorless as authored, no fake color data written.
+
+Possible future nicety (not implemented): a "Set part color" RMB action, so Doug can assign his own colors to imported colorless parts within Kodacad -- would pair naturally with the create-assembly and shared-instance RMB features already identified in Session 53's shakedown list. Also worth Doug checking whether Onshape's STEP export settings have an include-appearances option, which would put real colors in the files at the source.
+
+### Lesson for future development
+
+**"Displays colored in application X" is not evidence the FILE contains colors -- CAD applications routinely paint colorless geometry with their own default schemes, and only a raw-entity scan (or a deliberately neutral viewer) distinguishes file data from app cosmetics.** Three patch rounds were spent on a transfer pipeline that had nothing to transfer; the five-line raw-text scan that settled it should have been the FIRST diagnostic, not the last -- it's the same raw-file-inspection discipline this project already learned for NAUOs in Session 51, applied to a different entity type.

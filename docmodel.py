@@ -181,51 +181,157 @@ def rebuild_imported_structure(src_label, shape_tool, color_tool, memo):
             child_loc = shape_tool.GetShape_s(child_comp).Location()
             new_comp = shape_tool.AddComponent(dst_label, child_dst_label,
                                                child_loc)
-            set_label_name(new_comp, get_label_name(child_comp))
+            # Component names in source STEP files can be generic NAUO
+            # identifiers ("NAUO1", "NAUO2", ...) assigned by the STEP
+            # reader when the NAUO entity's descriptive-name field is
+            # empty. These are meaningless -- the real part name lives
+            # on the REFERRED shape. Fall back to that with a suffix
+            # (matching the _1 convention used throughout this app).
+            comp_name = get_label_name(child_comp)
+            if not comp_name or comp_name.startswith("NAUO"):
+                ref_name = get_label_name(child_ref)
+                comp_name = f"{ref_name}_1" if ref_name else comp_name
+            set_label_name(new_comp, comp_name)
     else:
         shape = shape_tool.GetShape_s(src_label)
         dst_label = shape_tool.AddShape(shape, False)
         set_label_name(dst_label, get_label_name(src_label))
         memo[entry] = dst_label
-        _transfer_color(src_label, dst_label, color_tool)
+        _transfer_color(src_label, dst_label, shape_tool, color_tool)
 
     return dst_label
 
 
-def _transfer_color(src_label, dst_label, color_tool):
+def _transfer_color(src_label, dst_label, shape_tool, color_tool):
     """Best-effort color carry-over from a source-document label to
-    its rebuilt destination label. The source document's own color
-    tool is resolved from the source label itself
-    (XCAFDoc_DocumentTool.ColorTool_s accepts any label of the target
-    document -- the same mechanism as the ShapeTool_s(doc.Main())
-    calls throughout this file). Shape-keyed GetColor matches
-    parse_doc's proven read pattern; Surf is tried first (what
-    parse_doc displays), then Gen. Never raises -- a failure here
-    should cost a color, not the import."""
+    its rebuilt destination label.
+
+    Three real-world storage patterns handled (Sessions 52-53):
+
+    1. parse_doc reads colors via GetColor(ref_SHAPE, Surf, ...) --
+       shape-keyed. Writes here use the shape-keyed SetColor to match.
+    2. Some files store the color on the part LABEL instead -- the
+       source read falls back to label-keyed lookups.
+    3. Vendor part files very often color the SUB-SHAPES (the solid
+       or faces INSIDE the product) and put nothing on the part label
+       at all -- "still yellow even after save/reload" is the tell,
+       since it means the top-level source read found nothing to
+       transfer, so nothing ever reached the exported file. Sub-shape
+       labels are enumerated (GetSubShapes_s), their colors read, and
+       matching sub-shape labels created on the destination
+       (FindSubShape/AddSubShape) with the colors applied.
+
+    Prints a one-line [color] diagnostic per part so a terminal run
+    shows exactly what was found where. Never raises -- a failure
+    here should cost a color, not the import."""
+    top_found = False
+    n_sub = 0
+    from OCP.XCAFDoc import XCAFDoc_ShapeTool, XCAFDoc_ColorTool
+    from OCP.TDF import TDF_Label, TDF_LabelSequence
     try:
-        from OCP.XCAFDoc import XCAFDoc_ShapeTool
         src_color_tool = XCAFDoc_DocumentTool.ColorTool_s(src_label)
-        shape = XCAFDoc_ShapeTool.GetShape_s(src_label)
+        src_shape = XCAFDoc_ShapeTool.GetShape_s(src_label)
+        dst_shape = XCAFDoc_ShapeTool.GetShape_s(dst_label)
         color = Quantity_Color()
-        if (src_color_tool.GetColor(shape, XCAFDoc_ColorSurf, color)
-                or src_color_tool.GetColor(shape, XCAFDoc_ColorGen, color)):
-            # Write BOTH color types. Gen matches add_component()'s
-            # existing convention and exports fine -- but parse_doc's
-            # display read is GetColor(shape, XCAFDoc_ColorSurf, ...),
-            # which does NOT fall back to Gen. Writing Gen alone made
-            # every freshly-imported part display as YELLOW (the
-            # Quantity_Color default-constructor color -- the classic
-            # OCCT tell for "color lookup found nothing") until one
-            # save/reload cycle, because the STEP reader re-registers
-            # colors as Surf on the way back in (confirmed: Doug's
-            # first real import showed all-yellow, then perfect colors
-            # after the round trip -- Session 52). Surf here makes the
-            # first-import display correct immediately.
-            color_tool.SetColor(dst_label, color, XCAFDoc_ColorGen)
-            color_tool.SetColor(dst_label, color, XCAFDoc_ColorSurf)
+        # Shape-keyed reads are INSTANCE methods; label-keyed reads
+        # are STATIC in this binding (GetColor_s) -- confirmed
+        # directly from the binding's own error message listing the
+        # instance overloads (all three shape-keyed only). Same _s
+        # convention as GetShape_s/IsAssembly_s throughout.
+        if (src_color_tool.GetColor(src_shape, XCAFDoc_ColorSurf, color)
+                or src_color_tool.GetColor(src_shape, XCAFDoc_ColorGen, color)
+                or XCAFDoc_ColorTool.GetColor_s(src_label,
+                                                XCAFDoc_ColorSurf, color)
+                or XCAFDoc_ColorTool.GetColor_s(src_label,
+                                                XCAFDoc_ColorGen, color)):
+            top_found = True
+            color_tool.SetColor(dst_shape, color, XCAFDoc_ColorSurf)
+            color_tool.SetColor(dst_shape, color, XCAFDoc_ColorGen)
     except Exception as e:
-        print(f"[rebuild_imported_structure] color transfer skipped for "
+        print(f"[color] top-level transfer failed for "
               f"{get_label_name(src_label)!r}: {e}")
+
+    # Sub-shape colors (pattern 3) -- own try block, so a top-level
+    # failure can't abort this scan (that's exactly what hid the
+    # sub-shape data on the first instrumented run).
+    try:
+        subs = TDF_LabelSequence()
+        XCAFDoc_ShapeTool.GetSubShapes_s(src_label, subs)
+        for i in range(1, subs.Length() + 1):
+            sub_label = subs.Value(i)
+            sub_color = Quantity_Color()
+            if not (XCAFDoc_ColorTool.GetColor_s(sub_label,
+                                                 XCAFDoc_ColorSurf, sub_color)
+                    or XCAFDoc_ColorTool.GetColor_s(sub_label,
+                                                    XCAFDoc_ColorGen,
+                                                    sub_color)):
+                continue
+            try:
+                sub_shape = XCAFDoc_ShapeTool.GetShape_s(sub_label)
+                dst_sub = TDF_Label()
+                if not shape_tool.FindSubShape(dst_label, sub_shape, dst_sub):
+                    dst_sub = shape_tool.AddSubShape(dst_label, sub_shape)
+                if not dst_sub.IsNull():
+                    color_tool.SetColor(dst_sub, sub_color, XCAFDoc_ColorSurf)
+                    color_tool.SetColor(dst_sub, sub_color, XCAFDoc_ColorGen)
+                    n_sub += 1
+            except Exception as sub_e:
+                print(f"[color] sub-shape transfer failed for one "
+                      f"sub-shape of {get_label_name(src_label)!r}: {sub_e}")
+    except Exception as e:
+        print(f"[color] sub-shape scan failed for "
+              f"{get_label_name(src_label)!r}: {e}")
+    print(f"[color] {get_label_name(src_label)!r}: top-level "
+          f"{'FOUND' if top_found else 'none'}, sub-shape colors "
+          f"transferred: {n_sub}")
+
+
+def get_part_display_color(color_tool, shape_tool, ref_label, ref_shape):
+    """Single display color for a part, with the full fallback chain:
+    top-level Surf (parse_doc's original read), then top-level Gen,
+    then the FIRST COLORED SUB-SHAPE -- vendor part files very often
+    color only the solid/faces inside the product, leaving nothing on
+    the part label itself (Session 53). Returns OCCT's default
+    (yellow) only when nothing is found anywhere; a part displaying
+    pure yellow genuinely has no color information at any level.
+
+    Note: Kodacad displays one color per part (part_dict stores a
+    single color), so a genuinely multi-colored part shows its first
+    sub-shape color -- a display simplification, not a data loss; the
+    document itself keeps all sub-shape colors and exports them."""
+    color = Quantity_Color()
+    if color_tool.GetColor(ref_shape, XCAFDoc_ColorSurf, color):
+        return color
+    if color_tool.GetColor(ref_shape, XCAFDoc_ColorGen, color):
+        return color
+    try:
+        from OCP.XCAFDoc import XCAFDoc_ShapeTool, XCAFDoc_ColorTool
+        subs = TDF_LabelSequence()
+        XCAFDoc_ShapeTool.GetSubShapes_s(ref_label, subs)
+        for i in range(1, subs.Length() + 1):
+            sub_label = subs.Value(i)
+            # Label-keyed GetColor is STATIC in this binding
+            # (GetColor_s) -- the instance method only accepts
+            # shape-keyed calls (confirmed from the binding's own
+            # error output, Session 53).
+            if (XCAFDoc_ColorTool.GetColor_s(sub_label,
+                                             XCAFDoc_ColorSurf, color)
+                    or XCAFDoc_ColorTool.GetColor_s(sub_label,
+                                                    XCAFDoc_ColorGen,
+                                                    color)):
+                return color
+    except Exception:
+        pass
+    # Nothing found anywhere -- confirmed possible with real vendor
+    # files (Session 53: raw-text scan showed ZERO color entities;
+    # Onshape/Creo displayed them colored only via their own app-side
+    # default schemes). Return a neutral gray instead of OCCT's
+    # default-constructor yellow. DISPLAY-ONLY -- deliberately not
+    # SetColor'd into the document, so exported files stay honestly
+    # colorless as authored rather than gaining fake color data.
+    from OCP.Quantity import Quantity_TypeOfColor
+    return Quantity_Color(0.72, 0.72, 0.72,
+                          Quantity_TypeOfColor.Quantity_TOC_RGB)
 
 
 def remove_shape_and_orphaned_descendants(shape_tool, label):
@@ -395,8 +501,8 @@ class DocModel:
                         loc = res_loc.Multiplied(c_loc)
                     else:
                         loc = c_loc
-                    color = Quantity_Color()
-                    color_tool.GetColor(ref_shape, XCAFDoc_ColorSurf, color)
+                    color = get_part_display_color(
+                        color_tool, shape_tool, ref_label, ref_shape)
                     self.part_dict[c_uid] = {'shape': display_shape,
                                              'color': color,
                                              'name': c_name,
@@ -1371,7 +1477,7 @@ def _load_step():
     """Allow user to select step file to load, return step_file_name, doc, app"""
     prompt = 'Select STEP file to import'
     f_path, __ = QFileDialog.getOpenFileName(
-        None, prompt, './', "STEP files (*.stp *.STP *.step)")
+        None, prompt, './', "STEP files (*.stp *.STP *.step *.STEP)")
     if not f_path:
         print("Load step cancelled")
         return None, None, None
