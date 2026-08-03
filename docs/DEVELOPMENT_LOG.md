@@ -3647,3 +3647,22 @@ Fix: new canvas accessor manipulator_position() (reads AIS_Manipulator.Position(
 ### Lesson for future development
 
 **When a reported result appears geometrically impossible (an RZ that changed Z), verify the reported INPUTS before hunting for an exotic mechanism** -- the queued instrumentation plan was about to chase a contradiction that one corrected detail (RX, not RZ) dissolved entirely. The underlying UX bug was real and simple; the "impossibility" was only ever in the report. Asking "exactly which field did you type into?" is cheaper than any diagnostic run.
+
+## Session 56: the '////' accumulating-root-wrapper bug -- Basicad item 30 ported properly, two band-aids reverted
+
+Doug spotted '/ / / / as1_1 / new-asy_1 / button_1_1' in the Position dialog path and recalled Basicad had fixed the same thing (DESIGN_BACKLOG item 30). He was right to redirect to it: the first two patches written before reading item 30 were name-level band-aids (rename '/' roots on load; temp-rename before export) that would not have removed any wrapper LEVEL -- just relabeled it -- and would have created duplicate product names in the file (Session 17 blank-NAUO territory). Both REVERTED this session, stated plainly.
+
+**The actual mechanism, reasoned from evidence rather than patched at the symptom:** the tree screenshot shows nested '/' items in the LIVE document. Save and load are structure-preserving -- the STEP writer does not invent wrappers -- so the nesting was created by an in-app operation, and the only operation that nests an entire tree under the current root is IMPORT. The cycle is exactly Basicad item 30's: save a session (file root '/'), later IMPORT that file into a session (rather than loading it as the session) -> the file's '/' root gets wrapped as a component under the current '/' -- one extra level per save+import cycle.
+
+**The two-sided fix, ported to Kodacad's XCAF architecture:**
+
+- IMPORT side (load_stp_cmpnt): a free shape named '/' in the imported file (a saved-session wrapper) is not imported as a node -- its children are imported directly via add_component_from_label, each at its saved location (composed through nested wrapper levels via a worklist, so a legacy multi-wrapped file unwraps completely in one import). add_component_from_label gained an optional loc parameter for this (default identity, unchanged behavior for all existing callers).
+- EXPORT side (save_step_doc): when the root is a '/'-wrapper CHAIN -- each level named '/', exactly one child, at identity location -- the writer descends to the first real assembly and exports THAT as the file root, by rebuilding it into a temporary document via rebuild_imported_structure (the validated Session 52 machinery: names, locations, sharing, colors all carry). The in-memory document is untouched. Because the descent walks the whole chain, ONE RE-SAVE fully cleans a legacy multi-wrapped session file ('/'->'/'->'/'->as1 exports as just as1). Any deviation from the safe pattern (multiple children, non-identity location, nothing but wrappers) falls through to writing the document as-is.
+
+Together: export never produces a '/'-rooted file in the common single-assembly case; import never nests a '/' wrapper even when given one. The save+import cycle is idempotent (Basicad item 30's own success criterion), and the wrapper count is bounded at one in every remaining path.
+
+Migration for Doug's existing nested session: just re-save it (single-chain case, handled by the export descent), or import it into a fresh session (multi-branch case, handled by the import unwrap) -- both produce a clean file.
+
+### Lesson for future development
+
+**"I recall we fixed this in <other project>, item N" is a reference worth reading BEFORE designing a fix, not after** -- the first two patches here were written from a partial mental model and aimed at names when the problem was structure; five minutes reading Basicad's actual item 30 writeup supplied the confirmed mechanism (import-of-saved-session nesting), the design shape (two-sided: export unwraps, import unwraps), and the success criterion (cycle idempotency). Porting a proven fix beat re-deriving one, and the honest revert of the premature patches cost far less than shipping them would have.

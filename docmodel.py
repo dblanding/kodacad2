@@ -1233,7 +1233,63 @@ class DocModel:
 
         WS = XSControl_WorkSession()
         step_writer = STEPCAFControl_Writer(WS, False)
-        step_writer.Transfer(self.doc, STEPControl_AsIs)
+
+        # Export-side unwrap (Session 56, Basicad item 30 ported):
+        # if the root is a '/'-wrapper chain -- each level named '/',
+        # with exactly ONE child sitting at IDENTITY location --
+        # descend to the first REAL assembly and export THAT as the
+        # file root, by rebuilding it into a temporary document via
+        # rebuild_imported_structure (the validated Session 52
+        # machinery: names, locations, sharing, and colors all carry).
+        # The written file then contains e.g. 'as1' at top, no '/'
+        # wrapper at all -- and because the descent walks the WHOLE
+        # chain, one re-save fully cleans a legacy multi-wrapped file
+        # ('/'->'/'->'/'->as1 exports as just as1). Any deviation from
+        # the safe pattern (multiple children, non-identity location,
+        # nothing but wrappers) falls through to writing the document
+        # as-is, unchanged behavior.
+        from OCP.TDF import TDF_Label
+        export_root_ref = None
+        if free_labels.Length() == 1:
+            cur = free_labels.Value(1)
+            descended = False
+            while (cur is not None and get_label_name(cur) == '/'
+                   and shape_tool.IsAssembly_s(cur)):
+                children = TDF_LabelSequence()
+                shape_tool.GetComponents_s(cur, children, False)
+                if children.Length() != 1:
+                    cur = None
+                    break
+                child = children.Value(1)
+                child_loc = shape_tool.GetShape_s(child).Location()
+                if not child_loc.IsIdentity():
+                    cur = None
+                    break
+                ref = TDF_Label()
+                if not shape_tool.GetReferredShape_s(child, ref):
+                    cur = None
+                    break
+                cur = ref
+                descended = True
+            if (descended and cur is not None
+                    and get_label_name(cur) != '/'):
+                export_root_ref = cur
+
+        if export_root_ref is not None:
+            real_name = get_label_name(export_root_ref)
+            print(f"[save_step_doc] unwrapping '/' chain -- exporting "
+                  f"'{real_name}' as the file root (in-memory document "
+                  f"unchanged)")
+            temp_doc, temp_app = create_doc()
+            temp_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(temp_doc.Main())
+            temp_color_tool = XCAFDoc_DocumentTool.ColorTool_s(temp_doc.Main())
+            memo = {}
+            rebuild_imported_structure(export_root_ref, temp_shape_tool,
+                                       temp_color_tool, memo)
+            temp_shape_tool.UpdateAssemblies()
+            step_writer.Transfer(temp_doc, STEPControl_AsIs)
+        else:
+            step_writer.Transfer(self.doc, STEPControl_AsIs)
         status = step_writer.Write(fname)
         assert status == IFSelect_RetDone
 
@@ -1317,7 +1373,7 @@ class DocModel:
         uid = self.get_uid_from_entry(entry)
         return uid
 
-    def add_component_from_label(self, source_label, name):
+    def add_component_from_label(self, source_label, name, loc=None):
         """Add an imported STEP label (with its full sub-tree) as a
         component under '/' (the top assembly).
 
@@ -1404,8 +1460,9 @@ class DocModel:
         memo = {}
         rebuilt_label = rebuild_imported_structure(source_label, shape_tool,
                                                    color_tool, memo)
-        component_label = shape_tool.AddComponent(root_label, rebuilt_label,
-                                                  TopLoc_Location())
+        component_label = shape_tool.AddComponent(
+            root_label, rebuilt_label,
+            loc if loc is not None else TopLoc_Location())
 
         entry = get_label_entry(component_label)
         # Session 17 finding (same guard as set_component_location):
@@ -1607,20 +1664,61 @@ def load_stp_cmpnt(dm):
     Works for both simple shapes and assemblies. The imported shape
     appears under '/' in the tree, ready to be positioned and dragged
     into a sub-assembly.
+
+    '/'-WRAPPER UNWRAP (Session 56, Basicad item 30 ported): when the
+    imported file's root is named '/' -- i.e. the file is a saved
+    Kodacad SESSION, whose root wrapper the writer preserved -- the
+    wrapper is NOT imported. Its children are imported directly, each
+    at its saved location (composed through any nested wrapper
+    levels, so legacy multi-wrapped files from before this fix unwrap
+    completely in one import). This was the accumulation mechanism
+    behind the '//// as1_1' paths: importing a saved session nested
+    its '/' under the current '/', one extra level per save+import
+    cycle. The tree screenshot showing nested '/' items in the LIVE
+    document was the giveaway that the nesting was created in-app
+    (save/load are structure-preserving) -- and import is the only
+    operation that nests a whole tree under the root.
     """
+    from OCP.TopLoc import TopLoc_Location
     f_name, doc, app = _load_step()
     if doc is None:
         return
     step_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
     labels = TDF_LabelSequence()
     step_shape_tool.GetFreeShapes(labels)
+
+    # Worklist of (label, name, composed_loc) to import. Free shapes
+    # named '/' get expanded into their children instead of imported.
+    worklist = []
     for j in range(labels.Length()):
-        label = labels.Value(j+1)
+        label = labels.Value(j + 1)
         name = get_label_name(label) or f_name or "import"
+        worklist.append((label, name, None))
+
+    while worklist:
+        label, name, loc = worklist.pop(0)
+        if (get_label_name(label) == '/'
+                and step_shape_tool.IsAssembly_s(label)):
+            children = TDF_LabelSequence()
+            step_shape_tool.GetComponents_s(label, children, False)
+            print(f"[load_stp_cmpnt] unwrapping '/' session wrapper -- "
+                  f"importing its {children.Length()} child(ren) directly")
+            for i in range(1, children.Length() + 1):
+                comp = children.Value(i)
+                ref = TDF_Label()
+                if not step_shape_tool.GetReferredShape_s(comp, ref):
+                    continue
+                comp_loc = step_shape_tool.GetShape_s(comp).Location()
+                if loc is not None:
+                    comp_loc = loc.Multiplied(comp_loc)
+                child_name = (get_label_name(comp)
+                              or get_label_name(ref) or "import")
+                worklist.append((ref, child_name, comp_loc))
+            continue
         # Use add_component_from_label (not add_component) so the
         # names of any nested sub-assemblies/parts inside the
         # imported STEP file are preserved rather than lost.
-        dm.add_component_from_label(label, name)
+        dm.add_component_from_label(label, name, loc)
 
 
 def load_stp_undr_top(dm):

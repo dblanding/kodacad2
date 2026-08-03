@@ -328,3 +328,24 @@ haven't gotten WORSE)
 - "Align Axis" constraint is disabled -- needs its own hole/cylinder
   axis-picking machinery, separate from Mate/Align's face-picking,
   not built yet.
+
+## Save/Import Cycle Idempotency (Session 56)
+
+The '////' accumulating-wrapper fix (Basicad item 30 ported). Run
+after any change touching save_step_doc, load_stp_cmpnt, or
+add_component_from_label:
+
+- Save a session whose root is '/' with a single assembly child
+  (e.g. '/' -> as1_1) -- terminal must print "[save_step_doc]
+  unwrapping '/' chain -- exporting 'as1' as the file root", and the
+  file opened in CAD Assistant must show as1 at top, no '/'.
+- Import a saved SESSION file (root '/') into a live session --
+  terminal must print "[load_stp_cmpnt] unwrapping '/' session
+  wrapper", and the file's children must land under the current root
+  at their saved positions, with NO new '/' level in the tree.
+- Full cycle: save -> import into fresh session -> save -> import
+  again. The Position dialog path for any part must show exactly one
+  leading '/', never '// ...', after any number of cycles.
+- Import of a NORMAL (non-session) STEP file (root is a real
+  assembly, e.g. as1-oc-214.stp or a vendor part) must behave exactly
+  as before -- no unwrap message, structure unchanged.
