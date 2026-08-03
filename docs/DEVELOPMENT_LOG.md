@@ -3635,3 +3635,15 @@ Changes:
 ### Lesson for future development
 
 **A defensive mechanism added on real evidence can outlive the bug it defended against -- when the underlying understanding changes fundamentally (Session 51), every defense built on the old understanding deserves re-testing, not just the primary bug.** The unshare was correct engineering in Session 22 given what was observable then; it became silently harmful (defeating a feature's entire purpose) once the real cause was structural health rather than a writer limitation. The retirement comment at the site preserves both halves: why it existed, and what evidence removed it.
+
+## Session 55: nudge rotations orbited instead of spinning in place -- pivot moved to the manipulator's position
+
+Doug reported: dynamic-nudge a vendor part -48mm in Y (correct), then nudge RX 90 degrees -- the part swung far away (up and to the right in the LEFT view) instead of rotating about the manipulator's white dot as expected. (Initially reported as RZ, corrected to RX -- the correction mattered: an RZ can never change a point's Z coordinate, so the part visibly gaining altitude briefly looked like an impossible result and had an instrumentation plan queued; RX rotates in exactly the Y-Z plane the part moved in, dissolving the contradiction and confirming the plain diagnosis.)
+
+Root cause: _apply_nudge pivoted rotations about the part's LOCAL-FRAME ORIGIN's world position (get_world_loc's translation part). That was already better than the global origin (the previous hazard the old comment guarded against), but a vendor-authored part's local origin can sit arbitrarily far from its geometry -- wherever the vendor's modeler left the datum -- so an intended in-place spin becomes an orbit about a distant point. The AIS_Manipulator gizmo, meanwhile, places itself at the attached object's geometric center: exactly where the user visually expects the pivot to be.
+
+Fix: new canvas accessor manipulator_position() (reads AIS_Manipulator.Position().Location(), returns None when detached); _apply_nudge now pivots about the manipulator's actual position when attached, falling back to the part's world location otherwise. Pivot captured before detach_manipulator(). A one-line "[nudge] rotation pivot: (x, y, z) via manipulator" diagnostic prints on rotation nudges so the retest confirms the pivot source directly.
+
+### Lesson for future development
+
+**When a reported result appears geometrically impossible (an RZ that changed Z), verify the reported INPUTS before hunting for an exotic mechanism** -- the queued instrumentation plan was about to chase a contradiction that one corrected detail (RX, not RZ) dissolved entirely. The underlying UX bug was real and simple; the "impossibility" was only ever in the report. Asking "exactly which field did you type into?" is cheaper than any diagnostic run.

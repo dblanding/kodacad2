@@ -350,6 +350,23 @@ class KodaViewport(QWidget):
             print(f"[manipulator] attach failed: {e}")
             return False
 
+    def manipulator_position(self):
+        """World-space gp_Pnt of the manipulator gizmo's placement --
+        the white dot at its center -- or None if no manipulator is
+        attached. AIS_Manipulator positions itself at the attached
+        object's center by default, which is where the user visually
+        expects rotations to pivot (Session 55: a vendor part's LOCAL
+        ORIGIN can be arbitrarily far from its geometry, so pivoting
+        about the part origin can orbit the part instead of spinning
+        it in place)."""
+        if self._manipulator is None:
+            return None
+        try:
+            return self._manipulator.Position().Location()
+        except Exception as e:
+            print(f"[manipulator] could not read position: {e}")
+            return None
+
     def detach_manipulator(self):
         """Remove the manipulator gizmo from the viewport."""
         if self._manipulator is None:

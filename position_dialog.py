@@ -682,14 +682,27 @@ class PositionDialog(QDialog):
         from OCP.gp import gp_Trsf, gp_Vec, gp_Ax1, gp_Pnt, gp_Dir
         from OCP.TopLoc import TopLoc_Location
 
-        # Rotations pivot about the part's CURRENT world position, not
-        # the global origin -- otherwise a small angle could swing a
-        # part that's far from (0,0,0) wildly across the scene, since
-        # gp_Ax1's default axis point IS the origin unless told
-        # otherwise.
+        # Rotations pivot about the MANIPULATOR's current position --
+        # the white dot at the gizmo's center, which is where the user
+        # visually expects the part to spin (Session 55: Doug nudged
+        # RX 90 and the part orbited away in the Y-Z plane instead of
+        # spinning in place). The gizmo sits at the attached object's
+        # geometric center; the part's LOCAL ORIGIN -- the previous
+        # pivot -- can be arbitrarily far from the geometry on
+        # vendor-authored parts, turning an intended in-place spin
+        # into an orbit about a distant point.
+        # Fallback: the part's world location (better than the global
+        # origin, still correct for parts whose origin is at/near
+        # their geometry). Captured BEFORE detach_manipulator() below.
         current_world = self.dm.get_world_loc(self.uid)
-        pivot = current_world.Transformation().TranslationPart()
-        pivot_pnt = gp_Pnt(pivot.X(), pivot.Y(), pivot.Z())
+        manip_pnt = self.main_win.canvas.manipulator_position()
+        if manip_pnt is not None:
+            pivot_pnt = gp_Pnt(manip_pnt.X(), manip_pnt.Y(), manip_pnt.Z())
+            pivot_src = "manipulator"
+        else:
+            pivot = current_world.Transformation().TranslationPart()
+            pivot_pnt = gp_Pnt(pivot.X(), pivot.Y(), pivot.Z())
+            pivot_src = "part world loc (no manipulator attached)"
 
         # Compose in a fixed order: rotate about X, then Y, then Z
         # (all at the pivot), then translate. Simultaneous multi-axis
@@ -698,6 +711,9 @@ class PositionDialog(QDialog):
         # axis at a time, but worth knowing if two angles are entered
         # together and the result isn't what was expected.
         combined = gp_Trsf()
+        if rx or ry or rz:
+            print(f"[nudge] rotation pivot: ({pivot_pnt.X():.3f}, "
+                  f"{pivot_pnt.Y():.3f}, {pivot_pnt.Z():.3f}) via {pivot_src}")
         for axis_dir, angle_deg in ((gp_Dir(1, 0, 0), rx),
                                     (gp_Dir(0, 1, 0), ry),
                                     (gp_Dir(0, 0, 1), rz)):
