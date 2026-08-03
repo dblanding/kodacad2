@@ -256,12 +256,20 @@ haven't gotten WORSE)
   - Import a file containing an internally-SHARED sub-assembly;
     confirm after save/reload that the shared instances still
     reference ONE product (not silently duplicated).
-  - Watch item: unsharing (repositioning one of two shared instances)
-    of a REBUILT imported component still goes through the old
-    same-document Extract_s clone path -- confirmed fine for
-    reader-constructed content (l-bracket), untested for rebuilt
-    imports. If it misbehaves, port that path to
-    rebuild_imported_structure too.
+  - RESOLVED (Session 54): the Session 22 unshare-on-reposition has
+    been REMOVED entirely -- smoke_test_shared_reposition.py confirmed
+    repositioning one of multiple shared instances round-trips
+    cleanly (names, locations, AND sharing preserved) for both leaf
+    parts and assemblies-with-children. Repositioning a shared
+    instance now keeps it genuinely shared. Regression checks:
+    RMB Create Shared Instance on a part and on an assembly, move the
+    new instance via the Position dialog, save, reload -- both
+    instances must survive with correct locations AND still reference
+    ONE underlying product (check in CAD Assistant: one product,
+    multiple occurrences). Also: RMB Create New Assembly under as1,
+    move a part into it, save, reload -- the new assembly and its
+    content must survive. (An EMPTY new assembly may legitimately not
+    survive -- populate before saving.)
 - Repositioning a child within a shared parent assembly (e.g. moving
   `l-bracket` inside `l-bracket-assembly_2`) PROPAGATES to every
   instance of that parent (`l-bracket-assembly_1` too) -- this is

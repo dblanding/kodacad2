@@ -3603,3 +3603,35 @@ Possible future nicety (not implemented): a "Set part color" RMB action, so Doug
 ### Lesson for future development
 
 **"Displays colored in application X" is not evidence the FILE contains colors -- CAD applications routinely paint colorless geometry with their own default schemes, and only a raw-entity scan (or a deliberately neutral viewer) distinguishes file data from app cosmetics.** Three patch rounds were spent on a transfer pipeline that had nothing to transfer; the five-line raw-text scan that settled it should have been the FIRST diagnostic, not the last -- it's the same raw-file-inspection discipline this project already learned for NAUOs in Session 51, applied to a different entity type.
+
+## Session 54: two RMB tree features implemented -- Create New Assembly, Create Shared Instance -- plus the smoke test that decides the unshare question
+
+Doug's two requested features from the Session 53 shakedown list, both implemented as RMB tree actions following the existing handler patterns exactly (_get_clicked_or_current_item -> uid -> dm method -> build_tree/redraw):
+
+- **Create New Assembly** (docmodel.create_new_assembly): resolves the clicked item to its referred label if it's a reference, requires an assembly target, creates an empty compound via AddShape(compound, True) -- the exact '/'-root construction, the healthiest structure this project knows -- and adds it at identity via the label-based AddComponent. Name prompted via QInputDialog; component named with the _1 suffix (Session 17 same-name guard). Documented caveat, printed on creation: an EMPTY assembly may not survive STEP save/reload (a product with no geometry can be dropped by the writer) -- intended workflow is create-then-populate before saving.
+
+- **Create Shared Instance** (docmodel.create_shared_instance): new component under the SAME parent (comp_label.Father()), referencing the SAME underlying shape, at the SAME location -- superimposed, ready for the Position dialog. One more NAUO pointing at one product: exactly as1's own l-bracket-assembly structure. Works for parts and assemblies alike. Named ref_name_{users+1}. Root guarded (cannot be instanced).
+
+**The landmine flagged before building:** Doug's stated workflow (create shared instance -> move it) currently collides with set_component_location's Session 22 UNSHARE step -- moving one of multiple shared instances silently clones it into an independent copy first, defeating the sharing. Session 51/52's findings (healthy label-based structures survive reposition cycles; as1's shared-at-different-locations l-brackets round-trip fine) suggest the Session 22 corruption evidence -- which predates every structural discovery of Session 51 -- may have been confounded the same way smoke_test_freecad_strategy was. Built smoke_test_shared_reposition.py to settle it: two shared instances (create_shared_instance's exact mechanism), one moved to (50,0,0) with NO unshare, STEP round trip, verifying presence + names + locations + preserved sharing -- for BOTH a shared leaf part and a shared assembly-with-children (Doug's real 1602 case). If both pass, the unshare gets removed and the workflow yields genuine persistent sharing end to end; if either fails, the unshare stays for that case with a documented caveat.
+
+**Features shipped; smoke test not yet run.**
+
+### Lesson for future development
+
+**When a new feature's intended workflow routes through an old defensive mechanism, check the collision BEFORE the user discovers it as mysterious behavior** -- the unshare step is invisible in the UI; Doug would have created a shared instance, moved it, saved, and only much later noticed his "shared" parts no longer updated together, with no error and no obvious cause. Tracing the workflow through the existing code path ahead of time turned a future debugging session into a one-smoke-test decision.
+
+## Session 54 (cont'd): both smoke-test cases PASS, both features confirmed in the real app -- the Session 22 unshare is retired
+
+Doug ran smoke_test_shared_reposition.py: BOTH CASES PASS. Leaf part and assembly-with-children alike: two instances after the round trip, correct names, one at origin and one at (50,0,0), both still referencing the SAME underlying shape. Raw NAUOs all correctly named. The Session 22 unshare-on-reposition is confirmed unnecessary -- its corruption evidence predated every Session 51 structural discovery and was evidently confounded by that era's Extract_s-tainted structures, exactly like smoke_test_freecad_strategy's first result.
+
+Doug also confirmed both new RMB features working in the real app: Create Shared Instance made '1602-0032-4008 assembly_2' (2 users sharing one underlying assembly), positioned via Nudge/dynamic to the other end of the assembly; Create New Assembly created 'new_assembly' under as1 with the populate-before-saving reminder printing correctly.
+
+Changes:
+- The unshare block in set_component_location is REMOVED (history preserved in a comment at the site: what Session 22 observed, why it was defensible then, and which test retired it). This was the LAST functional Extract_s in any live code path -- remaining references are docstrings, history comments, and the dead load_stp_undr_top (already fenced off with its Session 52 warning).
+- create_shared_instance's docstring updated from "under investigation" to the Session 54 resolution.
+
+**Note passed to Doug:** the 1602 instance he moved during this test session was created BEFORE the unshare removal, so it is an independent clone, not a shared instance -- the terminal shows the unshare firing ("unsharing before repositioning -- using independent clone"). To get genuine sharing he should delete that instance and redo create-instance -> move on the updated code.
+
+### Lesson for future development
+
+**A defensive mechanism added on real evidence can outlive the bug it defended against -- when the underlying understanding changes fundamentally (Session 51), every defense built on the old understanding deserves re-testing, not just the primary bug.** The unshare was correct engineering in Session 22 given what was observable then; it became silently harmful (defeating a feature's entire purpose) once the real cause was structural health rather than a writer limitation. The retirement comment at the site preserves both halves: why it existed, and what evidence removed it.

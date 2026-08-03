@@ -773,52 +773,25 @@ class DocModel:
             print(f"[set_component_location] Could not find referred label for {uid}")
             return None
 
-        # UNSHARE if needed (Session 22). Confirmed via direct STEP
-        # file inspection: repositioning ONE instance of a shape that's
-        # shared by multiple occurrences (e.g. l-bracket-assembly_1 and
-        # _2, both referencing the same product definition -- confirmed
-        # by their NAUOs pointing at the same child entity) corrupts on
-        # export: the moved instance comes back with a blank name and
-        # identity location, while its untouched sibling round-trips
-        # fine. This matches a documented OCCT writer limitation with
-        # "partner shapes" (multiple occurrences of one shape) at
-        # different locations. Rather than fight the writer, give the
-        # instance being repositioned an independent, unshared copy of
-        # its geometry first -- the same principle as "make unique" /
-        # "break the link" in mainstream CAD tools. This is a
-        # deliberate behavior change, confirmed acceptable with Doug:
-        # once repositioned, this instance no longer shares edits with
-        # any sibling that stays linked to the original.
+        # UNSHARE-ON-REPOSITION: RETIRED (Session 54). The Session 22
+        # defensive step -- cloning a multi-user shape's geometry
+        # before repositioning one of its instances -- is no longer
+        # performed. History: back then, direct STEP inspection showed
+        # repositioning one of N shared instances corrupting on export
+        # (blank name, identity location), so the moved instance was
+        # given an independent clone first ("make unique"). But that
+        # evidence predates every structural discovery of Session 51,
+        # and was very likely confounded by that era's Extract_s-
+        # tainted document structures -- the same confound that
+        # invalidated smoke_test_freecad_strategy's first result.
+        # smoke_test_shared_reposition.py (Session 54) settled it:
+        # repositioning one of two shared instances, with NO unshare,
+        # round-trips cleanly -- names, locations, and SHARING all
+        # preserved -- for both a shared leaf part and a shared
+        # assembly-with-children. Removing the unshare makes
+        # Create Shared Instance -> Position yield genuine persistent
+        # sharing end to end, the whole point of a shared instance.
         from OCP.TDF import TDF_Label, TDF_LabelSequence
-        from OCP.XCAFDoc import XCAFDoc_Editor
-        users = TDF_LabelSequence()
-        n_users = shape_tool.GetUsers_s(ref_label, users, False)
-        if n_users > 1:
-            print(f"[set_component_location] {info['name']!r} is shared "
-                  f"({n_users} users) -- unsharing before repositioning")
-            free_labels_for_unshare = TDF_LabelSequence()
-            shape_tool.GetFreeShapes(free_labels_for_unshare)
-            unshare_root = (free_labels_for_unshare.Value(1)
-                            if free_labels_for_unshare.Length() > 0 else None)
-            if unshare_root is None:
-                print("[set_component_location] Warning: no '/' found "
-                      "for unsharing -- proceeding with shared reference")
-            elif not XCAFDoc_Editor.Extract_s(ref_label, unshare_root):
-                print("[set_component_location] Warning: unshare clone "
-                      "failed -- proceeding with shared reference")
-            else:
-                temp_comp = get_last_component(shape_tool, unshare_root)
-                cloned_ref_label = TDF_Label()
-                if (shape_tool.GetReferredShape_s(temp_comp, cloned_ref_label)
-                        and not cloned_ref_label.IsNull()):
-                    shape_tool.RemoveComponent(temp_comp)
-                    ref_label = cloned_ref_label
-                    print("[set_component_location] unshared -- using "
-                          "independent clone")
-                else:
-                    print("[set_component_location] Warning: could not "
-                          "resolve clone's referred label -- proceeding "
-                          "with shared reference")
 
         # Parent assembly label (component's CURRENT parent -- we are
         # repositioning in place, not reparenting).
@@ -1063,6 +1036,125 @@ class DocModel:
         if not parent_world.IsIdentity():
             return parent_world.Inverted().Multiplied(world_loc)
         return world_loc
+
+    def create_new_assembly(self, parent_uid, name):
+        """Create a new, empty assembly as a component under the item
+        identified by parent_uid (Session 54, RMB tree feature).
+
+        The parent may be the root (a free shape) or a component
+        (reference) -- a reference is resolved to its referred label
+        first. The target must be an assembly. The new assembly is an
+        empty compound created via AddShape(compound, True) -- the
+        exact construction of the '/' root, the healthiest structure
+        this project knows (Session 51) -- added at identity via the
+        label-based AddComponent overload.
+
+        NOTE: an assembly with NO children may not survive a STEP
+        save/reload -- a product with no geometry can be dropped by
+        the writer. The intended workflow is create-then-populate
+        (drag parts in, or add shared instances) before saving; a
+        reminder prints on creation.
+        """
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_Label
+        from OCP.TopoDS import TopoDS_Compound
+        from OCP.BRep import BRep_Builder
+        from OCP.TopLoc import TopLoc_Location
+        if parent_uid not in self.label_dict:
+            print(f"[create_new_assembly] Unknown uid {parent_uid}")
+            return False
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        parent_label = self._find_label_by_entry(
+            self.label_dict[parent_uid]['entry'])
+        if parent_label is None:
+            print(f"[create_new_assembly] Could not find label for "
+                  f"{parent_uid}")
+            return False
+        # Resolve a component reference to its referred label
+        target_assy = parent_label
+        ref = TDF_Label()
+        if shape_tool.GetReferredShape_s(parent_label, ref):
+            target_assy = ref
+        if not shape_tool.IsAssembly_s(target_assy):
+            print(f"[create_new_assembly] "
+                  f"'{get_label_name(target_assy)}' is not an assembly -- "
+                  f"a new assembly can only be created under an assembly.")
+            return False
+        new_shape = TopoDS_Compound()
+        BRep_Builder().MakeCompound(new_shape)
+        new_label = shape_tool.AddShape(new_shape, True)
+        set_label_name(new_label, name)
+        comp = shape_tool.AddComponent(target_assy, new_label,
+                                       TopLoc_Location())
+        # Suffix convention (Session 17 guard: identical occurrence/
+        # product names get blanked by the STEP writer)
+        set_label_name(comp, f"{name}_1")
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        print(f"[create_new_assembly] '{name}' created under "
+              f"'{get_label_name(target_assy)}'. NOTE: populate it "
+              f"before saving -- an EMPTY assembly may not survive a "
+              f"STEP save/reload.")
+        return True
+
+    def create_shared_instance(self, uid):
+        """Create a shared instance of the component identified by uid,
+        at exactly the same location as the original (Session 54, RMB
+        tree feature) -- superimposed, ready to be moved via the
+        Position dialog.
+
+        Mechanism: a new component under the SAME parent assembly,
+        referencing the SAME underlying shape label, at the SAME
+        location -- one more NAUO pointing at one product, exactly the
+        structure as1-oc-214.stp uses for its two l-bracket-assembly
+        instances (confirmed round-trip-safe for the whole life of
+        this project). Works identically for parts and assemblies.
+
+        RESOLVED (Session 54): smoke_test_shared_reposition.py PASSED
+        for both a shared leaf part and a shared assembly-with-
+        children -- repositioning one of multiple shared instances
+        round-trips cleanly with sharing preserved. The Session 22
+        unshare step has been REMOVED from set_component_location, so
+        Create Shared Instance -> Position now yields genuine
+        persistent sharing end to end: move the new instance wherever
+        it belongs, and both instances keep referencing one underlying
+        product, in the session and through STEP save/reload.
+        """
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_Label, TDF_LabelSequence
+        if uid not in self.label_dict:
+            print(f"[create_shared_instance] Unknown uid {uid}")
+            return False
+        if not self.label_dict[uid].get('parent_uid'):
+            print("[create_shared_instance] The root cannot be instanced.")
+            return False
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+        if comp_label is None:
+            print(f"[create_shared_instance] Could not find label for {uid}")
+            return False
+        ref_label = TDF_Label()
+        if not shape_tool.GetReferredShape_s(comp_label, ref_label):
+            print(f"[create_shared_instance] "
+                  f"'{get_label_name(comp_label)}' is not a component "
+                  f"reference -- cannot instance it.")
+            return False
+        # Same parent, same referred shape, same location
+        parent_assy = comp_label.Father()
+        loc = shape_tool.GetShape_s(comp_label).Location()
+        users = TDF_LabelSequence()
+        n_users = shape_tool.GetUsers_s(ref_label, users, False)
+        new_comp = shape_tool.AddComponent(parent_assy, ref_label, loc)
+        ref_name = get_label_name(ref_label)
+        set_label_name(new_comp, f"{ref_name}_{n_users + 1}")
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        print(f"[create_shared_instance] '{ref_name}_{n_users + 1}' "
+              f"created, superimposed on the original -- use the "
+              f"Position dialog to move it. ({n_users + 1} instances "
+              f"now share one underlying "
+              f"{'assembly' if shape_tool.IsAssembly_s(ref_label) else 'part'}.)")
+        return True
 
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.

@@ -420,6 +420,8 @@ class MainWindow(QMainWindow):
         menu = self.treeView.popMenu
         menu.addAction("Set Active", self.setClickedActive)
         menu.addAction("Rename", self.editName)
+        menu.addAction("Create New Assembly", self.createNewAssembly)
+        menu.addAction("Create Shared Instance", self.createSharedInstance)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addSeparator()
@@ -709,6 +711,47 @@ class MainWindow(QMainWindow):
             self.itemClicked = None
         else:
             print("No item selected. Try first left clicking item then right clicking.")
+
+    def createNewAssembly(self):
+        """RMB: create a new, empty assembly under the clicked item
+        (which must be an assembly). Session 54."""
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        if uid not in dm.label_dict:
+            print(f"'{item.text(0)}' cannot hold a new assembly.")
+            self.itemClicked = None
+            return
+        name, OK = QInputDialog.getText(
+            self, "Create New Assembly",
+            "Enter a name for the new assembly:", text="assembly")
+        if OK and name:
+            if dm.create_new_assembly(uid, name):
+                self.build_tree()
+        self.treeView.clearSelection()
+        self.itemClicked = None
+
+    def createSharedInstance(self):
+        """RMB: create a shared instance of the clicked part or
+        assembly, superimposed on the original -- move it via the
+        Position dialog. Session 54."""
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        if uid not in dm.label_dict:
+            print(f"'{item.text(0)}' cannot be instanced.")
+            self.itemClicked = None
+            return
+        if dm.create_shared_instance(uid):
+            self.ais_shape_dict.clear()
+            self.build_tree()
+            self.redraw()
+        self.treeView.clearSelection()
+        self.itemClicked = None
 
     def editName(self):
         """Edit name of treeView item clicked"""
