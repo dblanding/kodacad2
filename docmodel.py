@@ -1231,6 +1231,16 @@ class DocModel:
         for i in range(1, free_labels.Length() + 1):
             _dump(free_labels.Value(i), 0)
 
+        # Tripwire + repair before writing (Session 57 cont'd): an
+        # unnamed product would get the writer's translator-string
+        # placeholder, showing namelessly in CAD Assistant/FreeCAD
+        # (which display PRODUCT names). Repairing self.doc here
+        # covers BOTH write branches -- the temp-doc rebuild copies
+        # names from self.doc. If this ever prints for content
+        # created THIS session, its output identifies a live
+        # name-leak path worth fixing at source.
+        repair_unnamed_products(self.doc, context=" save")
+
         WS = XSControl_WorkSession()
         step_writer = STEPCAFControl_Writer(WS, False)
 
@@ -1250,9 +1260,11 @@ class DocModel:
         # as-is, unchanged behavior.
         from OCP.TDF import TDF_Label
         export_root_ref = None
+        export_root_name = None
         if free_labels.Length() == 1:
             cur = free_labels.Value(1)
             descended = False
+            last_occ_name = None
             while (cur is not None and get_label_name(cur) == '/'
                    and shape_tool.IsAssembly_s(cur)):
                 children = TDF_LabelSequence()
@@ -1269,14 +1281,29 @@ class DocModel:
                 if not shape_tool.GetReferredShape_s(child, ref):
                     cur = None
                     break
+                last_occ_name = get_label_name(child)
                 cur = ref
                 descended = True
             if (descended and cur is not None
                     and get_label_name(cur) != '/'):
                 export_root_ref = cur
+                ref_name = get_label_name(cur)
+                # Session 57 (fixes a Session 56 regression): the
+                # unwrap discarded the final occurrence's name -- so a
+                # user's RENAME of the top assembly (which renames the
+                # occurrence, e.g. 'as1_1' -> 'my-lathe') was silently
+                # lost on every save. If the occurrence name is a user
+                # rename rather than the auto '<ref>_<digits>' suffix
+                # pattern, the exported root carries it.
+                import re
+                if (last_occ_name
+                        and last_occ_name != ref_name
+                        and not re.fullmatch(
+                            re.escape(ref_name) + r"_\d+", last_occ_name)):
+                    export_root_name = last_occ_name
 
         if export_root_ref is not None:
-            real_name = get_label_name(export_root_ref)
+            real_name = export_root_name or get_label_name(export_root_ref)
             print(f"[save_step_doc] unwrapping '/' chain -- exporting "
                   f"'{real_name}' as the file root (in-memory document "
                   f"unchanged)")
@@ -1284,8 +1311,12 @@ class DocModel:
             temp_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(temp_doc.Main())
             temp_color_tool = XCAFDoc_DocumentTool.ColorTool_s(temp_doc.Main())
             memo = {}
-            rebuild_imported_structure(export_root_ref, temp_shape_tool,
-                                       temp_color_tool, memo)
+            rebuilt_root = rebuild_imported_structure(
+                export_root_ref, temp_shape_tool, temp_color_tool, memo)
+            if export_root_name:
+                # Carry the user's top-assembly rename (Session 57 --
+                # fixes the Session 56 regression that discarded it)
+                set_label_name(rebuilt_root, export_root_name)
             temp_shape_tool.UpdateAssemblies()
             step_writer.Transfer(temp_doc, STEPControl_AsIs)
         else:
@@ -1363,11 +1394,20 @@ class DocModel:
         # Add as component under '/' root
         component_label = shape_tool.AddComponent(root_label, shape, True)
         entry = get_label_entry(component_label)
-        set_label_name(component_label, name)
         ref_label = TDF_Label()
         if shape_tool.GetReferredShape_s(component_label, ref_label):
             color_tool.SetColor(ref_label, color, XCAFDoc_ColorGen)
             set_label_name(ref_label, name)
+        # Occurrence gets the _1 suffix, product gets the base name --
+        # NEVER the same string for both (Session 17 rule: identical
+        # occurrence/product names make STEPCAFControl_Writer write
+        # the NAUO's name field BLANK on export). This was exactly why
+        # natively-created parts ('button') displayed namelessly in
+        # CAD Assistant and FreeCAD (which show the NAUO name) while
+        # Kodacad still showed them (the reader back-fills occurrence
+        # names from the product when the NAUO is blank). Session 57.
+        # Matches create_new_assembly's convention and as1's own file.
+        set_label_name(component_label, f"{name}_1")
         shape_tool.UpdateAssemblies()
         self.parse_doc()
         uid = self.get_uid_from_entry(entry)
@@ -1519,23 +1559,20 @@ class DocModel:
         return uid
 
     def change_label_name(self, uid, name):
-        """Change the name of component with uid."""
+        """Change the name of component with uid.
+
+        Session 57: replaced the legacy j/k tag arithmetic -- which
+        crashed on a 4-part entry (renaming the root free shape
+        itself: k stayed None and comps.Value(None) raised) -- with
+        _find_label_by_entry, the same robust resolver delete and
+        reposition already use for both root and component entries.
+        """
         entry, __ = uid.split('.')
-        entry_parts = entry.split(':')
-        if len(entry_parts) == 4:
-            j = 1
-            k = None
-        elif len(entry_parts) == 5:
-            j = int(entry_parts[3])
-            k = int(entry_parts[4])
+        target_label = self._find_label_by_entry(entry)
+        if target_label is None:
+            print(f"[change_label_name] Could not find label for {uid}")
+            return
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
-        labels = TDF_LabelSequence()
-        shape_tool.GetShapes(labels)
-        label = labels.Value(j)
-        comps = TDF_LabelSequence()
-        subchilds = False
-        shape_tool.GetComponents_s(label, comps, subchilds)
-        target_label = comps.Value(k)
         set_label_name(target_label, name)
         shape_tool.UpdateAssemblies()
         print(f"Name {name} set for part with uid = {uid}.")
@@ -1644,6 +1681,57 @@ def _load_step():
     return step_file_name, doc, app
 
 
+def repair_unnamed_products(doc, context=""):
+    """Find product labels whose name is EMPTY or is the STEP writer's
+    placeholder ('Open CASCADE STEP translator X.Y...') and name them
+    from their first occurrence's name, stripped of trailing _N auto
+    suffixes ('button_1_1' -> 'button').
+
+    Why (Session 57 cont'd, from probe_names.py data on Doug's real
+    file): a product label with NO name gets the translator-string
+    placeholder stamped by STEPCAFControl_Writer -- and CAD Assistant
+    and FreeCAD display PRODUCT names (Doug's empirical confirmation),
+    while Kodacad displays occurrence names. So an unnamed product
+    shows fine in Kodacad and as 'Open CASCADE STEP translator 7.9'
+    in every other viewer. All three current creation/modification
+    paths (add_component, reparent_component, replace_shape) verify
+    as naming products correctly -- the leak that orphaned button's
+    product is likely in a since-replaced code state -- so rather
+    than archaeology, this repairs at two chokepoints: on session
+    LOAD (fixes existing files) and before SAVE (a tripwire -- if it
+    ever fires on in-session content, its printout identifies a live
+    leak path by footprint).
+
+    Returns the number of products repaired.
+    """
+    import re
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
+    from OCP.TDF import TDF_LabelSequence
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    labels = TDF_LabelSequence()
+    shape_tool.GetShapes(labels)
+    repaired = 0
+    for i in range(1, labels.Length() + 1):
+        label = labels.Value(i)
+        if shape_tool.IsReference_s(label):
+            continue  # occurrences keep their own names
+        name = get_label_name(label)
+        if name and not name.startswith("Open CASCADE STEP translator"):
+            continue
+        users = TDF_LabelSequence()
+        n_users = shape_tool.GetUsers_s(label, users, False)
+        if n_users < 1:
+            continue  # free root shapes are named elsewhere; skip
+        occ_name = get_label_name(users.Value(1))
+        base = re.sub(r"(_\d+)+$", "", occ_name)
+        if base and base != name:
+            set_label_name(label, base)
+            print(f"[repair_unnamed_products{context}] product "
+                  f"{get_label_entry(label)} {name!r} -> {base!r}")
+            repaired += 1
+    return repaired
+
+
 def load_stp_at_top(dm):
     """Get OCAF document from STEP file and assign it directly to dm.doc."""
     print("[load_stp_at_top] calling _load_step...")
@@ -1653,6 +1741,7 @@ def load_stp_at_top(dm):
     print("[load_stp_at_top] assigning doc...")
     dm.doc = doc
     dm.app = app
+    repair_unnamed_products(doc, context=" load")
     print("[load_stp_at_top] calling parse_doc...")
     dm.parse_doc()
     print("[load_stp_at_top] done")

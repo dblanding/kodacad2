@@ -3666,3 +3666,40 @@ Migration for Doug's existing nested session: just re-save it (single-chain case
 ### Lesson for future development
 
 **"I recall we fixed this in <other project>, item N" is a reference worth reading BEFORE designing a fix, not after** -- the first two patches here were written from a partial mental model and aimed at names when the problem was structure; five minutes reading Basicad's actual item 30 writeup supplied the confirmed mechanism (import-of-saved-session nesting), the design shape (two-sided: export unwraps, import unwraps), and the success criterion (cycle idempotency). Porting a proven fix beat re-deriving one, and the honest revert of the premature patches cost far less than shipping them would have.
+
+## Session 57: Tier 1 naming cluster -- three fixes from code reading, one probe for empirical confirmation
+
+Doug's TODO triage put the naming cluster first, on the suspicion it might relate to recent changes. Correct suspicion. All three findings came from READING the code before touching it:
+
+**Fix 1 -- 'button' nameless in CAD Assistant/FreeCAD but fine in Kodacad:** add_component() named the occurrence AND the product with the IDENTICAL string -- exactly the Session 17 rule (identical occurrence/product names make STEPCAFControl_Writer blank the NAUO's name field). External viewers display the NAUO name (blank); Kodacad displays the occurrence label, which the READER back-fills from the product name when the NAUO is blank -- hence the asymmetry, including after a round trip. Fixed: product gets the base name, occurrence gets name_1 -- matching create_new_assembly's convention and as1's own file. This also answers the TODO's "_n suffix -- why?" item: the suffix is the guard against this exact blanking, and add_component was the one path not applying it.
+
+**Fix 2 -- rename of the top assembly lost on save/reload: OUR Session 56 regression, two days old.** The export unwrap descends past the top-assembly occurrence (where a user's rename lives -- change_label_name renames the occurrence label) to the referred product, and exported the PRODUCT's name -- the rename was never consulted, deterministically discarded on every save. Fixed: the descent tracks the final hop's occurrence name; if it's a user rename rather than the auto '<ref>_<digits>' pattern, the exported root carries it (set on the rebuilt temp-doc root before writing).
+
+**Fix 3 -- latent crash branch in change_label_name:** the 4-part-entry case (renaming the root free shape itself) set k=None then called comps.Value(k) -- would raise. The whole legacy j/k tag arithmetic replaced with _find_label_by_entry, the same robust resolver delete_component and set_component_location already use for both root and component entries.
+
+**probe_names.py** built for empirical confirmation on Doug's real manual-lathe+kc.step: raw PRODUCT entity names, raw NAUO entity names (a blank second field is the smoking gun), and the reader's reconstructed tree showing occurrence AND product names at every level. Confirms the button diagnosis against the actual file rather than resting on code reading alone, and doubles as a permanent diagnostic for any future which-viewer-shows-which-name question.
+
+### Lesson for future development
+
+**A user-visible naming asymmetry between viewers ("shows in app A but not app B") is a question about WHICH FIELD each viewer displays, not about whether the name was saved** -- the name was in the file all along, in the PRODUCT entity; the NAUO field was blank. Different viewers legitimately read different fields, and the Session 17 rule quietly determines which field survives. Also: the top-assembly-rename regression went undetected for two days because no checklist item covered "rename, save, reload" -- added now.
+
+## Session 57 (cont'd): probe data corrects the button diagnosis -- unnamed PRODUCT, not NAUO blanking -- repair + tripwire shipped
+
+Doug ran probe_names.py on manual-lathe+kc.step and made the decisive observation himself: CAD Assistant and FreeCAD display PRODUCT names (Kodacad displays occurrence names). The raw data then corrected Session 57's diagnosis, which must be retracted honestly: button's NAUO (#232892) carries 'button_1_1' just fine -- nothing blank, no Session 17 blanking involved. The actual defect is the last line of the probe's tree: button's PRODUCT is named 'Open CASCADE STEP translator 7.9 3.7.1' -- the placeholder STEPCAFControl_Writer stamps on a product label that has NO name at all. Unnamed product -> placeholder in the file -> nameless (well, translator-named) in every product-name-displaying viewer, while Kodacad shows the occurrence and looks fine. (Session 57's Fix 1 -- the suffix convention in add_component -- REMAINS correct and stays: the Session 17 rule is real from its own original evidence; it just wasn't the mechanism here.)
+
+Which path left the product unnamed? All three current paths verify as correct by reading: add_component names the ref (did even pre-57), reparent_component names the new ref explicitly, replace_shape uses SetShape on the same label (name untouched). The leak is likely in a since-replaced code state. Rather than further archaeology, shipped a two-chokepoint fix with a self-identifying tripwire:
+
+- repair_unnamed_products(doc): finds product labels with empty or translator-placeholder names and names them from their first occurrence's name stripped of trailing _N suffixes ('button_1_1' -> 'button').
+- Wired at session LOAD (fixes Doug's existing files on next load: reload -> [repair_unnamed_products load] prints -> save -> clean file) and immediately before SAVE (covers both write branches, since the temp-doc rebuild copies names from self.doc). If the save-side one ever fires on content created in the current session, its printout identifies a live leak path by footprint -- turning any remaining unknown into a self-reporting one.
+
+Also confirmed by Doug this session: the top-assembly rename fix works -- 'as1' -> 'lathe-asy' survived save/reload and displayed correctly in all three CAD systems.
+
+### Lesson for future development
+
+**When a diagnosis rests on code reading alone and a probe then contradicts it, the probe wins and the retraction goes in the log with the same prominence as the original claim** -- the Session 17-blanking story was plausible, cited real prior evidence, and was wrong; the raw file showed a healthy NAUO and an unnamed product in one glance. And when the historical culprit for a data defect can't be identified, a repair-plus-tripwire beats indefinite archaeology: existing damage gets fixed unconditionally, and any still-live cause is converted from something to hunt into something that reports itself.
+
+## Session 57 (closed): Tier 1 confirmed complete
+
+Doug confirmed the repair fixed the button name in all three CAD systems (Kodacad, CAD Assistant, FreeCAD). Tier 1 status: top-assembly rename round-trip FIXED and confirmed; product-name display in external viewers FIXED and confirmed; the _n suffix question answered (it's the Session 17 blanking guard, now documented); the latent 4-part rename crash fixed along the way. The repair-on-load pass means every existing session file heals itself on its next load+save cycle -- no manual migration needed.
+
+New TODO item noted by Doug for later: a progress indicator during loading of big STEP files. One heads-up recorded for whoever picks it up: OCCT's Message_ProgressIndicator is designed to be subclassed with virtual-method overrides (Show/UserBreak) -- and Basicad item 28 established that OCP's bindings silently ignore Python overrides of C++ virtual methods (the OnSelectionChanged lesson). The clean OCCT-native approach may hit that wall; a pragmatic fallback is a Qt busy indicator driven from the app side around the reader call. Worth a small smoke test of the virtual-override question before committing to either design.

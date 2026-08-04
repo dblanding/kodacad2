@@ -1,8 +1,8 @@
 # KodaCAD TODO
 
-> A good tool should be a **Pleasure** to use.
+### A good tool should be a *Pleasure To Use*.
 
-* This file is a collection of suggestions for improving workflow.
+* This file is a collection of suggestions aimed at making Kodacad a *Pleasure To Use*, mostly by improving workflow on *typical* projects.
 * Tracks outstanding issues and future development ideas.
 * Both developer and user contributions are welcome.
 
@@ -17,19 +17,23 @@ from OCP.Standard import Standard_Version
 title += f"(Using: OCP {Standard_Version.OCC_VERSION_COMPLETE} with PySide6)"
 ```
 
-#### Component part names in goBILDA step files don't show in tree (but they do show up in Basicad)
-
-#### View Cube is inoperable when wp is shown (corners, edges, faces of cube no longer highlight)
+#### View Cube is inoperable when 2D drawing tools are in use (corners, edges, faces of cube no longer highlight)
 
 #### Sometimes RMB -> 'Set Active' doesn't work on the 1st try. (re-click)
 
-#### Deleting geom arc overlaying c-circle is tricky (Because both are selectable)
-
-#### Name of top assembly (of session) can be edited, but new name doesn't survive save/load rnd trip
+#### Deleting geom arc overlaying c-circle is tricky (Because both are selectable).
+If operation is to delete geom lines, then perhaps c-lines and c-circles should not be selectable.
 
 ---
 
 ## 2. UI improvement ideas
+
+#### Access center point of circles and arcs using ctrl+shift keys
+* In HP SolidDesigner (later CoCreate Modeling / Creo Elements/Direct Modeling), holding down Ctrl + Shift while moving the mouse temporarily forces the catch/snap mode to the center of circles and arcs. 
+* Using the Center Snap Modifier
+    * Key combination: Hold Ctrl + Shift simultaneously while an active command expects a point input.
+    * Behavior: It overrides current settings to temporarily catch center points of circles/arcs (and midpoints of straight edges).
+    * Visual cue: The flyby highlighting changes dynamically on the element as you hover over it.
 
 ### 2D
 
@@ -37,7 +41,7 @@ title += f"(Using: OCP {Standard_Version.OCC_VERSION_COMPLETE} with PySide6)"
 * Point & Direction
     1. Click point (sets origin)
     2. Click face (sets +W direction)
-    3. Click face (sets +U direction)
+    3. Click face (sets +U direction) -- In Creo, this is optional. A default direction is shown.
 
 #### Label Workplanes in viewport
 * Display "w1", "w2" etc. in the lower-left corner of each wp
@@ -62,20 +66,13 @@ Essential for referencing existing geometry when sketching.
 intersections, centers. Currently only cline/ccirc intersection
 snap is supported. See PyurCAD for reference implementation.
 
-#### Access center point of circles and arcs using ctrl+shift keys
-* In HP SolidDesigner (later CoCreate Modeling / Creo Elements/Direct Modeling), holding down Ctrl + Shift while moving the mouse temporarily forces the catch/snap mode to the center of circles and arcs. 
-* Using the Center Snap Modifier
-    * Key combination: Hold Ctrl + Shift simultaneously while an active command expects a point input.
-    * Behavior: It overrides current settings to temporarily catch center points of circles/arcs (and midpoints of straight edges).
-    * Visual cue: The flyby highlighting changes dynamically on the element as you hover over it.
-
 ### 3D
 
-#### Create a new assembly
+#### Clicked part in tree highlights in viewport, and vice versa (like Cad Asst)
 
-#### Copy part/assembly (both shared or copied)
-* Add "Duplicate" to the RMB context menu. Should create an
-independent copy at the same world position, ready to reposition.
+#### It would be nice if multiple items in the tree could be chosen for delete all at once.
+* In a large assembly, it takes a long time to refresh after deleting each item, one at a  time.
+* Also, the tree does an expand all items with each deletion. that's annoying.
 
 #### Extrude/Mill:
 * Ability to choose on the fly to add or remove mat'l
@@ -93,11 +90,23 @@ independent copy at the same world position, ready to reposition.
 
 #### Ability to set, edit part color
 
-#### Auto append of '_n' to part names. Why is that?
-
 #### Remove test items in "Modify Active Part" menu
 * "Rotate Active Part"
 * "Reverse Rotate Active Part"
+
+#### In the header of step files, there is a FILE_NAME field:
+```
+FILE_NAME(
+/* name */ '3209-0004-0001.step',
+/* time_stamp */ '2025-02-26T09:28:08-06:00',
+/* author */ (''),
+/* organization */ (''),
+/* preprocessor_version */ 'ST-DEVELOPER v20',
+/* originating_system */ 'Autodesk Translation Framework v13.20.0.188',
+/* authorisation */ '');
+```
+Different step files have vastly different formats. The example above is one.
+Can we "personalize" this?
 
 ---
 

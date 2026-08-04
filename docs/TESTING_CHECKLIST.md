@@ -349,3 +349,28 @@ add_component_from_label:
 - Import of a NORMAL (non-session) STEP file (root is a real
   assembly, e.g. as1-oc-214.stp or a vendor part) must behave exactly
   as before -- no unwrap message, structure unchanged.
+
+## Naming Round-Trip (Session 57)
+
+Run after any change touching add_component, change_label_name, or
+save_step_doc's export unwrap:
+
+- Create a new part (e.g. 'button') in a session. Tree must show
+  'button_1' (occurrence) -- the product carries 'button'. Save,
+  open the file in CAD Assistant: the part's name MUST display there.
+  (CAD Assistant and FreeCAD display PRODUCT names -- confirmed
+  empirically via probe_names.py, Session 57 cont'd. A node showing
+  'Open CASCADE STEP translator X.Y' means an UNNAMED product
+  reached the writer -- check the terminal for
+  [repair_unnamed_products save] prints, which identify the leak.)
+- RENAME the top assembly (RMB > Rename on the item under '/'),
+  save, reload the session: the new name must survive. Also open the
+  saved file in CAD Assistant -- the root must carry the new name.
+  (Guards against the Session 56 export-unwrap regression that
+  silently discarded top-assembly renames.)
+- RENAME the root free shape itself (the '/' item or a root-level
+  session name, a 4-part entry) -- must not crash, name must apply.
+- probe_names.py <file.step> on any saved session shows all three
+  name populations at once (raw PRODUCT names, raw NAUO names,
+  reader's tree) -- blank NAUO second fields are the thing to watch
+  for.
