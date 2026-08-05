@@ -3703,3 +3703,34 @@ Also confirmed by Doug this session: the top-assembly rename fix works -- 'as1' 
 Doug confirmed the repair fixed the button name in all three CAD systems (Kodacad, CAD Assistant, FreeCAD). Tier 1 status: top-assembly rename round-trip FIXED and confirmed; product-name display in external viewers FIXED and confirmed; the _n suffix question answered (it's the Session 17 blanking guard, now documented); the latent 4-part rename crash fixed along the way. The repair-on-load pass means every existing session file heals itself on its next load+save cycle -- no manual migration needed.
 
 New TODO item noted by Doug for later: a progress indicator during loading of big STEP files. One heads-up recorded for whoever picks it up: OCCT's Message_ProgressIndicator is designed to be subclassed with virtual-method overrides (Show/UserBreak) -- and Basicad item 28 established that OCP's bindings silently ignore Python overrides of C++ virtual methods (the OnSelectionChanged lesson). The clean OCCT-native approach may hit that wall; a pragmatic fallback is a Qt busy indicator driven from the app side around the reader call. Worth a small smoke test of the virtual-override question before committing to either design.
+
+## Session 58: all four Tier 0 items implemented
+
+Working through Doug's prioritized queue, Tier 0 complete in one pass:
+
+1. **OCP/OCCT version in title bar** (mainwindow.py): the original break was the uncertain OCP surface for the version constant, so _occt_version_string() tries every known candidate spelling (OCC_VERSION_COMPLETE attribute, Complete_s/Version_s statics, non-suffixed variants) and returns '' on total failure -- the title then simply omits the number rather than crashing at startup. Whichever candidate works on Doug's build, works; none of them working costs nothing.
+
+2. **Test items removed from Modify Active Part** (kodacad.py): the 'Rotate Act Part' / 'Reverse Rotate Act Part' menu entries AND their now-orphaned experimental handler functions (rotateAP/rev_rotateAP) removed -- verified no remaining references.
+
+3. **STEP header customization** (docmodel.py save_step_doc): FILE_NAME header fields set between Transfer and Write via APIHeaderSection_MakeHeader on step_writer.ChangeWriter().Model() -- name (the output filename), originating_system 'KodaCAD', author 'Doug Blanding', organization/authorisation blank; values editable at the call site. Fully defensive: the exact OCP surface (ChangeWriter().Model(), SetOrganisationValue spelling) is the one uncertain part, so any binding mismatch prints '[save_step_doc] header customization skipped: <error>' and the file gets the default header -- never a broken save. If Doug's first save prints that line, the error text identifies exactly which call to adjust.
+
+4. **Busy indicator during STEP load** (docmodel.py _load_step): a modal 'Loading <file> ...' dialog shown and painted (processEvents) BEFORE the blocking read+transfer, closed in a finally. Honest limitation documented in the docstring so nobody chases the 'proper' route unaware: true incremental progress needs Message_ProgressIndicator subclassing with virtual overrides, which OCP silently ignores (Basicad item 28); threading the reader would enable animation but brings OCCT/Qt cross-thread risk out of proportion to the feature. The static dialog delivers the actual point -- the user sees the app is working, not frozen.
+
+**Awaiting Doug's test:** title bar shows a version number (or gracefully doesn't); the two test menu items are gone; a saved file's FILE_NAME header shows KodaCAD/authorship (check the raw file header or watch for the skipped-print); loading a big STEP file shows the busy dialog.
+
+### Lesson for future development
+
+**When a feature's only uncertainty is an API spelling, ship it wrapped so that every failure mode is informative and none is destructive** -- the version string degrades to the old title, the header customization degrades to the default header with the exact error printed, and both therefore convert 'will this binding call work?' from a pre-ship research question into a costless runtime answer on Doug's actual build.
+
+## Session 58 (cont'd): Tier 0 test results -- one pass, three revisions with better second approaches
+
+Doug's test: test-menu removal confirmed; version string got the 'graceful absence' (all binding candidates missed); the busy dialog appeared but BLANK (title bar only, label unpainted); the header customization silently produced OCCT's default header ('Author', 'Open CASCADE').
+
+Revisions:
+- **Version**: stopped guessing at C++ binding surface entirely -- primary source is now importlib.metadata.version('cadquery-ocp'), pure Python packaging metadata that cannot miss and encodes the OCCT version and build ('7.9.3.1.1'). Binding candidates kept as fallback. Title reads '(Using: OCP 7.9.3.1.1 with PySide6)'.
+- **Busy dialog**: one processEvents() pass wasn't enough to paint the label before the blocking read. Explicit setLabelText, several event-pump passes, and a forced repaint() before the block.
+- **Header**: default-header output means the values never reached the written model -- either an exception (terminal print not yet confirmed either way) or the wrong model object. Made self-diagnosing rather than re-guessed: per-field try blocks (one bad spelling can't void the rest), both Organisation/Organization and Authorisation/Authorization spellings tried via getattr, a fallback attempt against WS.Model() if ChangeWriter().Model() raises, and -- ground truth -- the written file's actual FILE_NAME block is read back and printed after every save. Whatever the failure mode, the next save's terminal output identifies the exact stage.
+
+### Lesson for future development
+
+**Package metadata beats binding introspection for version strings** -- importlib.metadata is pure-Python, present whenever the package is installed, and immune to the exact class of API-surface uncertainty that broke this feature twice. And when a wrapped feature fails SILENTLY despite its defensive prints (the header case), the revision should add ground-truth verification of the OUTPUT (read the written file back) rather than more guarded attempts -- output readback catches every failure mode including the ones the wrapping didn't anticipate, like writing to the wrong model successfully.

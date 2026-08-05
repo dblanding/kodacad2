@@ -171,6 +171,39 @@ class TreeView(QTreeWidget):
         return True
 
 
+def _occt_version_string():
+    """Best-effort OCP/OCCT version for the title bar. Primary source
+    (Session 58 cont'd): the installed cadquery-ocp PACKAGE version
+    via importlib.metadata -- pure Python packaging, no binding
+    uncertainty, and it encodes the OCCT version and build (e.g.
+    '7.9.3.1.1'). The Standard_Version binding candidates remain as
+    fallback; on Doug's build none of them resolved ('graceful
+    absence'), which is exactly why the metadata route is primary."""
+    try:
+        from importlib.metadata import version
+        v = version("cadquery-ocp")
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        from OCP.Standard import Standard_Version
+    except Exception:
+        return ""
+    for attr in ("OCC_VERSION_COMPLETE", "Complete_s", "Version_s",
+                 "Complete", "Version"):
+        try:
+            val = getattr(Standard_Version, attr)
+            if callable(val):
+                val = val()
+            s = str(val)
+            if s and any(ch.isdigit() for ch in s):
+                return s
+        except Exception:
+            continue
+    return ""
+
+
 class MainWindow(QMainWindow):
     """Main GUI window containing an assy tree view and a 3D display view
 
@@ -197,7 +230,11 @@ class MainWindow(QMainWindow):
         self.customContextMenuRequested.connect(self.contextMenu)
         self.popMenu = QMenu(self)
         title = f"KodaCAD {APP_VERSION} "
-        title += "(Using: OCP with PySide6)"
+        occt_ver = _occt_version_string()
+        if occt_ver:
+            title += f"(Using: OCP {occt_ver} with PySide6)"
+        else:
+            title += "(Using: OCP with PySide6)"
         self.setWindowTitle(title)
         self.resize(960, 720)
         self.setCentralWidget(self.canvas)

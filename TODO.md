@@ -28,6 +28,9 @@ If operation is to delete geom lines, then perhaps c-lines and c-circles should 
 
 ## 2. UI improvement ideas
 
+#### Add progress indicator for long waits (such as step load or import)
+See *Heads-up* in DEV_LOG Session 57 (closed) 
+
 #### Access center point of circles and arcs using ctrl+shift keys
 * In HP SolidDesigner (later CoCreate Modeling / Creo Elements/Direct Modeling), holding down Ctrl + Shift while moving the mouse temporarily forces the catch/snap mode to the center of circles and arcs. 
 * Using the Center Snap Modifier
@@ -49,7 +52,7 @@ If operation is to delete geom lines, then perhaps c-lines and c-circles should 
     * identifies U, V directions clearly
     * Possible approach: `AIS_TextLabel`
 
-#### Control workplane size automatically
+#### Adjust workplane size automatically
 
 #### More 2D sketching tools (see Pyurcad)
 * Parallel c-lines (c-lines highlight so they should be selectable.)
@@ -68,7 +71,7 @@ snap is supported. See PyurCAD for reference implementation.
 
 ### 3D
 
-#### Clicked part in tree highlights in viewport, and vice versa (like Cad Asst)
+#### Clicked part in tree highlights in viewport, and vice versa (like Cad Assistant)
 
 #### It would be nice if multiple items in the tree could be chosen for delete all at once.
 * In a large assembly, it takes a long time to refresh after deleting each item, one at a  time.

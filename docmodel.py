@@ -1321,8 +1321,73 @@ class DocModel:
             step_writer.Transfer(temp_doc, STEPControl_AsIs)
         else:
             step_writer.Transfer(self.doc, STEPControl_AsIs)
+
+        # Customize the STEP header (Session 58, revised cont'd). The
+        # first attempt produced OCCT's default header, silently --
+        # so this version is self-diagnosing: per-field try blocks
+        # (one bad spelling can't void the rest), both spelling
+        # variants for Organisation/Authorisation, a fallback attempt
+        # against the work-session model, and -- ground truth --
+        # post-write readback of the written file's actual FILE_NAME
+        # block, printed on every save. Whatever happens, the next
+        # save's terminal output identifies the failing stage.
+        try:
+            from OCP.APIHeaderSection import APIHeaderSection_MakeHeader
+            from OCP.TCollection import TCollection_HAsciiString
+
+            def _H(s):
+                return TCollection_HAsciiString(s)
+
+            hdr = None
+            for model_src, tag in ((lambda: step_writer.ChangeWriter().Model(),
+                                    "ChangeWriter().Model()"),
+                                   (lambda: WS.Model(), "WS.Model()")):
+                try:
+                    hdr = APIHeaderSection_MakeHeader(model_src())
+                    print(f"[save_step_doc] header via {tag}")
+                    break
+                except Exception as e:
+                    print(f"[save_step_doc] header model {tag} failed: {e}")
+            if hdr is not None:
+                for setter_names, args in (
+                        (("SetName",), (_H(os.path.basename(fname)),)),
+                        (("SetOriginatingSystem",), (_H("KodaCAD"),)),
+                        (("SetAuthorValue",), (1, _H("Doug Blanding"))),
+                        (("SetOrganizationValue", "SetOrganisationValue"),
+                         (1, _H(""))),
+                        (("SetAuthorisation", "SetAuthorization"),
+                         (_H(""),))):
+                    applied = False
+                    for sname in setter_names:
+                        fn = getattr(hdr, sname, None)
+                        if fn is None:
+                            continue
+                        try:
+                            fn(*args)
+                            applied = True
+                            break
+                        except Exception as e:
+                            print(f"[save_step_doc] {sname} failed: {e}")
+                    if not applied:
+                        print(f"[save_step_doc] no working setter among "
+                              f"{setter_names}")
+        except Exception as e:
+            print(f"[save_step_doc] header customization skipped: {e}")
+
         status = step_writer.Write(fname)
         assert status == IFSelect_RetDone
+
+        # Ground truth: what FILE_NAME actually got written
+        try:
+            with open(fname, errors="replace") as fh:
+                head = fh.read(3000)
+            start = head.find("FILE_NAME")
+            if start != -1:
+                end = head.find(";", start)
+                print(f"[save_step_doc] written header: "
+                      f"{head[start:end + 1]}")
+        except Exception:
+            pass
 
     def open_doc(self):
         """Open a previously saved .xbf file (stub -- use load_stp_at_top instead)."""
@@ -1660,7 +1725,24 @@ def save_step_doc(doc):
 
 
 def _load_step():
-    """Allow user to select step file to load, return step_file_name, doc, app"""
+    """Allow user to select step file to load, return step_file_name, doc, app
+
+    Shows a busy dialog during the (blocking) read+transfer -- big
+    STEP files can take many seconds and the app otherwise looks
+    frozen (Session 58, TODO item). Honest limitation, documented so
+    nobody chases the 'proper' route unaware: TRUE incremental
+    progress needs OCCT's Message_ProgressIndicator, which is
+    designed to be SUBCLASSED with virtual-method overrides -- and
+    OCP's bindings silently ignore Python overrides of C++ virtuals
+    (Basicad item 28, the OnSelectionChanged lesson). Threading the
+    reader instead would enable an animated indicator but brings
+    OCCT/Qt cross-thread risk out of proportion to this feature. So:
+    a static modal 'Loading...' dialog, shown and painted BEFORE the
+    blocking call -- the user sees what is happening, which is the
+    actual point.
+    """
+    from PySide6.QtWidgets import QProgressDialog, QApplication
+    from PySide6.QtCore import Qt
     prompt = 'Select STEP file to import'
     f_path, __ = QFileDialog.getOpenFileName(
         None, prompt, './', "STEP files (*.stp *.STP *.step *.STEP)")
@@ -1669,15 +1751,34 @@ def _load_step():
         return None, None, None
     base = os.path.basename(f_path)
     step_file_name, ext = os.path.splitext(base)
-    doc, app = create_doc()
-    step_reader = STEPCAFControl_Reader()
-    step_reader.SetColorMode(True)
-    step_reader.SetLayerMode(True)
-    step_reader.SetNameMode(True)
-    step_reader.SetMatMode(True)
-    status = step_reader.ReadFile(f_path)
-    if status == IFSelect_RetDone:
-        step_reader.Transfer(doc)
+
+    busy = QProgressDialog(None)
+    busy.setLabelText(f"Loading {base} ...")
+    busy.setRange(0, 0)
+    busy.setCancelButton(None)  # reader can't be interrupted anyway
+    busy.setWindowModality(Qt.WindowModality.ApplicationModal)
+    busy.setMinimumDuration(0)
+    busy.setWindowTitle("KodaCAD")
+    busy.show()
+    # One processEvents pass wasn't enough to paint the label before
+    # the blocking read (Doug saw a blank dialog, Session 58 cont'd)
+    # -- pump a few times and force a repaint.
+    for _ in range(5):
+        QApplication.processEvents()
+    busy.repaint()
+    QApplication.processEvents()
+    try:
+        doc, app = create_doc()
+        step_reader = STEPCAFControl_Reader()
+        step_reader.SetColorMode(True)
+        step_reader.SetLayerMode(True)
+        step_reader.SetNameMode(True)
+        step_reader.SetMatMode(True)
+        status = step_reader.ReadFile(f_path)
+        if status == IFSelect_RetDone:
+            step_reader.Transfer(doc)
+    finally:
+        busy.close()
     return step_file_name, doc, app
 
 

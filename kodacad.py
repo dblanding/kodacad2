@@ -305,39 +305,6 @@ def revolveC(shapeList, *args):
 #############################################
 
 
-def rotateAP():
-    """Experimental... Rotate active part incrementally"""
-
-    if not require_active_part("Rotate Act Part"):
-        return
-    ax1 = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0))
-    aRotTrsf = gp_Trsf()
-    angle = math.pi / 18  # 10 degrees
-    aRotTrsf.SetRotation(ax1, angle)
-    aTopLoc = TopLoc_Location(aRotTrsf)
-    uid = win.activePartUID
-    win.erase_shape(uid)
-    win.activePart.Move(aTopLoc)
-    win.draw_shape(uid)
-
-
-def rev_rotateAP():
-    """Experimental... rotate back"""
-
-    if not require_active_part("Reverse Rotate Act Part"):
-        return
-    ax1 = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0))
-    aRotTrsf = gp_Trsf()
-    angle = math.pi / 18  # 10 degrees
-    aRotTrsf.SetRotation(ax1, angle)
-    aTopLoc = TopLoc_Location(aRotTrsf)
-    aTopLoc = aTopLoc.Inverted()
-    uid = win.activePartUID
-    win.erase_shape(uid)
-    win.activePart.Move(aTopLoc)
-    win.draw_shape(uid)
-
-
 #############################################
 #
 # 3D Geometry modification functions
@@ -754,9 +721,6 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create 3D", "Extrude", extrude)
     win.add_function_to_menu("Create 3D", "Revolve", revolve)
     win.add_menu("Modify Active Part")
-    win.add_function_to_menu("Modify Active Part", "Rotate Act Part", rotateAP)
-    win.add_function_to_menu("Modify Active Part",
-                             "Reverse Rotate Act Part", rev_rotateAP)
     win.add_function_to_menu("Modify Active Part", "Mill", mill)
     win.add_function_to_menu("Modify Active Part", "Pull", pull)
     win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
