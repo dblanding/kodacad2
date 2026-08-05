@@ -1199,20 +1199,40 @@ class MainWindow(QMainWindow):
             shape = part_data["shape"]
             color = part_data["color"]
             try:
-                # Ensure the shape has a triangulation BEFORE building
-                # the AIS object (Session 60 resolution): a face's
-                # selection sensitivity is built from its mesh, and a
-                # curved face with missing/degenerate triangulation
-                # contributes ~nothing pickable while flat faces still
-                # work. Doug's 'button' (from the sketch->extrude->
-                # bake pipeline) was pickable ONLY through its flat
-                # top/bottom disks -- perfect straight down Z, bottom-
-                # half-only at iso (rays exiting through the bottom
-                # disk), impossible edge-on (rays cross only the
-                # lateral face) -- while every vendor part, arriving
-                # pre-meshed from the STEP reader, picked fine.
-                # IncrementalMesh is near-free for already-meshed
-                # shapes. Binding-defensive per project convention.
+                # THE SAVE/RELOAD PICK FIX (Session 60, the full saga
+                # is in DEVELOPMENT_LOG). Root cause: OCCT 7.7+ builds
+                # ANALYTIC selection for cylindrical faces
+                # (Select3D_SensitiveCylinder from the surface's axis
+                # placement + V-range, ignoring triangulation). The
+                # STEP reader reconstructs cylinders with a REVERSED
+                # axis + NEGATIVE V-range (legal, geometrically
+                # identical parametrization) -- and the analytic
+                # sensitive gets built DISPLACED by one height below
+                # the visible face. Confirmed by direct measurement:
+                # reloaded can placement=(x,y,24) axis=(0,0,-1)
+                # V=[-15,0] -> phantom pickable wall at z 9..24 under
+                # a visible can at z 24..39. Fresh MakePrism parts are
+                # canonical (axis up, V=[0,h]) and immune; planar
+                # faces never take the analytic path -- which is why
+                # only curved faces of reloaded parts were affected.
+                #
+                # THE FIX: display-only NurbsConvert -- surfaces
+                # become BSplines, no longer *recognized* as cylinders,
+                # so the analytic path is ineligible and selection
+                # falls back to the triangulation (healthy all along;
+                # ensured by the IncrementalMesh below). The document
+                # and saved files are untouched. Known cosmetic side
+                # effect: patch-seam edges (quadrant lines) appear in
+                # highlight wireframes -- the conversion's fingerprint.
+                try:
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+                    shape = BRepBuilderAPI_NurbsConvert(shape, True).Shape()
+                except Exception as ce:
+                    if not getattr(self, "_nurbs_warned", False):
+                        print(f"[draw_shape] nurbs convert failed "
+                              f"(analytic-selection bug may reappear "
+                              f"on reloaded curved faces): {ce}")
+                        self._nurbs_warned = True
                 try:
                     from OCP.BRepMesh import BRepMesh_IncrementalMesh
                     BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5, True)

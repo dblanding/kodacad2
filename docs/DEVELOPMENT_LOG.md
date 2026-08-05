@@ -3839,3 +3839,65 @@ Doug called it: log as a known problem, stop chewing the bone. Final state of ev
 ### Lesson for future development
 
 **Knowing when to stop is an engineering decision, and an unresolved bug with a complete evidence archive and a cheap workaround is a legitimate closed state** -- six theories died, each killed by a precise user observation or a measurement, and the surviving facts (structure-level anomaly, visible to third-party viewers, unique to the part with the gnarliest history) are worth more to a future session than a seventh guess tonight. The best clue arrived AFTER the decision to stop: checking the artifact in an independent viewer reframed the whole problem from 'our selector is broken' to 'this part's document structure is nonstandard' -- cross-checking in a second implementation is cheap and should happen EARLY in any future saga, not last.
+
+## Session 60 (REOPENED by Doug's decisive experiment): the damage happens in SAVE/RELOAD -- the 2-can minimal repro
+
+Doug ran the experiment that reframes everything. Fresh session: made a clean 10x15 can (no reparenting, no chop, no history) -- hover-picks EVERYWHERE. Saved + reloaded -- the pick pathology appears (bottom-face rays only). Made a second, larger can -- picks everywhere; the reloaded first can still broken. Saved + reloaded again -- BOTH broken. Structure: '/' -> can-asy -> can_1 + big-can_1.
+
+**Conclusions forced by the repro:**
+- The damage is introduced by the SAVE/RELOAD cycle, full stop. Part history (reparents, chop) was a red herring.
+- The lathe session's 'healthy' parts were all FLAT-FACE-DOMINATED (plate, blocks, brackets) -- flats pick via outline sensitivity regardless. The button was the model's only pure-cylinder part; the cans are pure cylinders. Likely EVERY reloaded part is affected and curved faces are where it shows.
+- The pre-mesh at AIS-build time (in the build Doug ran) did NOT cure it -- so missing triangulation is not (or not the whole) operative mechanism. Prime remaining suspect: FACE ORIENTATION -- an inverted face renders fine (two-sided shading) but can defeat selection.
+
+Built probe_pick_shape.py: reads a session file exactly as Kodacad does and reports per part, per face -- orientation flags, surface type, tolerance, triangulation before/after forced meshing, and the key check: whether each face's oriented normal points OUTWARD from the solid (nudge-and-classify via BRepClass3d_SolidClassifier). 'INWARD (INVERTED!)' on the reloaded cans' faces would be the smoking gun and would indict the export rebuild or the reader settings.
+
+**Awaiting: probe output on the 2-can session file, plus whether '[draw_shape] pre-mesh failed' ever appears in Doug's terminal.**
+
+### Lesson for future development
+
+**A user-built minimal reproduction with clean history is worth more than every diagnostic written so far** -- Doug's 2-can experiment eliminated in one stroke the entire history-based theory space (reparents, chop, RMB assembly) that multiple sessions of instrumentation had been unable to rule out, and localized the fault to one pipeline (save/reload) with a one-variable experiment. The 'unique history' correlation on the button was real but coincidental-by-visibility: the button was merely the only part whose geometry EXPOSED a universal defect.
+
+## Session 60 (cont'd): probe exonerates faces -- the pick pattern implicates SHELL-level orientation; probe v2 + display-only heal shipped
+
+Doug's probe run on the 2-can file: face normals all OUTWARD (orientation theory at face level: dead), tolerances healthy, faces meshable (0 -> 52/24/24), pre-mesh never errored in the app. Two findings survive:
+
+1. Both reloaded solids report closed=False -- uninterpretable without a fresh-shape baseline, which we have never captured.
+2. THE PICK PATTERN ITSELF: the picking face is the REVERSED-orientation plane (the bottom, back-facing to a from-above ray); the non-picking faces are the FORWARD ones, including the top plane facing the camera -- the easiest conceivable target. Picks succeeding on back-facing geometry and failing on front-facing is the signature of selection treating the solid as INSIDE-OUT -- pointing one level deeper than faces: SHELL orientation/closed flags mis-set by the save/reload round trip, flipping selection winding globally while rendering stays fine (two-sided shading) and the classifier stays consistent (topology-based, which is why the face-normal probe passed).
+
+Shipped two artifacts for one round of testing:
+- probe_pick_shape.py v2: adds per-SHELL flags (orientation/closed/orientable/face count), a FRESH BRepPrimAPI_MakeCylinder baseline dumped with the identical report in the same output (the missing comparison), and an in-probe CURE TRIAL: each reloaded part re-dumped after ShapeFix_Shape.
+- docmodel.py: _heal_display_shape() -- ShapeFix_Shape applied to the DISPLAY shape only in parse_doc's SimpleShape branch. Document untouched; saved files stay exactly as authored. Prints '[heal] display shape normalized for <name>' per part. If shell flags are the mechanism, the app's picking is fixed by this in the same run that the probe documents the flag diff.
+
+**Awaiting: probe v2 output (the reloaded-vs-fresh shell-flag diff and the post-ShapeFix state) and the picking verdict in the healed app.**
+
+### Lesson for future development
+
+**When a probe clears every property it measures and the symptom persists, mine the SYMPTOM'S OWN GEOMETRY for the next hypothesis** -- 'the back-facing plane picks, the front-facing one doesn't' was sitting in the combination of Doug's reports and the probe's orientation flags, and it points at inverted selection winding more specifically than any further property enumeration would. The probe's face-level cleanliness plus the inverted pick acceptance together imply the defect lives at the one level between them: the shell.
+
+## Session 60 (cont'd): shape FULLY exonerated by baseline comparison -- measuring the selection layer directly
+
+Probe v2 verdict: the reloaded cans are INDISTINGUISHABLE from a fresh BRepPrimAPI_MakeCylinder in every measured property -- solid flags (closed=False on the fresh baseline too: that flag was normal all along), shell flags (FORWARD/closed=True/orientable, both), face orientations (one REVERSED plane each -- any correct cylinder has one), tolerances, meshability. ShapeFix_Shape changed nothing (nothing to fix), and the in-app display-only heal changed nothing (reverted -- fewer variables). Doug's from-below test also killed the inside-out/backface theory: from below the bottom face is FRONT-facing and still the only pick surface.
+
+Sharpened symptom statement (geometric note: the two disks are coaxial and equal, so ANY ray through the top disk also crosses the bottom one -- 'must go through the bottom' from both directions actually means): DISK-CROSSING RAYS PICK; WALL-ONLY RAYS DON'T. The planar faces are sensitive; the cylindrical face contributes nothing. Reloaded parts only; fresh parts fully sensitive; both kinds processed by the identical draw pipeline in the same session with different outcomes.
+
+With the shape exonerated, the divergence must live in the SELECTION DATA the AIS layer builds -- the one thing this entire investigation has inferred about endlessly and never measured. Added _dump_selection_entities: after each Display, dump the AIS object's mode-0 sensitive entities (class, NbSubElements -- a SensitiveTriangulation reports its triangle count -- and each entity's own bounding box). Test protocol: load the 2-can session, then CREATE one fresh can in the same session (its redraw dumps its entities alongside the reloaded ones) -- one paste gives the reloaded-vs-fresh selection diff.
+
+### Lesson for future development
+
+**A baseline comparison can exonerate an entire suspect class in one output** -- every property theory (orientation, shell flags, closedness, tolerance, meshability) died simultaneously the moment a fresh reference was dumped with the identical report, something worth doing FIRST next time a 'what's different about this object' question arises. And measure the layer where the behavior lives: five rounds inferred what the selection data 'should' contain from what StdSelect 'should' do; dumping the sensitive entities themselves was always available and is only now being done.
+
+## Session 60 (SOLVED): the save/reload pick bug -- OCCT's analytic cylinder selection vs the STEP reader's reversed parametrization
+
+THE SMOKING GUN, measured: reloaded can cylinder surface: placement=(-21.5,96.0,24.0) axis=(0,0,-1) V=[-15.0,0.0] -- the STEP reader reconstructs cylinders with a REVERSED axis and NEGATIVE V-range (legal, geometrically identical: origin at the base, V=-15 maps to the top). A fresh MakePrism cylinder is canonical (axis up, V=[0,h]).
+
+THE DISEASE: OCCT 7.7+ builds ANALYTIC selection for cylindrical faces -- Select3D_SensitiveCylinder constructed from the surface's placement + V-range, IGNORING triangulation (why every mesh-based fix bounced off). Fed the reversed convention, it builds the sensitive extending from the origin along the axis: from z=24 DOWN to z=9 -- an invisible pickable wall displaced exactly one height BELOW the visible can (z 24..39). Every observation of the saga follows: through-the-bottom rays crossed the phantom; wall rays at real height missed; DOWN rays always worked (disks are planar -- planes never take the analytic path); fresh parts immune (canonical parametrization); vendor flat-plate parts never showed it; deep-copy didn't help (copies preserve parametrization); ShapeFix found nothing wrong (nothing IS wrong -- the parametrization is legal); and the mid-saga 'selection volume displaced downward' hypothesis was LITERALLY CORRECT, killed at the time only because the census measured geometry bboxes rather than sensitive placement.
+
+THE FIX (production, in draw_shape): display-only BRepBuilderAPI_NurbsConvert -- surfaces become BSplines, no longer RECOGNIZED as cylinders, so the analytic path is ineligible and selection falls back to triangulation (healthy all along; ensured by IncrementalMesh). Document and saved files untouched. Verified by ray census (side->HIT for reloaded cans) AND by Doug's hover test: both previously-broken cans now highlight everywhere. Cosmetic side effect, explained: highlight wireframes show patch-seam edges (circles split into quadrants, cylinder surfaces into patches) -- the conversion's fingerprint.
+
+This also resolves the lathe 'button' (Session 60 earlier, closed-unresolved): same mechanism -- it was simply the lathe's only curved-face-dominated part. The CAD Assistant highlights-parent-assembly observation there remains a separate curiosity, unresolved and archived.
+
+FOLLOW-UPS (parked): (1) selective conversion -- only convert faces with non-canonical cylinder/cone parametrization, sparing canonical parts the seam cosmetics; (2) THIS IS AN UPSTREAM OCCT BUG worth reporting: Select3D_SensitiveCylinder mishandles reversed-axis/negative-V cylinders as produced by OCCT's OWN STEP reader -- minimal repro is trivial (write any extruded cylinder to STEP, reload, analytic pick displaced), and Doug already has rapport on the OCCT tracker from #1395. All diagnostics removed; probe_pick_shape.py kept in tests/ as the investigation's instrument.
+
+### Lesson for future development
+
+**The elimination chain was the method: shape properties, mesh, shell flags, deep copy -- each negative narrowed the space until only parametrization remained, and the direct selector-ray measurement was what made the negatives trustworthy.** Two meta-lessons stand out: (1) a hypothesis 'killed' by a measurement is only as dead as the measurement is relevant -- the displaced-selection theory was right, but the census measured geometry bounding boxes when the displacement lived in the SENSITIVE entities; (2) when an optimization layer (analytic selection) silently replaces the data path you're reasoning about (triangulation), no amount of fixing the bypassed path helps -- 'why does the fix not fire' is sometimes the question that identifies the layer that actually decides.

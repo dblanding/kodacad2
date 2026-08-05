@@ -375,7 +375,7 @@ save_step_doc's export unwrap:
   reader's tree) -- blank NAUO second fields are the thing to watch
   for.
 
-## Known Issue: the 'button' part (Session 60, unresolved)
+## RESOLVED (Session 60): the save/reload pick bug (was: the 'button' part)
 
 One specific part in Doug's manual-lathe session -- 'button', history:
 shape-add at root, multiple drag-reparents, chopped via mill, exported
@@ -383,7 +383,13 @@ through the rebuild-unwrap, product name repaired -- has a nonstandard
 document structure: pickable in Kodacad only via rays through its
 bottom face, and in CAD Assistant its cylindrical surface picks fine
 but highlights the PARENT ASSEMBLY in the tree (unique in the model).
-Full evidence chain in DEVELOPMENT_LOG Session 60. Workaround:
-recreate the part. WATCH FOR RECURRENCE: if another part ever shows
-either symptom after reparent+modify cycles, the pipeline is
-manufacturing these scars -- reopen with the leads listed in the log.
+RESOLVED: root cause was OCCT 7.7+'s analytic cylinder selection
+(Select3D_SensitiveCylinder) mishandling the STEP reader's
+reversed-axis/negative-V cylinder parametrization -- the pickable
+wall was built displaced one height below the visible face. Fixed by
+display-only NurbsConvert in draw_shape (surfaces become BSplines,
+analytic path ineligible, selection falls back to triangulation).
+Regression check: create a curved part, save the session, reload,
+and hover the curved face from edge-on -- it must highlight. Known
+cosmetic: patch-seam edges in highlight wireframes. Full saga in
+DEVELOPMENT_LOG Session 60.
