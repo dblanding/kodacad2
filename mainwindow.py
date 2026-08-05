@@ -86,6 +86,17 @@ class TreeView(QTreeWidget):
         item = self.itemAt(point)
         if item is not None:
             self.setCurrentItem(item)
+        # Also overwrite the main window's itemClicked (Session 59):
+        # a stale-but-VALID itemClicked from an earlier left-click on
+        # a DIFFERENT item passes the shiboken validity check and
+        # shadows the currentItem fallback -- so the RMB action
+        # silently targeted the old item ("Set Active doesn't work on
+        # the 1st try"; the re-click 'fixed' it only because the
+        # left-click refreshed itemClicked). The item under the RMB
+        # cursor is always the user's intent.
+        win = self.window()
+        if hasattr(win, "itemClicked"):
+            win.itemClicked = item
         self.popMenu.exec_(self.mapToGlobal(point))
 
     def dropEvent(self, event):
@@ -180,10 +191,36 @@ def _occt_version_string():
     fallback; on Doug's build none of them resolved ('graceful
     absence'), which is exactly why the metadata route is primary."""
     try:
-        from importlib.metadata import version
-        v = version("cadquery-ocp")
-        if v:
-            return v
+        from importlib.metadata import version, distributions
+        # Collect ALL ocp-ish candidates, then prefer one whose
+        # version looks like an actual OCCT release (major >= 7).
+        # Round 4 (Session 59): the name 'ocp' in Doug's pyproject is
+        # a thin wrapper package versioned 0.1.4 -- matching it first
+        # put a WRONG number in the title bar, which is worse than an
+        # absent one. The real binding (cadquery-ocp, 7.9.x) is a
+        # dependency underneath it and gets preferred by version
+        # shape; if only wrapper-like versions exist, show nothing.
+        candidates = []
+        for dist_name in ("cadquery-ocp", "cadquery-ocp-novtk", "ocp"):
+            try:
+                v = version(dist_name)
+                if v:
+                    candidates.append(v)
+            except Exception:
+                continue
+        try:
+            for dist in distributions():
+                dname = (dist.metadata["Name"] or "").lower()
+                if "ocp" in dname and dist.version:
+                    candidates.append(dist.version)
+        except Exception:
+            pass
+        for v in candidates:
+            try:
+                if int(v.split(".")[0]) >= 7:
+                    return v
+            except Exception:
+                continue
     except Exception:
         pass
     try:

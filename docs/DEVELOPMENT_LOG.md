@@ -3734,3 +3734,31 @@ Revisions:
 ### Lesson for future development
 
 **Package metadata beats binding introspection for version strings** -- importlib.metadata is pure-Python, present whenever the package is installed, and immune to the exact class of API-surface uncertainty that broke this feature twice. And when a wrapped feature fails SILENTLY despite its defensive prints (the header case), the revision should add ground-truth verification of the OUTPUT (read the written file back) rather than more guarded attempts -- output readback catches every failure mode including the ones the wrapping didn't anticipate, like writing to the wrong model successfully.
+
+## Session 59: Tier-2 standalones -- RMB flakiness root-caused and fixed; version string round 3; extrude/mill analysis awaiting Doug's symptom
+
+**RMB Set-Active first-try flakiness -- root cause found by reading, one level subtler than expected.** The tree's contextMenu already targeted the item under the cursor (itemAt(point) + setCurrentItem). The actual mechanism: a stale-but-VALID itemClicked from an earlier left-click on a DIFFERENT item passes _get_clicked_or_current_item's shiboken validity check and shadows the currentItem fallback -- so the RMB action silently targeted the OLD item. "Works on re-click" because the re-click's left-click refreshed itemClicked. Fix: contextMenu now overwrites the main window's itemClicked with the item under the RMB cursor (or None on empty area) -- the cursor target is always the user's intent. This applies to EVERY RMB action, not just Set Active.
+
+**Version string, round 3:** the distribution name was the remaining uncertainty -- Doug's pyproject depends on 'ocp', not 'cadquery-ocp'. Now tries 'ocp' first, the other known names after, and finally scans ALL installed distributions for any name containing 'ocp' -- the name is out of the equation entirely.
+
+**Extrude/mill negative-value item -- analysis complete, fix awaiting Doug's exact symptom.** Read everything: no input validators, the line-edit stack path is clean (float('-10') parses fine), and the prism math is sign-correct by construction (extrude's wVec*length flips with sign; mill's wVec*-depth means negative depth aims the tool in +W). Leading hypothesis: mill with negative depth cuts ABOVE the workplane -- where there is typically no material -- so the operation completes and visibly does nothing, reading as "doesn't work." But that's a hypothesis about a symptom not yet precisely described, and the fix differs by which op and what actually happens (terminal error vs silent no-op vs part in an unexpected place). Asked rather than guessed. The +W/-W/Both chooser and add/remove-material-on-the-fly from the same TODO cluster are a design conversation queued behind the symptom answer.
+
+### Lesson for future development
+
+**"Already handles that case" can be true at the layer you checked and false one layer up** -- the RMB handler correctly captured the cursor item into currentItem, and the bug lived in a DIFFERENT variable (itemClicked) shadowing it in the shared fallback helper. When a reported flake survives a fix that "should" have covered it, trace which of the multiple state sources actually wins in the failing sequence, not just whether the right value exists somewhere.
+
+## Session 59 (closed): RMB fix accepted; version string round 4 -- a wrong version is worse than none
+
+Doug confirmed the title bar now shows a version -- but 'OCP 0.1.4', which is WRONG: OCCT is at 7.9.x, and 0.1.4 is the thin 'ocp' wrapper package his pyproject names, not the binding itself. Round 4: collect all ocp-ish distribution versions and prefer one whose major version is >= 7 (the real cadquery-ocp binding underneath the wrapper); if only wrapper-shaped versions exist, show nothing. A misleading number in the title bar actively misinforms; graceful absence merely under-informs.
+
+RMB Set-Active fix accepted by Doug (intermittent bug -- the stale-itemClicked mechanism found by reading is the class of cause that matches intermittency: it required a prior left-click on a different item still being alive). Extrude/mill direction semantics deliberately TABLED at Doug's call -- to be taken up globally in Tier 3's 2D/modeling pass rather than patched piecemeal now.
+
+Next session queue: Tier-2 color (set/edit part color, color picker), then the Tier-2 tree clump (tree<->viewport highlight sync, multi-select delete with batched refresh, expand-all annoyance).
+
+### Lesson for future development
+
+**A fallback that can return a plausible-but-wrong value is more dangerous than one that returns nothing** -- 'OCP 0.1.4' looks authoritative in a title bar and would quietly misinform every screenshot and bug report thereafter. Fallback chains for display values should validate SHAPE (does this look like an OCCT version?) and prefer absence over confident wrongness.
+
+## Session 59 (confirmed): version string round 4 verified -- 'OCP 7.9.3.1.1' in the title bar
+
+Doug's screenshot confirms the title bar now reads 'KodaCAD 1.1.0 (Using: OCP 7.9.3.1.1 with PySide6)' -- the real cadquery-ocp binding version found beneath the 'ocp' wrapper package, selected by the major>=7 shape check. Tier 0 fully closed; Tier-2 standalones closed or deliberately tabled. Next session: Tier-2 color, then the tree clump.
