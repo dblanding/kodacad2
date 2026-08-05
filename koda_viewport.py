@@ -103,6 +103,9 @@ class DisplayShim:
         self.selected_shape = shape
         # PythonOCC callbacks expected (shapeList, *args) where shapeList
         # is a list of selected shapes. Wrap single shape in a list.
+        # Extra args (e.g. the selected AIS object, Session 60) pass
+        # through to callbacks that want them; operation callbacks
+        # absorb them via their own *args.
         shape_list = [shape] if shape is not None else []
         for cb in self._select_callbacks:
             try:
@@ -573,6 +576,17 @@ class KodaViewport(QWidget):
         self.context.InitSelected()
         if self.context.MoreSelected():
             shape = self.context.SelectedShape()
-            self._display.call_select_callbacks(shape)
+            # Also pass the selected AIS InteractiveObject as an extra
+            # arg (Session 60 fix): highlight sync matches on AIS
+            # object identity, which is robust, rather than on located-
+            # shape geometry, which fails because ais_shape_dict holds
+            # base shapes while SelectedShape() returns the positioned
+            # sub-shape. Operation callbacks absorb it via their *args.
+            ais_obj = None
+            try:
+                ais_obj = self.context.SelectedInteractive()
+            except Exception:
+                pass
+            self._display.call_select_callbacks(shape, ais_obj)
         else:
-            self._display.call_select_callbacks(None)
+            self._display.call_select_callbacks(None, None)

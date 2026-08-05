@@ -3762,3 +3762,80 @@ Next session queue: Tier-2 color (set/edit part color, color picker), then the T
 ## Session 59 (confirmed): version string round 4 verified -- 'OCP 7.9.3.1.1' in the title bar
 
 Doug's screenshot confirms the title bar now reads 'KodaCAD 1.1.0 (Using: OCP 7.9.3.1.1 with PySide6)' -- the real cadquery-ocp binding version found beneath the 'ocp' wrapper package, selected by the major>=7 shape check. Tier 0 fully closed; Tier-2 standalones closed or deliberately tabled. Next session: Tier-2 color, then the tree clump.
+
+## Session 60: bidirectional tree<->viewport highlight sync (like CAD Assistant)
+
+Doug reprioritized (spending rate) to this over color/multi-select. Implemented both directions on top of the existing plumbing rather than new infrastructure:
+
+- **Tree -> viewport**: treeView.currentItemChanged (fires on mouse AND keyboard nav, unlike itemClicked) -> onTreeCurrentChanged -> _highlight_viewport, which ClearSelected + SetSelected(ais) on the AIS context for the uid's shape from ais_shape_dict.
+- **Viewport -> tree**: registered an ALWAYS-ON select callback (install_highlight_sync, called once after InitDriver) -> onViewportSelect -> reverse-map picked shape to uid (_uid_for_selected_shape: IsEqual on whole shapes, then TopExp ancestry match for sub-shape/face/edge picks) -> setCurrentItem + scrollToItem.
+
+Two design constraints handled deliberately:
+1. **Re-entrancy guard** (_syncing_highlight): each side's highlight setter fires the other side's selection signal -- without the flag they ping-pong forever. Both entry points check-and-set it.
+2. **Separate from operation callbacks**: registerCallback's single-slot system is for operations (mate/extrude/...) that temporarily own selection. Highlight sync is a SEPARATE channel via register_select_callback directly, and onViewportSelect no-ops whenever self.registeredCallback is not None -- so highlight sync never steals a pick from a live operation. The viewport's _on_click already fires callbacks unconditionally on a genuine (non-drag) left-click in neutral mode, confirmed by tracing mouseReleaseEvent, so no viewport change was needed.
+
+**Awaiting Doug's test**: click a part in the viewport -> its tree row highlights and scrolls into view; click/arrow-key a tree row -> the part highlights in the viewport; a live operation (e.g. mate) still gets its picks uninterrupted.
+
+### Lesson for future development
+
+**Bidirectional sync is two features plus one guard, and the guard is load-bearing, not defensive polish** -- the ping-pong loop is the DEFAULT behavior without it, not an edge case. And layering an always-on channel beside an existing single-slot operation-callback system (rather than overloading that slot) is what keeps the new feature from silently breaking mate/extrude selection -- the no-op-during-operations check is the seam between the two.
+
+## Session 60 (cont'd): viewport->tree direction fixed -- callback wrapped the shape in a LIST
+
+Doug: tree->viewport works, viewport->tree does nothing. Root cause found by reading call_select_callbacks: it wraps the picked shape in a LIST ([shape]) and calls cb(shape_list, *args) -- the established contract every operation callback expects. onViewportSelect was mis-declared as (self, shape, *args), so it received the LIST as 'shape' and reverse-mapped a list object, matching nothing. Silent because a no-match is a legitimate outcome (click on empty space).
+
+Fixes:
+- _on_click now also passes the selected AIS object (SelectedInteractive()) as an extra callback arg -- highlight sync matches on that, robustly, rather than on SelectedShape() geometry (which is the POSITIONED sub-shape while ais_shape_dict holds BASE shapes -- geometry matching would fail even with the signature right).
+- onViewportSelect re-declared to the real (shape_list, *args) contract; reverse-maps via _uid_for_ais.
+- _uid_for_ais compares the AIS objects' underlying Shape() via IsSame (TopoDS identity, reliable in this binding) rather than AIS handle ==/IsEqual (binding-fragile in OCP -- the same class of quirk that has bitten this project before). Falls back to shape geometry only if no AIS object came through.
+- Added a [highlight_sync] viewport pick: diagnostic so a reverse-map miss is visible during test rather than silent.
+
+**Awaiting Doug's test + terminal**: clicking a part should now highlight its tree row; the diagnostic line reports whether the AIS object arrived and what uid it mapped to, pinpointing any residual miss.
+
+### Lesson for future development
+
+**A callback's established signature is a contract to read before writing a new consumer of it** -- the first implementation guessed (shape) when the codebase's own contract was (shape_list) for every existing operation callback. One grep of call_select_callbacks would have shown the list-wrapping up front. And when adding a NEW consumer to a shared callback, matching on object identity passed explicitly (the AIS object) beats re-deriving identity from geometry that other layers may have transformed.
+
+## Session 60 (closed): the one unpickable part -- createNewAssembly was missing its post-change redraw
+
+Doug isolated it perfectly: highlight sync worked both ways for every part EXCEPT 'button', the one part he'd moved into an assembly he created via RMB. Two symptoms pinned it -- no hover highlight (OCCT's own, independent of our code) and no click-pick, yet tree->viewport SetSelected still worked on it.
+
+Root cause: createNewAssembly did only build_tree() after the structure change, where every other structure-changing handler (createSharedInstance, drag-drop reparent in dropEvent) does the FULL refresh: ais_shape_dict.clear() + build_tree() + redraw(). redraw() re-displays parts with SetAutoActivateSelection(True) -- the step that makes an AIS object hover- and pick-able. Without it, 'button' kept a stale context object that was drawn (visible, and SetSelected-able from the tree) but never re-activated for selection -- hence no hover, no pick, but tree->viewport still fine. The bug predates the highlight feature (Session 54's createNewAssembly); the highlight work is just what made it visible, because before bidirectional sync nobody noticed a part being unpickable.
+
+Fix: createNewAssembly now does the same full refresh as its sibling handlers. Diagnostic print removed (root-caused). Highlight sync confirmed working bidirectionally for all normally-created parts; this closes the last gap.
+
+### Lesson for future development
+
+**A new feature that exercises a capability more thoroughly than anything before it will surface latent bugs in unrelated older code** -- bidirectional highlight didn't BREAK button's pickability; button was never pickable since Session 54, and nothing had needed to pick it until now. When a new feature 'fails' on exactly one item, the item's HISTORY (how it was created) is the diagnostic axis, exactly as Doug reasoned. And the fix is consistency: three structure-changing handlers, only two did the full refresh -- the odd one out was the bug.
+
+## Session 60 (the button saga, resolved pending test): missing triangulation on the curved face -- flat faces were the only pickable surfaces
+
+The view-angle-dependent unpickable 'button' took FIVE wrong theories before the data forced the right one -- recorded honestly, in order: (1) stale AIS / missing redraw in createNewAssembly (a real inconsistency, fixed, but not this bug -- behavior unchanged); (2) occlusion by the channel plate (Doug corrected: the button is IN FRONT, unobstructed); (3) coarse selection tessellation worsening at grazing angles from above (Doug corrected: it's BEST from above, worst edge-on); (4) thin-disk silhouette (Doug corrected: 10mm dia x 15mm long); (5) selection volume displaced from display volume (killed by the context census: 13 shapes, no duplicates, no orphans, every object registered and exactly where drawn).
+
+With structure exhausted, the census's very cleanness pinned the mechanism at the selection-entity level, and ONE mechanism fits all four observations exactly: **a face's pickable sensitivity is built from its TRIANGULATION; the button's curved lateral face has missing/degenerate mesh, so only its flat top/bottom disks were pickable.** Straight down Z: every ray crosses the top disk -> always picks. Iso: rays through the lower body exit through the bottom disk (sensitives aren't backface-culled) -> picks; through the upper body they exit the far lateral wall -> nothing. Edge-on: rays cross only the lateral surface -> unpickable from any azimuth. Vendor parts arrive pre-meshed from the STEP reader; the button came from Kodacad's own sketch->extrude->bake pipeline, which evidently left its mesh absent or degenerate.
+
+Fix: BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5, True) in draw_shape before AIS_Shape creation -- near-free for already-meshed shapes, repairs unmeshed ones. Binding-defensive with a one-time warning. Census and bbox diagnostics removed.
+
+### Lesson for future development
+
+**When a census of the suspected layer comes back perfectly clean, that cleanness IS the finding -- it moves the bug down a level.** Five theories died on user corrections and measurements; each death narrowed the space until only the selection-entity layer remained, and the flat-vs-curved pick asymmetry (the earliest observation, from the very first report) was the fingerprint of triangulation-driven sensitivity all along. Also: every one of Doug's corrections ('it's in front', 'best from above', '10x15mm') was load-bearing -- precise symptom geometry from the user is worth more than any amount of code reading.
+
+## Session 60 (button saga: CLOSED UNRESOLVED, by Doug's call -- with the best clue arriving last)
+
+Doug called it: log as a known problem, stop chewing the bone. Final state of evidence, recorded for whoever reopens this:
+
+**The two anomalies (same part, probably same root):**
+1. In Kodacad: the 'button' (10mm dia x 15mm cylinder, axis vertical) is pickable/hoverable ONLY when the pick ray passes through its bottom face -- best looking down Z, impossible edge-on. Unobstructed, in front of other parts.
+2. In CAD ASSISTANT (Doug's final observation, the most diagnostic single fact of the saga): the cylindrical surface picks EASILY -- but highlights the PARENT ASSEMBLY ('new-asy') in the tree, uniquely; every other pick in the model highlights the PART. So the anomaly is IN THE DOCUMENT/FILE STRUCTURE: it survives STEP export and confuses an independent OCCT-based viewer. The geometry itself is fine (CA picks it); its structural attribution is nonstandard.
+
+**What was established en route (all archived above in this log):** drawn geometry healthy (bbox 10x10x15 at the right place); context census clean (13 shapes, no duplicates/orphans, everything registered); ALL THREE faces had ZERO triangulation as stored (planar faces pick via outline sensitivity without mesh -- why only the flat faces ever picked); Clean+remesh produced healthy triangle counts (52/24/24) AND a fresh AIS built from the remeshed shape -- picking unchanged, so sensitive data exists and the selector still rejects it. Fixes shipped along the way that were correct but not curative for this part: createNewAssembly's missing full refresh (real inconsistency, fixed); general pre-mesh in draw_shape (real gap -- shapes from the modify pipeline carry no triangulation -- kept).
+
+**The part's unique history (no other part traversed all of this):** created at root via shape-based add_component, dragged through MULTIPLE assemblies via reparent, chopped shorter via replace_shape (mill), exported through the Session 56 rebuild-unwrap, reloaded, product renamed by repair_unnamed_products (it was the translator-placeholder part). The structural scar is presumably from some combination of these.
+
+**Workaround:** delete and recreate the part (~2 minutes). 
+
+**Leads for whoever reopens:** (a) run probe_names.py / assembly_storyboard.py against the saved file and inspect the button's label structure -- specifically whether its solid is attached at new-asy's compound level rather than (only) under its own product, which would explain CAD Assistant attributing the pick to the assembly; (b) check IsSame identity between new-asy's compound content and the button solid; (c) if recreating the part ALSO eventually degrades after reparent+modify cycles, the modify/reparent pipeline is manufacturing these scars and deserves a ShapeFix/heal step; the swap-test build (fresh cylinder at same position, never run) remains the decisive shape-vs-environment discriminator.
+
+### Lesson for future development
+
+**Knowing when to stop is an engineering decision, and an unresolved bug with a complete evidence archive and a cheap workaround is a legitimate closed state** -- six theories died, each killed by a precise user observation or a measurement, and the surviving facts (structure-level anomaly, visible to third-party viewers, unique to the part with the gnarliest history) are worth more to a future session than a seventh guess tonight. The best clue arrived AFTER the decision to stop: checking the artifact in an independent viewer reframed the whole problem from 'our selector is broken' to 'this part's document structure is nonstandard' -- cross-checking in a second implementation is cheap and should happen EARLY in any future saga, not last.

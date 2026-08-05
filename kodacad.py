@@ -760,6 +760,7 @@ if __name__ == "__main__":
     win.canvas.InitDriver()
     win.canvas.update()
     display = win.canvas._display
+    win.install_highlight_sync()  # bidirectional tree<->viewport
     a2d = M2D(win, display)
 
     selectSubMenu = QMenu("Select Mode")

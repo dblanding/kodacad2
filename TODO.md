@@ -10,16 +10,7 @@
 
 ## 1. Broken: (should work but doesn't or doesn't always work)
 
-#### Version string from OCP
-* Re-add the OCP/OCCT version string to the title bar:
-```python
-from OCP.Standard import Standard_Version
-title += f"(Using: OCP {Standard_Version.OCC_VERSION_COMPLETE} with PySide6)"
-```
-
 #### View Cube is inoperable when 2D drawing tools are in use (corners, edges, faces of cube no longer highlight)
-
-#### Sometimes RMB -> 'Set Active' doesn't work on the 1st try. (re-click)
 
 #### Deleting geom arc overlaying c-circle is tricky (Because both are selectable).
 If operation is to delete geom lines, then perhaps c-lines and c-circles should not be selectable.
@@ -27,9 +18,6 @@ If operation is to delete geom lines, then perhaps c-lines and c-circles should 
 ---
 
 ## 2. UI improvement ideas
-
-#### Add progress indicator for long waits (such as step load or import)
-See *Heads-up* in DEV_LOG Session 57 (closed) 
 
 #### Access center point of circles and arcs using ctrl+shift keys
 * In HP SolidDesigner (later CoCreate Modeling / Creo Elements/Direct Modeling), holding down Ctrl + Shift while moving the mouse temporarily forces the catch/snap mode to the center of circles and arcs. 
@@ -71,8 +59,6 @@ snap is supported. See PyurCAD for reference implementation.
 
 ### 3D
 
-#### Clicked part in tree highlights in viewport, and vice versa (like Cad Assistant)
-
 #### It would be nice if multiple items in the tree could be chosen for delete all at once.
 * In a large assembly, it takes a long time to refresh after deleting each item, one at a  time.
 * Also, the tree does an expand all items with each deletion. that's annoying.
@@ -92,24 +78,6 @@ snap is supported. See PyurCAD for reference implementation.
 #### Booleans: (fuse, subtract, etc)
 
 #### Ability to set, edit part color
-
-#### Remove test items in "Modify Active Part" menu
-* "Rotate Active Part"
-* "Reverse Rotate Active Part"
-
-#### In the header of step files, there is a FILE_NAME field:
-```
-FILE_NAME(
-/* name */ '3209-0004-0001.step',
-/* time_stamp */ '2025-02-26T09:28:08-06:00',
-/* author */ (''),
-/* organization */ (''),
-/* preprocessor_version */ 'ST-DEVELOPER v20',
-/* originating_system */ 'Autodesk Translation Framework v13.20.0.188',
-/* authorisation */ '');
-```
-Different step files have vastly different formats. The example above is one.
-Can we "personalize" this?
 
 ---
 

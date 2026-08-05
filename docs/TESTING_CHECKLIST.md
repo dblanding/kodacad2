@@ -374,3 +374,16 @@ save_step_doc's export unwrap:
   name populations at once (raw PRODUCT names, raw NAUO names,
   reader's tree) -- blank NAUO second fields are the thing to watch
   for.
+
+## Known Issue: the 'button' part (Session 60, unresolved)
+
+One specific part in Doug's manual-lathe session -- 'button', history:
+shape-add at root, multiple drag-reparents, chopped via mill, exported
+through the rebuild-unwrap, product name repaired -- has a nonstandard
+document structure: pickable in Kodacad only via rays through its
+bottom face, and in CAD Assistant its cylindrical surface picks fine
+but highlights the PARENT ASSEMBLY in the tree (unique in the model).
+Full evidence chain in DEVELOPMENT_LOG Session 60. Workaround:
+recreate the part. WATCH FOR RECURRENCE: if another part ever shows
+either symptom after reparent+modify cycles, the pipeline is
+manufacturing these scars -- reopen with the leads listed in the log.

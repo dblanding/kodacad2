@@ -337,6 +337,11 @@ class MainWindow(QMainWindow):
         # {uid: [list of ancestor shapes]}
         self.ancestor_dict = defaultdict(list)
         self.ais_shape_dict = {}  # {uid: <AIS_Shape> object}
+        self._syncing_highlight = False  # re-entrancy guard for
+        # bidirectional tree<->viewport highlight sync (Session 60):
+        # each side's highlight setter fires the other side's
+        # selection signal; without this guard they ping-pong forever.
+        self._highlighted_uid = None
 
         self.activeWp = None  # WorkPlane object
         self.activeWpUID = 0
@@ -361,6 +366,10 @@ class MainWindow(QMainWindow):
         )
         self.treeView = TreeView()  # Assy/Part structure (display)
         self.treeView.itemClicked.connect(self.treeViewItemClicked)
+        # Highlight sync: currentItemChanged fires on mouse AND
+        # keyboard navigation (itemClicked is mouse-only), so the
+        # viewport tracks arrow-key tree navigation too (Session 60).
+        self.treeView.currentItemChanged.connect(self.onTreeCurrentChanged)
         self.populate_tree_context_menu()
         self.treeDockWidget.setWidget(self.treeView)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.treeDockWidget)
@@ -803,7 +812,17 @@ class MainWindow(QMainWindow):
             "Enter a name for the new assembly:", text="assembly")
         if OK and name:
             if dm.create_new_assembly(uid, name):
+                # Full refresh -- not just build_tree(). Matching
+                # createSharedInstance (Session 60 fix): a structure
+                # change leaves stale AIS objects in the context that
+                # are displayed but NOT re-activated for selection, so
+                # affected parts (Doug's 'button') stopped hover-
+                # highlighting and couldn't be picked, while tree->
+                # viewport SetSelected still worked on them. redraw()
+                # re-displays with SetAutoActivateSelection(True).
+                self.ais_shape_dict.clear()
                 self.build_tree()
+                self.redraw()
         self.treeView.clearSelection()
         self.itemClicked = None
 
@@ -928,6 +947,135 @@ class MainWindow(QMainWindow):
         self.faceStack = []
         self.ptStack = []
 
+    def install_highlight_sync(self):
+        """Register the always-on viewport->tree highlight callback.
+        Called once after the display exists (Session 60). Kept
+        SEPARATE from registerCallback's operation-callback slot:
+        operations (mate, extrude, ...) temporarily own selection and
+        must not be disturbed, so onViewportSelect no-ops whenever an
+        operation callback is active."""
+        try:
+            self.canvas._display.register_select_callback(
+                self.onViewportSelect)
+        except Exception as e:
+            print(f"[highlight_sync] could not register: {e}")
+
+    def onTreeCurrentChanged(self, current, previous):
+        """Tree -> viewport highlight. Guarded against the
+        ping-pong: setting viewport selection fires onViewportSelect,
+        which would set the tree, which fires this again."""
+        if self._syncing_highlight:
+            return
+        uid = current.text(1) if current is not None else None
+        self._syncing_highlight = True
+        try:
+            self._highlight_viewport(uid)
+        finally:
+            self._syncing_highlight = False
+
+    def onViewportSelect(self, shape_list, *args):
+        """Viewport -> tree highlight. Real callback signature is
+        (shape_list, ais_obj) -- the first fix was mis-declared as
+        (shape) and received the LIST, matching nothing (Session 60).
+        No-op while an operation callback owns selection."""
+        if self.registeredCallback is not None:
+            return
+        if self._syncing_highlight:
+            return
+        ais_obj = args[0] if args else None
+        uid = self._uid_for_ais(ais_obj)
+        if uid is None and shape_list:
+            # Fallback: match by shape geometry if no AIS object
+            uid = self._uid_for_selected_shape(shape_list[0])
+        self._syncing_highlight = True
+        try:
+            if uid is not None:
+                item = self._tree_item_for_uid(uid)
+                if item is not None:
+                    self.treeView.setCurrentItem(item)
+                    self.treeView.scrollToItem(item)
+            else:
+                self.treeView.setCurrentItem(None)
+            self._highlighted_uid = uid
+        finally:
+            self._syncing_highlight = False
+
+    def _uid_for_ais(self, ais_obj):
+        """Reverse-map a selected AIS InteractiveObject to its uid.
+        OCP AIS handle equality (== / IsEqual) is binding-fragile, so
+        match by the AIS objects' underlying Shape() via IsSame --
+        TopoDS identity is reliable in this binding, and each part's
+        AIS_Shape wraps a distinct base shape."""
+        if ais_obj is None:
+            return None
+        try:
+            target = ais_obj.Shape()
+        except Exception:
+            return None
+        for uid, ais in self.ais_shape_dict.items():
+            try:
+                if ais.Shape().IsSame(target):
+                    return uid
+            except Exception:
+                continue
+        return None
+
+    def _highlight_viewport(self, uid):
+        """Highlight exactly the AIS shape for uid (clear others).
+        Uses the AIS context's own hilight so it coexists with normal
+        selection colours."""
+        display = getattr(self.canvas, "_display", None)
+        if display is None:
+            return
+        context = display.Context
+        try:
+            context.ClearSelected(False)
+            ais = self.ais_shape_dict.get(uid) if uid else None
+            if ais is not None:
+                context.SetSelected(ais, False)
+            context.UpdateCurrentViewer()
+            self.canvas.update()
+            self._highlighted_uid = uid
+        except Exception as e:
+            print(f"[highlight_sync] viewport highlight failed: {e}")
+
+    def _uid_for_selected_shape(self, shape):
+        """Reverse-map a picked TopoDS_Shape to its uid via
+        ais_shape_dict. The picked shape is a sub-shape (face/edge) or
+        the whole shape; match by identifying which AIS_Shape's shape
+        contains/equals it."""
+        if shape is None:
+            return None
+        from OCP.TopoDS import TopoDS_Shape
+        for uid, ais in self.ais_shape_dict.items():
+            try:
+                if ais.Shape().IsEqual(shape):
+                    return uid
+            except Exception:
+                continue
+        # Sub-shape pick: match by ancestry (the picked face/edge
+        # belongs to one part's shape)
+        for uid, ais in self.ais_shape_dict.items():
+            try:
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopAbs import TopAbs_ShapeEnum
+                exp = TopExp_Explorer(ais.Shape(), shape.ShapeType())
+                while exp.More():
+                    if exp.Current().IsSame(shape):
+                        return uid
+                    exp.Next()
+            except Exception:
+                continue
+        return None
+
+    def _tree_item_for_uid(self, uid):
+        """Find the tree item whose column-1 text is uid."""
+        for item in self.treeView.findItems(
+                "", Qt.MatchFlag.MatchContains | Qt.MatchRecursive):
+            if item.text(1) == uid:
+                return item
+        return None
+
     def registerCallback(self, callback):
         currCallback = self.registeredCallback
         if currCallback:  # Make sure a callback isn't already registered
@@ -1051,6 +1199,27 @@ class MainWindow(QMainWindow):
             shape = part_data["shape"]
             color = part_data["color"]
             try:
+                # Ensure the shape has a triangulation BEFORE building
+                # the AIS object (Session 60 resolution): a face's
+                # selection sensitivity is built from its mesh, and a
+                # curved face with missing/degenerate triangulation
+                # contributes ~nothing pickable while flat faces still
+                # work. Doug's 'button' (from the sketch->extrude->
+                # bake pipeline) was pickable ONLY through its flat
+                # top/bottom disks -- perfect straight down Z, bottom-
+                # half-only at iso (rays exiting through the bottom
+                # disk), impossible edge-on (rays cross only the
+                # lateral face) -- while every vendor part, arriving
+                # pre-meshed from the STEP reader, picked fine.
+                # IncrementalMesh is near-free for already-meshed
+                # shapes. Binding-defensive per project convention.
+                try:
+                    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+                    BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5, True)
+                except Exception as me:
+                    if not getattr(self, "_mesh_warned", False):
+                        print(f"[draw_shape] pre-mesh failed: {me}")
+                        self._mesh_warned = True
                 aisShape = AIS_Shape(shape)
                 self.ais_shape_dict[uid] = aisShape
                 context.Display(aisShape, False)
