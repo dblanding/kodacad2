@@ -224,7 +224,8 @@ def extrude():
             myFaceProfile.Shape(), aPrismVec).Shape()
         loc_new_part = BRepBuilderAPI_Transform(
             new_part, loc.Transformation()).Shape()
-        uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
+        with docmodel.undo_transaction(dm):
+            uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
         win.build_tree()
         win.redraw()
         win.syncUncheckedToHideList()
@@ -266,7 +267,8 @@ def revolve():
         new_part = BRepPrimAPI_MakeRevol(face, revolve_axis).Shape()
         loc_new_part = BRepBuilderAPI_Transform(
             new_part, loc.Transformation()).Shape()
-        uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
+        with docmodel.undo_transaction(dm):
+            uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
         win.build_tree()
         win.redraw()
         win.syncUncheckedToHideList()
@@ -351,7 +353,8 @@ def mill():
         tool = BRepPrimAPI_MakePrism(punchProfile.Shape(), aPrismVec).Shape()
         newPart = BRepAlgoAPI_Cut(workPart, tool).Shape()
         win.erase_shape(uid)
-        dm.replace_shape(uid, newPart)
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
         win.draw_shape(uid)
         win.setActivePart(uid)
         win.statusBar().showMessage("Mill operation complete")
@@ -391,7 +394,8 @@ def pull():
         tool = BRepPrimAPI_MakePrism(pullProfile.Shape(), aPrismVec).Shape()
         newPart = BRepAlgoAPI_Fuse(workPart, tool).Shape()
         win.erase_shape(uid)
-        dm.replace_shape(uid, newPart)
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
         win.draw_shape(uid)
         win.setActivePart(uid)
         win.statusBar().showMessage("Pull operation complete")
@@ -452,7 +456,8 @@ def fillet(event=None):
             return
         try:
             win.erase_shape(uid)
-            dm.replace_shape(uid, newPart)
+            with docmodel.undo_transaction(dm):
+                dm.replace_shape(uid, newPart)
             win.draw_shape(uid)
             win.statusBar().showMessage("Fillet operation complete")
         except Exception as e:
@@ -498,7 +503,8 @@ def fuse():
         uid = win.activePartUID
         newPart = BRepAlgoAPI_Fuse(workpart, shape).Shape()
         win.erase_shape(uid)
-        dm.replace_shape(uid, newPart)
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
         win.draw_shape(uid)
         win.setActivePart(uid)
         win.statusBar().showMessage("Fuse operation complete")
@@ -534,7 +540,8 @@ def shell(event=None):
         mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
         newPart = mkShell.Shape()
         win.erase_shape(uid)
-        dm.replace_shape(uid, newPart)
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
         win.draw_shape(uid)
         win.setActivePart(uid)
         win.statusBar().showMessage("Shell operation complete")
@@ -603,7 +610,8 @@ def import_step():
     The imported assembly appears at root level, ready to be
     positioned and dragged into a sub-assembly.
     """
-    docmodel.load_stp_cmpnt(dm)
+    with docmodel.undo_transaction(dm):
+        docmodel.load_stp_cmpnt(dm)
     win.build_tree()
     win.redraw()
     win.fitAll()
@@ -713,6 +721,10 @@ if __name__ == "__main__":
     win.add_function_to_menu("File", "Save Session", dm.save_step_doc)
     file_menu.addSeparator()
     win.add_function_to_menu("File", "Import STEP", import_step)
+    edit_menu = win.add_menu("Edit")
+    win.add_function_to_menu("Edit", "Undo    (Ctrl+Z)", win.editUndo)
+    win.add_function_to_menu("Edit", "Redo    (Ctrl+Y)", win.editRedo)
+
     win.add_menu("Workplane")
     win.add_function_to_menu("Workplane", "At Origin, XY Plane", makeWP)
     win.add_function_to_menu("Workplane", "On face", wpOnFace)

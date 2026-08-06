@@ -73,6 +73,23 @@ class PositionDialog(QDialog):
         self.uid = uid
         self.name = name
 
+        # UNDO INTEGRATION, option (b) chosen by Doug (Session 61):
+        # the WHOLE positioning session is ONE OCAF transaction,
+        # opened here and committed at Done (or on close) -- so the
+        # app-level undo history reads one-entry-per-completed-
+        # placement and Ctrl+Z undoes a placement as a unit, while
+        # the Back button keeps its fine-grained internal _history
+        # stepping WITHIN the open transaction. Internal moves call
+        # dm.set_component_location through undo_transaction, which
+        # JOINS this open command rather than nesting.
+        self._txn_open = False
+        try:
+            if not dm.doc.HasOpenCommand():
+                dm.doc.NewCommand()
+                self._txn_open = True
+        except Exception as e:
+            print(f"[position] could not open undo transaction: {e}")
+
         # Undo history: list of local-location snapshots taken BEFORE
         # each applied move, most recent last (see _apply_world_move).
         self._history = []
@@ -912,13 +929,27 @@ class PositionDialog(QDialog):
             self._reattach_manipulator()
         self._update_ui_state()
 
+    def _commit_position_txn(self):
+        """Commit the session-wide transaction (option (b)). Called
+        from Done AND from closeEvent (closing via X keeps what the
+        user sees on screen -- committing preserves it; an empty
+        command commits to nothing). Idempotent via _txn_open."""
+        if getattr(self, "_txn_open", False):
+            try:
+                self.dm.doc.CommitCommand()
+            except Exception as e:
+                print(f"[position] commit failed: {e}")
+            self._txn_open = False
+
     def _on_done(self):
+        self._commit_position_txn()
         self.main_win.clearCallback()
         self.main_win.canvas.detach_manipulator()
         self.main_win.statusBar().showMessage("Position complete.", 5000)
         self.close()
 
     def closeEvent(self, event):
+        self._commit_position_txn()
         self.main_win.clearCallback()
         self.main_win.canvas.detach_manipulator()
         super().closeEvent(event)

@@ -375,6 +375,33 @@ def remove_shape_and_orphaned_descendants(shape_tool, label):
             remove_shape_and_orphaned_descendants(shape_tool, child_ref)
 
 
+UNDO_LIMIT = 50  # OCAF undo history depth (Session 61)
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def undo_transaction(dm):
+    """One undoable OCAF transaction around a user gesture (Session
+    61, gauge-certified 7/7). JOINS an already-open command instead
+    of nesting -- so the Position dialog (option (b): whole session =
+    ONE transaction committed at Done) can hold a command open while
+    its internal moves call through here safely. Aborts on exception,
+    commits otherwise; committing an empty command records nothing.
+    """
+    if dm.doc.HasOpenCommand():
+        yield  # join the outer transaction (e.g. Position dialog)
+        return
+    dm.doc.NewCommand()
+    try:
+        yield
+    except Exception:
+        dm.doc.AbortCommand()
+        raise
+    dm.doc.CommitCommand()
+
+
 def create_doc():
     """Create (and return) XCAF doc and app
 
@@ -406,6 +433,7 @@ class DocModel:
 
     def __init__(self):
         self.doc, self.app = create_doc()
+        self.doc.SetUndoLimit(UNDO_LIMIT)  # Session 61
         self.part_dict = {}   # {uid: {keys: 'shape', 'name', 'color', 'loc'}}
         self.label_dict = {}  # {uid: {keys: 'entry', 'name', 'parent_uid', ...}}
         self._share_dict = {}
@@ -1849,6 +1877,9 @@ def load_stp_at_top(dm):
     print("[load_stp_at_top] assigning doc...")
     dm.doc = doc
     dm.app = app
+    # Session load replaces the doc object: re-enable undo history on
+    # the fresh doc (history clearing on load is correct semantics).
+    dm.doc.SetUndoLimit(UNDO_LIMIT)
     repair_unnamed_products(doc, context=" load")
     print("[load_stp_at_top] calling parse_doc...")
     dm.parse_doc()

@@ -47,7 +47,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Vertex
 # import myDisplay.qtDisplay as qtDisplay  # For pythonocc-7.4
 from koda_viewport import KodaViewport  # For pythonocc-7.5
 import rpnCalculator
-from docmodel import DocModel
+from docmodel import DocModel, undo_transaction
 from version import APP_VERSION
 
 
@@ -163,7 +163,8 @@ class TreeView(QTreeWidget):
             if drag_uid and new_parent_uid and drag_uid in dm.label_dict:
                 if new_parent_uid in dm.label_dict:
                     try:
-                        dm.reparent_component(drag_uid, new_parent_uid)
+                        with undo_transaction(dm):
+                            dm.reparent_component(drag_uid, new_parent_uid)
                         # Full reset: clear all AIS shapes and redraw from scratch
                         # Walk up parent chain to find MainWindow
                         main_win = self.parent()
@@ -344,6 +345,10 @@ class MainWindow(QMainWindow):
 
         self.assy_root, self.wp_root = self.create_root_items()
         self.itemClicked = None  # TreeView item that has been mouse clicked
+        # Undo/Redo shortcuts (Session 61); menu items added in kodacad.py
+        from PySide6.QtGui import QShortcut, QKeySequence
+        QShortcut(QKeySequence.StandardKey.Undo, self, self.editUndo)
+        QShortcut(QKeySequence.StandardKey.Redo, self, self.editRedo)
 
         # Internally, everything is always in mm
         # scale user input and output values
@@ -808,7 +813,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
-                if dm.delete_component(uid):
+                with undo_transaction(dm):
+                    deleted = dm.delete_component(uid)
+                if deleted:
                     if uid == self.activePartUID:
                         self.activePartUID = 0
                         self.activePart = None
@@ -866,7 +873,9 @@ class MainWindow(QMainWindow):
             self, "Create New Assembly",
             "Enter a name for the new assembly:", text="assembly")
         if OK and name:
-            if dm.create_new_assembly(uid, name):
+            with undo_transaction(dm):
+                created = dm.create_new_assembly(uid, name)
+            if created:
                 # Full refresh -- not just build_tree(). Matching
                 # createSharedInstance (Session 60 fix): a structure
                 # change leaves stale AIS objects in the context that
@@ -894,7 +903,9 @@ class MainWindow(QMainWindow):
             print(f"'{item.text(0)}' cannot be instanced.")
             self.itemClicked = None
             return
-        if dm.create_shared_instance(uid):
+        with undo_transaction(dm):
+            instanced = dm.create_shared_instance(uid)
+        if instanced:
             self.ais_shape_dict.clear()
             self.build_tree()
             self.redraw()
@@ -915,7 +926,8 @@ class MainWindow(QMainWindow):
                 print(f"UID= {uid}, name = {newName}")
                 self.treeView.clearSelection()
                 self.itemClicked = None
-                dm.change_label_name(uid, newName)
+                with undo_transaction(dm):
+                    dm.change_label_name(uid, newName)
                 self.build_tree()
         else:
             print("No item selected. Try first left clicking item then right clicking.")
@@ -1130,6 +1142,43 @@ class MainWindow(QMainWindow):
             if item.text(1) == uid:
                 return item
         return None
+
+    def editUndo(self):
+        """Undo the last committed transaction (Session 61)."""
+        if dm.doc.GetAvailableUndos() < 1:
+            self.statusBar().showMessage("Nothing to undo", 3000)
+            return
+        dm.doc.Undo()
+        self._refresh_after_history("Undo")
+
+    def editRedo(self):
+        """Redo the last undone transaction (Session 61)."""
+        if dm.doc.GetAvailableRedos() < 1:
+            self.statusBar().showMessage("Nothing to redo", 3000)
+            return
+        dm.doc.Redo()
+        self._refresh_after_history("Redo")
+
+    def _refresh_after_history(self, verb):
+        """Full state refresh after Undo/Redo. Cached uids can dangle
+        (labels may be re-created under new entries), so active-part
+        state is cleared; the draw-prep cache self-invalidates by
+        shape identity and needs no clearing. NOTE (scope, logged):
+        workplanes and 2D sketch state live OUTSIDE the OCAF document
+        and are not affected by Undo/Redo."""
+        self.activePartUID = 0
+        self.activePart = None
+        self.activeAsyUID = 0
+        self.itemClicked = None
+        dm.parse_doc()
+        self.ais_shape_dict.clear()
+        self.build_tree()
+        self.redraw()
+        n_undo = dm.doc.GetAvailableUndos()
+        n_redo = dm.doc.GetAvailableRedos()
+        self.statusBar().showMessage(
+            f"{verb} complete ({n_undo} undo / {n_redo} redo available)",
+            4000)
 
     def registerCallback(self, callback):
         currCallback = self.registeredCallback

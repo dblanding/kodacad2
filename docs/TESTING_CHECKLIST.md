@@ -393,3 +393,18 @@ Regression check: create a curved part, save the session, reload,
 and hover the curved face from edge-on -- it must highlight. Known
 cosmetic: patch-seam edges in highlight wireframes. Full saga in
 DEVELOPMENT_LOG Session 60.
+
+## Undo/Redo (Session 61, option (b))
+
+- Each of these, done then Ctrl+Z then Ctrl+Y, must restore/re-apply
+  exactly (tree AND viewport): create part (extrude), rename, delete,
+  create assembly, shared instance, drag-reparent, import STEP
+  component, modify active part (mill/add material).
+- Position dialog: several moves + Back steps, then Done -- ONE
+  Ctrl+Z afterward must undo the WHOLE placement as a unit. Back
+  inside the dialog must still step moves individually.
+- Undo past the first operation of a fresh session -> empty document
+  must not crash (parse_doc empty-doc guard).
+- Load a session -> undo history must be empty (Nothing to undo).
+- Known scope: workplanes / 2D sketch state are NOT restored by
+  undo (outside the OCAF document).

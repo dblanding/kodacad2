@@ -3971,3 +3971,20 @@ New criterion in _needs_analytic_workaround: convert iff pathological-face area 
 ### Lesson for future development
 
 **The user's operational knowledge is a profiling tool** -- 'picking them never posed a challenge' encoded the real criterion better than the code's first heuristic did: the defect's SEVERITY is proportional to how much of the pickable surface it owns, not to its mere presence. Gating an expensive workaround on where the disease MATTERS (area fraction) rather than where it EXISTS (any face) is the difference between a fix and a tax.
+
+## Session 61 (cont'd): UNDO/REDO IMPLEMENTED -- Edit menu, Ctrl+Z/Y, transactions everywhere, option (b) in the Position dialog
+
+Doug pulled the trigger (perf confirmed restored; save/reload regression check passing). Implemented per the gauge-certified plan:
+
+- **docmodel**: UNDO_LIMIT=50; SetUndoLimit in DocModel.__init__ AND after load_stp_at_top's doc replacement (history clears on session load -- correct semantics). New undo_transaction(dm) contextmanager: opens/commits/aborts one OCAF command per user gesture, and JOINS an already-open command instead of nesting -- the mechanism that lets option (b) work.
+- **kodacad**: 'Edit' menu (after File) with Undo (Ctrl+Z) / Redo (Ctrl+Y); all 8 mutating call sites wrapped (extrude x2, modify/replace_shape x5, import x1).
+- **mainwindow**: QShortcuts; editUndo/editRedo guarded by GetAvailableUndos/Redos; _refresh_after_history does the full reset (clear activePartUID/activePart/activeAsyUID/itemClicked -- cached uids can dangle after undo -- then parse_doc + ais_shape_dict.clear + build_tree + redraw, status line with remaining undo/redo counts; draw-prep cache self-invalidates by shape identity, no clearing needed). Five RMB/drag handlers wrapped (reparent, delete, create assembly, shared instance, rename) -- the if-condition sites restructured to 'with txn: result = op()' / 'if result:'.
+- **position_dialog (option (b), Doug's decision)**: the whole session is ONE transaction -- opened at __init__ (guarded by HasOpenCommand), committed at Done AND at closeEvent (closing via X preserves what the user sees; an empty command commits to nothing). The Back button's fine-grained _history stepping is unchanged, operating WITHIN the open transaction; the dialog's set_component_location calls pass through undo_transaction's join path harmlessly.
+- Scope boundary logged + checklist: workplanes/2D state live outside the OCAF doc, not restored by undo.
+- TESTING_CHECKLIST gained the full undo/redo section (per-op round trips, the one-Ctrl+Z-per-placement check, empty-doc undo, fresh-history-after-load).
+
+**Awaiting Doug's in-app test pass.**
+
+### Lesson for future development
+
+**The join-instead-of-nest contextmanager is what made option (b) cheap** -- one HasOpenCommand check lets the dialog own a session-wide transaction while every inner operation stays wrapped identically to its standalone use, no special-casing at any call site. Transaction scope became a property of who opens first, not of call-site knowledge.
