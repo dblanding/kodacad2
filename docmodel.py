@@ -436,6 +436,13 @@ class DocModel:
         color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
         labels = TDF_LabelSequence()
         shape_tool.GetShapes(labels)
+        if labels.Length() == 0:
+            # EMPTY document -- legitimate state (a brand-new session,
+            # or an Undo of the transaction that created the first
+            # content). Found by the Session 61 undo/redo gauge:
+            # parse_doc crashed on Value(1) here. Empty dicts ARE the
+            # correct parse of an empty document.
+            return
         root_label = labels.Value(1)
         root_name = get_label_name(root_label)
         root_entry = get_label_entry(root_label)

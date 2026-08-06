@@ -3901,3 +3901,47 @@ FOLLOW-UPS (parked): (1) selective conversion -- only convert faces with non-can
 ### Lesson for future development
 
 **The elimination chain was the method: shape properties, mesh, shell flags, deep copy -- each negative narrowed the space until only parametrization remained, and the direct selector-ray measurement was what made the negatives trustworthy.** Two meta-lessons stand out: (1) a hypothesis 'killed' by a measurement is only as dead as the measurement is relevant -- the displaced-selection theory was right, but the census measured geometry bounding boxes when the displacement lived in the SENSITIVE entities; (2) when an optimization layer (analytic selection) silently replaces the data path you're reasoning about (triangulation), no amount of fixing the bypassed path helps -- 'why does the fix not fire' is sometimes the question that identifies the layer that actually decides.
+
+## Session 61: project milestone recorded; Tier-3 sketch architecture designed; undo/redo gauge built
+
+**Milestone, in Doug's words (worth a date on the record):** Kodacad is now a working 90% solution for its original purpose -- find STEP models of things to use in a project, import them, position them, and build simple plates and brackets to hold everything together. Priorities going forward are being chosen deliberately rather than chasing every shiny pebble.
+
+**Tier-3 sketching architecture** designed and documented in docs/SKETCH_ENGINE_DESIGN.md (foundational to every Tier-3 item, per Doug). One-paragraph summary: the current approach asks OCCT selection to understand sketch snap semantics (hence pre-built intersection AIS points); the Pyurcad-proven inversion is an APP-SIDE snap engine in workplane UV space, fed by a single bridge function -- screen_to_uv on every mouse move (ConvertWithProj ray -> gp_Pln intersection -> ElSLib.Parameters). Snap candidates (endpoints, midpoints, centers, ON-THE-FLY intersections, on-curve) ranked by pixel distance (view.Convert for zoom-constant catch radius), modifier keys as re-rankers (Ctrl+Shift centers-only = one line). Dissolves as side effects: arc-over-ccircle deletion, center-snap override, uniform snaps across tools -- and removes the most interaction-intensive feature from dependence on the OCCT selection layer Session 60 just proved surprising. Incremental path starts with a zero-risk hover-only snap marker.
+
+**Undo/redo, Doug's chosen next target -- gauge status:** Session 49's smoke test already confirmed OCAF NewCommand/CommitCommand/Undo/Redo works on real document operations; the open question deciding easy-vs-hard is coverage of KODACAD'S full operation vocabulary. Built smoke_test_undo_redo_full.py: drives the REAL DocModel methods headlessly -- add_component, change_label_name, create_new_assembly, create_shared_instance, set_component_location (the Remove+UpdateAssemblies+Add cycle), add_component_from_label (the memo rebuild-import), delete_component (recursive orphan cleanup) -- each wrapped in a transaction, Undo verified against a pre-op canonical structure snapshot and Redo against the post-op one, with per-case PASS/FAIL and diff dumps on mismatch. All-pass verdict = integration is mechanical (transaction-wrap ops in the app, Ctrl+Z/Ctrl+Y, refresh after Undo/Redo, settle the Position-dialog Back-button design question). Any failure names exactly which operation needs special handling. SetUndoLimit(50) noted as the required enablement step.
+
+**Not yet run.**
+
+## Session 61 (cont'd): the gauge's first finding arrived before it measured anything -- parse_doc crashed on an empty document
+
+First run of smoke_test_undo_redo_full.py crashed inside parse_doc: case 1's transaction included creating the '/' root (the test doc started empty), Undo correctly emptied the document, and parse_doc hit labels.Value(1) on a zero-length sequence (Standard_OutOfRange). A genuine latent app bug, not a test artifact: undo integration WILL produce empty documents (undoing the first content of a fresh session), and the parse layer crashed rather than representing that state.
+
+Fixes:
+- docmodel.parse_doc: empty-document guard -- zero shapes means empty dicts ARE the correct parse; return cleanly after the dict resets.
+- Gauge hygiene: the test now seeds the '/' root and a baseline part OUTSIDE any transaction (not recorded in undo history), so each case's Undo returns to a stable non-empty baseline and the gauge measures per-operation semantics against a realistic session rather than the empty-doc edge.
+
+**Gauge still awaiting its first full run.**
+
+### Lesson for future development
+
+**A readiness gauge earns its keep on integration EDGES, not just the feature core** -- the very first thing it found was not an OCAF semantics problem but the app's inability to represent the state undo produces. These edge states (empty document, post-undo uid churn, refresh-after-restore) are where 'mechanical integration' hides its surprises, and driving the real methods rather than synthetic ops is what surfaces them early.
+
+## Session 61 (gauge GREEN): 7/7 -- OCAF undo/redo handles Kodacad's full operation vocabulary
+
+Doug ran the full gauge: ALL SEVEN CASES PASS. add_component, change_label_name, create_new_assembly, create_shared_instance, set_component_location (the Remove+UpdateAssemblies+Add cycle), add_component_from_label (the memo rebuild-import -- many labels, colors, sharing), and delete_component (recursive orphan cleanup) -- every one restored exactly on Undo (structure snapshot match) and re-applied exactly on Redo. The 'likelihood of easy success' question has a measured answer: HIGH. (The Standard_NullObject terminate at the very end was exit-time GC destroying the two OCAF documents in an order OCCT dislikes -- after all results printed; cosmetic, test-script-only; fixed with explicit doc Close + os._exit.)
+
+**The integration plan this greenlights (mechanical items):**
+1. dm.doc.SetUndoLimit(N) at startup AND after every load_stp_at_top (session load replaces the doc object; the fresh doc needs the limit re-set, and undo history naturally clearing on session load is correct semantics anyway).
+2. Transaction-wrap every mutating call site (extrude/mill part creation, delete, rename, reposition, create assembly, shared instance, import, reparent, color ops): NewCommand before, CommitCommand after, AbortCommand on exception.
+3. Edit menu Undo/Redo + Ctrl+Z/Ctrl+Y -> doc.Undo()/Redo() guarded by GetAvailableUndos/Redos, then the full refresh: parse_doc + ais_shape_dict.clear + build_tree + redraw.
+4. Post-undo state hygiene: cached uids (activePartUID, dialog-held uids) can dangle after undo -- clear/re-resolve active-part state on every undo/redo.
+5. Known scope boundary: workplanes and 2D sketch state live OUTSIDE the OCAF document -- undo will not restore them (worth a status-line note in the UI; the future sketch engine could revisit).
+
+**The one real design decision, awaiting Doug (Position dialog Back button vs document undo):**
+(a) UNIFY: each Position move commits its own transaction; Back literally calls doc.Undo(). Elegant, one mechanism -- but every nudge becomes a history entry (Ctrl+Z after positioning walks back through 15 nudges).
+(b) COMMIT-AT-DONE: the whole Position session is one transaction committed when Done is pressed; Back keeps its existing internal _history stepping within the open transaction. History stays readable ('one entry = one completed positioning'), Ctrl+Z undoes the whole placement as a unit. RECOMMENDED.
+(c) Hybrid variants possible later.
+
+### Lesson for future development
+
+**A gauge that drives the real methods converts a scary-sounding feature into a costed checklist** -- 'undo/redo' sat in Tier 4 as a grandiose item for weeks; one afternoon of headless testing reduced it to five mechanical integration steps plus one genuine design question, with the riskiest operations (rebuild-import, orphan-cascade delete) certified BEFORE any app code changes. The remaining risk now lives where it belongs: in UI state hygiene, not in OCAF semantics.
