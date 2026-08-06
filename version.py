@@ -1,11 +1,11 @@
-APP_VERSION = "1.1.0"
-# 1.1.0 - 7/22/2026: Position of parts & asssemblies added
-# 1.0.0 - 7/2026: Ported to OCP + PySide6 + uv. Creo-style workflow.
-#               Drag-to-assembly with shared instance propagation.
-#               No Conda required.
-# 0.2.2 - 4/20/2020: Incremental draw/hide of shapes, use hide_list.
-# 0.2.1 - 4/10/2020: Modify shape, all shared instances update.
-# 0.2.0 - 4/8/2020:  Entry-based uid's (not integers).
-# 0.1.2 - 3/19/2020: OCAF document format adopted.
-# 0.1.1 - 2/24/2020: Round-trip Load/Save STEP works.
-# 0.1.0 - 2/17/2020: Initial release.
+"""Single source of truth for the KodaCAD application version.
+
+1.2.0 (Session 61): undo/redo lands -- Edit menu, Ctrl+Z/Ctrl+Y,
+transaction-wrapped operations, Position dialog as one-transaction-
+per-session (option b). Also in the 1.1.x -> 1.2.0 span: bidirectional
+tree<->viewport highlight sync, the save/reload analytic-selection
+pick fix, naming round-trip fixes, STEP header customization, busy
+indicator, and the parse/repair robustness work.
+"""
+
+APP_VERSION = "1.2.0"

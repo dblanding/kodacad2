@@ -1373,6 +1373,13 @@ class DocModel:
             def _H(s):
                 return TCollection_HAsciiString(s)
 
+            def _app_version():
+                try:
+                    from version import APP_VERSION
+                    return APP_VERSION
+                except Exception:
+                    return ""
+
             hdr = None
             for model_src, tag in ((lambda: step_writer.ChangeWriter().Model(),
                                     "ChangeWriter().Model()"),
@@ -1386,7 +1393,8 @@ class DocModel:
             if hdr is not None:
                 for setter_names, args in (
                         (("SetName",), (_H(os.path.basename(fname)),)),
-                        (("SetOriginatingSystem",), (_H("KodaCAD"),)),
+                        (("SetOriginatingSystem",),
+                         (_H(f"KodaCAD {_app_version()}"),)),
                         (("SetAuthorValue",), (1, _H("Doug Blanding"))),
                         (("SetOrganizationValue", "SetOrganisationValue"),
                          (1, _H(""))),

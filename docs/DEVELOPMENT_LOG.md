@@ -3988,3 +3988,7 @@ Doug pulled the trigger (perf confirmed restored; save/reload regression check p
 ### Lesson for future development
 
 **The join-instead-of-nest contextmanager is what made option (b) cheap** -- one HasOpenCommand check lets the dialog own a session-wide transaction while every inner operation stays wrapped identically to its standalone use, no special-casing at any call site. Transaction scope became a property of who opens first, not of call-site knowledge.
+
+## Session 61 (cont'd): version 1.2.0
+
+Doug confirmed undo/redo working in-app (deletes of parts and assemblies, a part move -- all round-tripping; fuller test pass planned). Version bumped 1.1.0 -> 1.2.0 per semver discipline: substantial new capability, no compatibility break (session files remain plain STEP). The 2.0.0 milestone number is deliberately held in reserve -- the sketch engine landing would be a worthy occasion. version.py documents the 1.1.x -> 1.2.0 span; the STEP header's originating_system now carries the version ('KodaCAD 1.2.0'), so saved files self-identify their authoring version -- useful forensics given how much this project has learned from interrogating its own output files.
