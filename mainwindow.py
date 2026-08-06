@@ -241,6 +241,59 @@ def _occt_version_string():
     return ""
 
 
+def _needs_analytic_workaround(shape):
+    """True when the Session 60 pick pathology MATTERS for this part:
+    pathological curved faces (cylinder/cone with negative V-range --
+    the STEP reader's reversed-axis signature that OCCT's analytic
+    Select3D_SensitiveCylinder mishandles) make up a significant
+    FRACTION of the part's total surface area.
+
+    Session 61 refinement (Doug: initial lathe load still slow --
+    every vendor part has holes, and holes carry the same reader
+    signature, so 'any pathological face' converted the whole lathe):
+    a hole's pickability is irrelevant -- nobody picks a part by its
+    holes; the planes carry the picking. The pathology only matters
+    when pathological faces DOMINATE the pickable surface: a can's
+    wall (~75% of area -> convert), a rod's shaft (~90% -> convert,
+    correctly -- its edge-on picking has the same latent defect),
+    a plate's holes (~5-15% -> exempt, fast, clean wireframes).
+
+    Threshold 0.30. Tradeoff, documented: a mostly-planar part could
+    in principle still have a degraded pathological cylinder that a
+    user tries to pick from a hostile angle -- if that ever bites,
+    lower the threshold (or return True on any pathological face, the
+    pre-refinement behavior). Area via BRepGProp is far cheaper than
+    the NurbsConvert+remesh it gates."""
+    try:
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_ShapeEnum
+        from OCP.TopoDS import TopoDS
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_SurfaceType
+        from OCP.GProp import GProp_GProps
+        from OCP.BRepGProp import BRepGProp
+        total_area = 0.0
+        patho_area = 0.0
+        exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        while exp.More():
+            face = TopoDS.Face_s(exp.Current())
+            props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(face, props)
+            area = props.Mass()
+            total_area += area
+            surf = BRepAdaptor_Surface(face)
+            if surf.GetType() in (GeomAbs_SurfaceType.GeomAbs_Cylinder,
+                                  GeomAbs_SurfaceType.GeomAbs_Cone):
+                if surf.FirstVParameter() < -1.0e-7:
+                    patho_area += area
+            exp.Next()
+        if total_area <= 0.0:
+            return True  # degenerate -- convert (safe side)
+        return (patho_area / total_area) > 0.30
+    except Exception:
+        return True  # cannot inspect -> convert (safe side)
+
+
 class MainWindow(QMainWindow):
     """Main GUI window containing an assy tree view and a 3D display view
 
@@ -337,6 +390,8 @@ class MainWindow(QMainWindow):
         # {uid: [list of ancestor shapes]}
         self.ancestor_dict = defaultdict(list)
         self.ais_shape_dict = {}  # {uid: <AIS_Shape> object}
+        self._display_prep_cache = {}  # {uid: (src_shape,
+        # prepared_shape)} -- Session 61 draw-prep cache
         self._syncing_highlight = False  # re-entrancy guard for
         # bidirectional tree<->viewport highlight sync (Session 60):
         # each side's highlight setter fires the other side's
@@ -1125,6 +1180,10 @@ class MainWindow(QMainWindow):
         # RMB delete, etc. -- not just session load, which is just
         # where this was first noticed). Re-add it every time.
         self.canvas._add_view_cube()
+        # Prune draw-prep cache entries for parts that no longer exist
+        for stale in [u for u in self._display_prep_cache
+                      if u not in dm.part_dict]:
+            del self._display_prep_cache[stale]
         context.UpdateCurrentViewer()
         self.canvas.update()
 
@@ -1199,47 +1258,58 @@ class MainWindow(QMainWindow):
             shape = part_data["shape"]
             color = part_data["color"]
             try:
-                # THE SAVE/RELOAD PICK FIX (Session 60, the full saga
-                # is in DEVELOPMENT_LOG). Root cause: OCCT 7.7+ builds
-                # ANALYTIC selection for cylindrical faces
-                # (Select3D_SensitiveCylinder from the surface's axis
-                # placement + V-range, ignoring triangulation). The
-                # STEP reader reconstructs cylinders with a REVERSED
-                # axis + NEGATIVE V-range (legal, geometrically
-                # identical parametrization) -- and the analytic
-                # sensitive gets built DISPLACED by one height below
-                # the visible face. Confirmed by direct measurement:
-                # reloaded can placement=(x,y,24) axis=(0,0,-1)
-                # V=[-15,0] -> phantom pickable wall at z 9..24 under
-                # a visible can at z 24..39. Fresh MakePrism parts are
-                # canonical (axis up, V=[0,h]) and immune; planar
-                # faces never take the analytic path -- which is why
-                # only curved faces of reloaded parts were affected.
+                # THE SAVE/RELOAD PICK FIX (Session 60; perf pass
+                # Session 61). Root cause: OCCT 7.7+ analytic
+                # selection for cylindrical faces
+                # (Select3D_SensitiveCylinder from surface placement +
+                # V-range, ignoring triangulation) mishandles the
+                # STEP reader's reversed-axis/NEGATIVE-V-range
+                # cylinder parametrization -- the pickable wall gets
+                # built displaced one height below the visible face.
+                # Fix: display-only NurbsConvert makes such faces
+                # ineligible for the analytic path; selection falls
+                # back to triangulation.
                 #
-                # THE FIX: display-only NurbsConvert -- surfaces
-                # become BSplines, no longer *recognized* as cylinders,
-                # so the analytic path is ineligible and selection
-                # falls back to the triangulation (healthy all along;
-                # ensured by the IncrementalMesh below). The document
-                # and saved files are untouched. Known cosmetic side
-                # effect: patch-seam edges (quadrant lines) appear in
-                # highlight wireframes -- the conversion's fingerprint.
-                try:
-                    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
-                    shape = BRepBuilderAPI_NurbsConvert(shape, True).Shape()
-                except Exception as ce:
-                    if not getattr(self, "_nurbs_warned", False):
-                        print(f"[draw_shape] nurbs convert failed "
-                              f"(analytic-selection bug may reappear "
-                              f"on reloaded curved faces): {ce}")
-                        self._nurbs_warned = True
-                try:
-                    from OCP.BRepMesh import BRepMesh_IncrementalMesh
-                    BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5, True)
-                except Exception as me:
-                    if not getattr(self, "_mesh_warned", False):
-                        print(f"[draw_shape] pre-mesh failed: {me}")
-                        self._mesh_warned = True
+                # Session 61 performance pass (Doug: visibly slower
+                # lathe display): (1) SELECTIVE -- convert only when
+                # the measured pathology is present (cylinder/cone
+                # face with negative V-range, the reader's signature);
+                # fresh/canonical parts skip conversion entirely, and
+                # get their clean highlight wireframes back (no patch
+                # seams). If a pick regression ever reappears on a
+                # part this trigger skipped, broaden
+                # _needs_analytic_workaround. (2) CACHED -- the
+                # prepared (converted+meshed) shape is kept per uid,
+                # keyed by source-shape identity (IsSame), so redraws
+                # reuse it; a changed/moved part self-invalidates and
+                # re-prepares alone.
+                cached = self._display_prep_cache.get(uid)
+                if cached is not None and cached[0].IsSame(shape):
+                    shape = cached[1]
+                else:
+                    src_shape = shape
+                    if _needs_analytic_workaround(shape):
+                        try:
+                            from OCP.BRepBuilderAPI import \
+                                BRepBuilderAPI_NurbsConvert
+                            shape = BRepBuilderAPI_NurbsConvert(
+                                shape, True).Shape()
+                        except Exception as ce:
+                            if not getattr(self, "_nurbs_warned", False):
+                                print(f"[draw_shape] nurbs convert "
+                                      f"failed (analytic-selection bug "
+                                      f"may reappear on reloaded curved "
+                                      f"faces): {ce}")
+                                self._nurbs_warned = True
+                    try:
+                        from OCP.BRepMesh import BRepMesh_IncrementalMesh
+                        BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5,
+                                                 True)
+                    except Exception as me:
+                        if not getattr(self, "_mesh_warned", False):
+                            print(f"[draw_shape] pre-mesh failed: {me}")
+                            self._mesh_warned = True
+                    self._display_prep_cache[uid] = (src_shape, shape)
                 aisShape = AIS_Shape(shape)
                 self.ais_shape_dict[uid] = aisShape
                 context.Display(aisShape, False)

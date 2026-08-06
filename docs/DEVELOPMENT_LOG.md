@@ -3945,3 +3945,29 @@ Doug ran the full gauge: ALL SEVEN CASES PASS. add_component, change_label_name,
 ### Lesson for future development
 
 **A gauge that drives the real methods converts a scary-sounding feature into a costed checklist** -- 'undo/redo' sat in Tier 4 as a grandiose item for weeks; one afternoon of headless testing reduced it to five mechanical integration steps plus one genuine design question, with the riskiest operations (rebuild-import, orphan-cascade delete) certified BEFORE any app code changes. The remaining risk now lives where it belongs: in UI state hygiene, not in OCAF semantics.
+
+## Session 61 (cont'd): undo/redo design decision recorded; pick-fix performance regression fixed
+
+**Undo/redo design decision (Doug):** option (b) -- the whole Position-dialog session is ONE transaction committed at Done; the Back button keeps its existing fine-grained internal _history stepping within the open transaction. Undo history reads one-entry-per-completed-placement; Ctrl+Z undoes a placement as a unit. Integration can proceed on this basis.
+
+**Performance regression, owned and fixed:** Doug reported visibly slower lathe display after the Session 60 pick fix. Cause (in mainwindow draw_shape, not docmodel): NurbsConvert ran on EVERY part on EVERY redraw, and because the converted shape was rebuilt each redraw, its mesh was discarded and recomputed every time -- remeshing BSpline surfaces is far costlier than meshing analytic ones. Fix, two parts:
+1. SELECTIVE: _needs_analytic_workaround(shape) triggers conversion only on the measured pathology (cylinder/cone face with NEGATIVE V-range -- the STEP reader's reversed-axis signature). Fresh/canonical parts skip conversion entirely -- faster, and their clean highlight wireframes return (no patch-seam quadrants). Broadening point documented if a pick regression ever reappears on a skipped part.
+2. CACHED: _display_prep_cache = {uid: (src_shape, prepared_shape)}, keyed by source-shape identity (IsSame) -- redraws reuse the prepared shape; a changed/moved part self-invalidates and re-prepares alone; stale entries pruned against part_dict each redraw.
+
+**Awaiting Doug's confirmation: lathe display speed restored, and the regression check (curved part -> save -> reload -> hover edge-on) still passes.**
+
+### Lesson for future development
+
+**A correctness fix applied unconditionally in a per-frame path is a performance bug wearing a hero's cape** -- the conversion was right, but running it for every part on every redraw (and discarding the mesh with each rebuilt copy) taxed exactly the sessions that need it least. Selectivity keyed to the MEASURED pathology plus an identity-keyed cache puts the cost where the disease is, and only once.
+
+## Session 61 (cont'd): perf round 2 -- area-fraction criterion replaces any-pathological-face
+
+Doug diagnosed the residual slowness himself, correctly: EVERY vendor lathe part has cylindrical faces (holes), and holes carry the same reader negative-V signature -- so 'any pathological face' converted the entire lathe, taxing parts whose picking was never in question. The insight formalized: a hole's pickability is irrelevant (nobody picks a part by its holes -- the planes carry the picking); the pathology only MATTERS when pathological curved faces DOMINATE the pickable surface.
+
+New criterion in _needs_analytic_workaround: convert iff pathological-face area / total surface area > 0.30 (BRepGProp per face -- far cheaper than the conversion it gates). Expected: cans ~75% -> convert; channel plate/bearing blocks (holes ~5-15%) -> exempt, fast, clean wireframes; leadscrew/rods ~90% -> convert, CORRECTLY (a rod is exactly a can-shaped pick case whose edge-on defect simply went unnoticed). Tradeoff documented at the function: a mostly-planar part could in principle carry a degraded sub-threshold cylinder someone picks from a hostile angle -- broadening knob is the threshold (or revert to any-pathology).
+
+**Awaiting: load-speed verdict, plus the standing regression check (curved part -> save -> reload -> hover edge-on).**
+
+### Lesson for future development
+
+**The user's operational knowledge is a profiling tool** -- 'picking them never posed a challenge' encoded the real criterion better than the code's first heuristic did: the defect's SEVERITY is proportional to how much of the pickable surface it owns, not to its mere presence. Gating an expensive workaround on where the disease MATTERS (area fraction) rather than where it EXISTS (any face) is the difference between a fix and a tax.
