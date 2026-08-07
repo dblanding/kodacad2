@@ -4020,3 +4020,19 @@ The design (docs/SKETCH_ENGINE_DESIGN.md) begins per its own incremental path: z
 ### Lesson for future development
 
 **When a design names its foundation ('the missing bridge is one function'), build exactly that first and make it observable** -- the hover marker is scaffolding-as-feature: it validates the bridge, the candidate math, and the tolerance model in one glance-able artifact before any tool depends on them, and its cost was almost entirely reuse -- the recon found the entire Pyurcad math library already living in workplane.py, waiting for the coordinate bridge the design predicted it needed.
+
+## Session 62 (cont'd): step 1 validated by feel; step 2 -- arc3p reordered to endpoints-first with a live rubber-band preview
+
+Doug's verdict on the hover marker: catch radius feels reasonable -- the bridge, the candidate math, and the pixel-tolerance model are validated by the only test that matters for an input feature.
+
+**Step 2, chosen by Doug's request: the 3-point arc.** Old order was end / ON-ARC / end (the middle pick was the through-point). New order is the Pyurcad one Doug prefers -- BOTH endpoints first, then a point on the arc between -- and his stated reason ('this lets the rubber band work well') is now honored directly, because step 1's infrastructure makes the preview nearly free: after the first pick a rubber LINE follows the cursor; after the second, the ARC ITSELF follows, with the cursor as the live third point (screen_to_uv each move -> GC_MakeArcOfCircle(e1, cursor, e2) -> preview edge). Implementation notes: preview is a non-selectable AIS_Shape (Deactivate -- can never steal a pick), orange, updated via SetShape/Redisplay; degenerate/collinear cursor positions keep the last valid preview rather than flickering; the preview SELF-CLEANS -- if the operation ends any way at all (End Operation, tool switch), the first stray move notices registeredCallback changed, erases, and unregisters. koda_viewport gained unregister_move_callback for tool-scoped callbacks. Pick precision itself still rides the existing vertex-pick mechanism until step 3 migrates input to find_snap; the preview tracks the raw cursor.
+
+**Reference material banked**: Doug provided a Creo Elements/Direct screenshot of a CoCreate workplane -- translucent pane with 'w1' written at its lower-left corner. That is the visual spec for the Tier-2 workplane clump (viewport labels via AIS_TextLabel, translucency, corner placement) when that work begins.
+
+### Lesson for future development
+
+**The first tool migrated onto new infrastructure should be one the user just complained about** -- the arc reorder was wanted on its own merits, and delivering it WITH the live preview demonstrates the bridge's value on day one rather than asking anyone to take the architecture's benefits on faith. 'This lets the rubber band work well' was a design requirement stated as a preference; step 1 existing made honoring it a footnote instead of a project.
+
+## Session 62 (cont'd): arc3p confirmed by Doug; two UX refinements from his notes
+
+Doug confirmed the reordered arc + rubber band works exactly as intended. Two refinements he suggested in passing, both implemented immediately since they were adjacent and small: (1) per-pick acknowledgement in the status bar ('End point 1 set. Pick the second end point.' / 'End point 2 set. Pick a point on the arc.') -- reassuring for the first-time user; (2) seamless restart -- the operation was already staying registered after completion, so the missing pieces were just restarting the preview and re-prompting ('Arc created. Pick 2 end points for the next arc (or End Operation).'). Continuous arc creation now flows without re-invoking the tool; End Operation exits as before, and the preview's self-clean handles that path.

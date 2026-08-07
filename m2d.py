@@ -403,21 +403,37 @@ class M2D:
             self.arcc2p()
 
     def arc3p(self):
-        """Create an arc from start pt, end pt, and 3rd pt on the arc."""
+        """Create an arc: pick BOTH END POINTS first, then a point on
+        the arc between them (Session 62, Doug's preferred Pyurcad
+        order -- previously end / on-arc / end). This ordering is
+        what makes the rubber band natural: after the first pick a
+        rubber line follows the cursor; after the second, the ARC
+        ITSELF follows, with the cursor as the live third point --
+        driven by the step-1 screen_to_uv bridge."""
         wp = self.win.activeWp
         if len(self.win.xyPtStack) == 3:
-            ps = self.win.xyPtStack.pop()
-            pe = self.win.xyPtStack.pop()
-            p3 = self.win.xyPtStack.pop()
-            wp.arc3p(ps, pe, p3)
+            p_on = self.win.xyPtStack.pop()
+            pe2 = self.win.xyPtStack.pop()
+            pe1 = self.win.xyPtStack.pop()
+            # GC_MakeArcOfCircle(P1, P2, P3) = arc P1 -> P3 THROUGH P2
+            wp.arc3p(pe1, p_on, pe2)
             self.win.xyPtStack = []
             self.win.floatStack = []
+            # Seamless restart (Session 62, Doug's suggestion): the
+            # operation stays live -- reset the preview and re-prompt
+            # so the next arc starts immediately. End Operation exits.
+            self._arc_preview_stop()
+            self._arc_preview_start()
             self.win.draw_wp(self.win.activeWpUID)
+            self.win.statusBar().showMessage(
+                "Arc created. Pick 2 end points for the next arc "
+                "(or End Operation).")
         else:
             self.win.registerCallback(self.arc3pC)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
-            statusText = "Pick 3 points on arc, 1st and last picks are end points"
+            self._arc_preview_start()
+            statusText = "Pick 2 end points, then a point on the arc."
             self.win.statusBar().showMessage(statusText)
 
     def arc3pC(self, shapeList, *args):
@@ -426,8 +442,101 @@ class M2D:
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
-        if len(self.win.xyPtStack) == 3:
+        # Per-pick acknowledgement (Session 62, Doug's suggestion --
+        # reassuring for the first-time user)
+        n = len(self.win.xyPtStack)
+        if n == 1:
+            self.win.statusBar().showMessage(
+                "End point 1 set. Pick the second end point.")
+        elif n == 2:
+            self.win.statusBar().showMessage(
+                "End point 2 set. Pick a point on the arc.")
+        if n == 3:
             self.arc3p()
+
+    # --- arc3p live preview (Session 62, sketch engine step 2) ---
+
+    def _arc_preview_start(self):
+        self._arc_prev_ais = None
+        try:
+            self.win.canvas.register_move_callback(self._arc_preview_move)
+        except Exception:
+            pass
+
+    def _arc_preview_stop(self):
+        try:
+            self.win.canvas.unregister_move_callback(self._arc_preview_move)
+        except Exception:
+            pass
+        ais = getattr(self, "_arc_prev_ais", None)
+        if ais is not None:
+            try:
+                self.display.Context.Erase(ais, True)
+            except Exception:
+                pass
+        self._arc_prev_ais = None
+
+    def _arc_preview_move(self, x, y):
+        """Rubber band for arc3p: 1 point picked -> line to cursor;
+        2 points -> arc through the cursor. Self-cleaning: if the
+        operation is no longer active (End Operation, tool switch),
+        the first stray move erases the preview and unregisters."""
+        try:
+            if self.win.registeredCallback != self.arc3pC:
+                self._arc_preview_stop()
+                return
+            wp = self.win.activeWp
+            n = len(self.win.xyPtStack)
+            if wp is None or n < 1 or n > 2:
+                return
+            from snap_engine import screen_to_uv
+            uv = screen_to_uv(self.win.canvas.view, x, y, wp.gpPlane)
+            if uv is None:
+                return
+            from OCP.gp import gp_Pnt
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            if n == 1:
+                p1 = self.win.xyPtStack[0]
+                g1 = gp_Pnt(p1[0], p1[1], 0).Transformed(wp.Trsf)
+                g2 = gp_Pnt(uv[0], uv[1], 0).Transformed(wp.Trsf)
+                if g1.Distance(g2) < 1.0e-6:
+                    return
+                edge = BRepBuilderAPI_MakeEdge(g1, g2).Edge()
+            else:
+                from OCP.GC import GC_MakeArcOfCircle
+                e1, e2 = self.win.xyPtStack[0], self.win.xyPtStack[1]
+                g1 = gp_Pnt(e1[0], e1[1], 0).Transformed(wp.Trsf)
+                g3 = gp_Pnt(e2[0], e2[1], 0).Transformed(wp.Trsf)
+                g2 = gp_Pnt(uv[0], uv[1], 0).Transformed(wp.Trsf)
+                maker = GC_MakeArcOfCircle(g1, g2, g3)
+                if not maker.IsDone():
+                    return  # collinear/degenerate -- keep last preview
+                edge = BRepBuilderAPI_MakeEdge(maker.Value()).Edge()
+            context = self.display.Context
+            if self._arc_prev_ais is None:
+                from OCP.AIS import AIS_Shape
+                from OCP.Quantity import (Quantity_Color,
+                                          Quantity_TypeOfColor)
+                self._arc_prev_ais = AIS_Shape(edge)
+                context.Display(self._arc_prev_ais, False)
+                try:
+                    context.SetColor(
+                        self._arc_prev_ais,
+                        Quantity_Color(1.0, 0.55, 0.0,
+                                       Quantity_TypeOfColor.Quantity_TOC_RGB),
+                        False)
+                    context.Deactivate(self._arc_prev_ais)  # never pickable
+                except Exception:
+                    pass
+            else:
+                self._arc_prev_ais.SetShape(edge)
+                context.Redisplay(self._arc_prev_ais, False)
+            context.UpdateCurrentViewer()
+        except Exception as e:
+            if not getattr(self, "_arc_prev_warned", False):
+                print(f"[arc preview] disabled after error: {e}")
+                self._arc_prev_warned = True
+            self._arc_preview_stop()
 
     def geom(self):
         pass

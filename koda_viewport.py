@@ -590,6 +590,13 @@ class KodaViewport(QWidget):
         """cb(x, y) on hover moves (no buttons down). Session 62."""
         self._move_callbacks.append(cb)
 
+    def unregister_move_callback(self, cb):
+        """Remove a tool-scoped move callback (no-op if absent)."""
+        try:
+            self._move_callbacks.remove(cb)
+        except ValueError:
+            pass
+
     def _on_click(self):
         if self.context is None or self._display is None:
             return
