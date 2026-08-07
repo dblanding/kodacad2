@@ -164,7 +164,8 @@ class M2D:
 
     def clineHC(self, shapeList, *args):
         """Callback (collector) for clineH"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         if self.win.lineEditStack:
             self.processLineEdit()
         if self.win.floatStack:
@@ -193,7 +194,8 @@ class M2D:
 
     def clineVC(self, shapeList, *args):
         """Callback (collector) for clineV"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         if self.win.lineEditStack:
             self.processLineEdit()
         if self.win.floatStack:
@@ -222,7 +224,8 @@ class M2D:
 
     def clineHVC(self, shapeList, *args):
         """Callback (collector) for clineHV"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         if self.win.lineEditStack:
             self.processLineEdit()
         if self.win.xyPtStack:
@@ -248,7 +251,8 @@ class M2D:
 
     def cline2PtsC(self, shapeList, *args):
         """Callback (collector) for cline2Pts"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         if self.win.lineEditStack:
             self.processLineEdit()
         if len(self.win.xyPtStack) == 2:
@@ -276,7 +280,8 @@ class M2D:
 
     def clineAngC(self, shapeList, *args):
         """Callback (collector) for clineAng"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
@@ -304,7 +309,8 @@ class M2D:
 
     def clineLinBisecC(self, shapeList, *args):
         """Callback (collector) for clineLinBisec"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         if len(self.win.xyPtStack) == 2:
             self.clineLinBisec()
 
@@ -350,7 +356,8 @@ class M2D:
 
     def ccircC(self, shapeList, *args):
         """callback (collector) for ccirc"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
@@ -384,7 +391,8 @@ class M2D:
 
     def lineC(self, shapeList, *args):
         """callback (collector) for line"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
@@ -410,7 +418,8 @@ class M2D:
 
     def rectC(self, shapeList, *args):
         """callback (collector) for rect"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
@@ -447,7 +456,8 @@ class M2D:
 
     def circleC(self, shapeList, *args):
         """callback (collector) for circle"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
@@ -476,7 +486,8 @@ class M2D:
 
     def arcc2pC(self, shapeList, *args):
         """callback (collector) for arcc2p"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()

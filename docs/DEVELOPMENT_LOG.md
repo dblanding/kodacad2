@@ -4083,3 +4083,19 @@ Note toward step 4: with the square now carrying the catch-feedback role, the le
 ### Lesson for future development
 
 **When replacing a feedback mechanism, make the replacement visually unconfusable with what it replaces** -- the first marker was a yellow '+', near-identical to the legacy markers, which would have made it impossible for Doug to tell WHICH system was talking to him during the transition. The orange square is unambiguous: square = the engine speaks.
+
+## Session 62 (cont'd): STEP 4 -- goodbye, little yellow '+' signs
+
+Doug's words on the catch square: 'I LOVE it! I am ready to say Good bye to those little yellow + signs.' Granted, in full:
+
+- **All 11 remaining 2D collectors migrated** to engine-first input (line, circle, rectangle, the cline family, arcc2p, ...) via the established pattern -- one exact-line replacement each, verified by AST that every migrated collector carries *args. (The first attempt's substring replace would have mangled arc3pC's already-migrated deeper-indented fallback; the assert caught it, line-exact processing fixed it -- the probe-first discipline applied to one's own edits.)
+- **The pre-built intersection-point display RETIRED** from draw_wp: wp.intersectPts() is no longer displayed as vertex-selectable markers. The snap engine computes intersections on the fly; the orange catch square carries all feedback. wp.intersectPts() itself remains in workplane.py, undisplayed.
+- The legacy vertex path survives only as each collector's fallback -- now fed by nothing, exercised only if the engine cannot operate. SetSelectionModeVertex calls remain in tool entry points, harmless (nothing vertex-selectable exists on a wp anymore); removable in a cosmetic pass.
+
+The design doc's four-step incremental path is hereby COMPLETE: bridge -> hover marker -> engine input (both click classes) -> old paradigm retired. Every 2D tool now sketches the Pyurcad way: layout with construction, catch square as the permission indicator, clicks land only on catches, geometry participates in the layout.
+
+**Doug's checkout pass (the flush-out he planned)**: every 2D tool -- lines, circles, rectangle, each cline flavor, both arcs -- against the catch square: draw, chain, snap to cline/geometry intersections, endpoints, centers, origin, on-curve; confirm typed lineEdit input still works everywhere; confirm no stray '+' markers appear on any wp redraw.
+
+### Lesson for future development
+
+**Retiring an old paradigm is safe exactly when its replacement already carries every role the old one had** -- markers had two jobs (feedback and pickable input); the square took feedback in the previous session and engine input took clicking in this one, so the retirement commit deletes a display block and changes nothing else. Migration order was the whole safety argument.

@@ -1276,15 +1276,15 @@ class MainWindow(QMainWindow):
                 aisline.SetAttributes(drawer)
                 context.Display(aisline, False)  # (see comment below)
                 # 'False' above enables 'context' mode display & selection
-            pntlist = wp.intersectPts()  # type <gp_Pnt>
-            for point in pntlist:
-                ais_pnt = self.canvas._display.DisplayShape(point)
-                if ais_pnt is not None:
-                    # Activate vertex selection mode on snap point AIS shape
-                    from OCP.TopAbs import TopAbs_VERTEX
-                    from OCP.AIS import AIS_Shape as _AIS_Shape
-                    mode = _AIS_Shape.SelectionMode_s(TopAbs_VERTEX)
-                    context.Activate(ais_pnt, mode)
+            # RETIRED (Session 62, sketch engine step 4): the
+            # pre-built intersection-point markers (wp.intersectPts()
+            # displayed as vertex-selectable '+' glyphs) are gone --
+            # the snap engine computes intersections ON THE FLY and
+            # the orange catch square carries the feedback role. All
+            # 2D collectors now take engine input; the legacy vertex
+            # path survives only as a fallback that these markers no
+            # longer feed. wp.intersectPts() itself remains available
+            # in workplane.py.
             for ccirc in wp.ccircs:
                 aiscirc = AIS_Circle(wp.convert_circ_to_geomCirc(ccirc))
                 drawer = aisline.Attributes()
