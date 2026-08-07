@@ -408,3 +408,14 @@ DEVELOPMENT_LOG Session 60.
 - Load a session -> undo history must be empty (Nothing to undo).
 - Known scope: workplanes / 2D sketch state are NOT restored by
   undo (outside the OCAF document).
+
+## Part Rename (Session 61)
+
+- Rename a part (e.g. to 'can'): Kodacad tree shows 'can_1'; save;
+  open in CAD Assistant/FreeCAD -- the part MUST display 'can'
+  (product renamed too). A stale old name in CA/FC = the occurrence-
+  only rename bug is back.
+- Rename the top assembly: new name must survive save/reload and
+  display in all three viewers (tree shows the _1-suffixed
+  occurrence; exported root carries the base name).
+- Redo shortcut: BOTH Ctrl+Y and Ctrl+Shift+Z must trigger redo.

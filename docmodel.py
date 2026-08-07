@@ -1669,21 +1669,45 @@ class DocModel:
     def change_label_name(self, uid, name):
         """Change the name of component with uid.
 
-        Session 57: replaced the legacy j/k tag arithmetic -- which
-        crashed on a 4-part entry (renaming the root free shape
-        itself: k stayed None and comps.Value(None) raised) -- with
-        _find_label_by_entry, the same robust resolver delete and
-        reposition already use for both root and component entries.
+        Session 57: legacy j/k tag arithmetic replaced with
+        _find_label_by_entry (crashed on 4-part root entries).
+
+        Session 61 (Doug's rename-to-'can' report): renaming an
+        OCCURRENCE alone left the PRODUCT name unchanged -- and CAD
+        Assistant/FreeCAD display PRODUCT names (Session 57's
+        empirical rule), so the rename never appeared there. Now a
+        rename of a part with a referred product names BOTH labels per
+        the add_component convention: product = base name (typed name
+        stripped of any trailing _N), occurrence = typed name, or
+        base_1 when the typed name equals the base -- identical
+        occurrence/product names trigger the Session 17 NAUO
+        blanking, which is exactly what the suffix guards against.
+        Typing 'can' -> product 'can' (shows in CA/FC), tree shows
+        'can_1' (consistent with every other tree entry). For shared
+        products, sibling occurrences keep their old names (only the
+        part's identity -- the product -- and THIS occurrence change).
+        Labels without a referred product (root free shapes) keep the
+        simple single-label behavior.
         """
+        import re
         entry, __ = uid.split('.')
         target_label = self._find_label_by_entry(entry)
         if target_label is None:
             print(f"[change_label_name] Could not find label for {uid}")
             return
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
-        set_label_name(target_label, name)
+        ref_label = TDF_Label()
+        if shape_tool.GetReferredShape_s(target_label, ref_label):
+            base = re.sub(r"(_\d+)+$", "", name) or name
+            occ_name = name if name != base else f"{base}_1"
+            set_label_name(ref_label, base)
+            set_label_name(target_label, occ_name)
+            print(f"Renamed: product={base!r}, occurrence={occ_name!r} "
+                  f"(uid {uid})")
+        else:
+            set_label_name(target_label, name)
+            print(f"Name {name} set for part with uid = {uid}.")
         shape_tool.UpdateAssemblies()
-        print(f"Name {name} set for part with uid = {uid}.")
         self.parse_doc()
 
 

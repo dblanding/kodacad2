@@ -348,7 +348,10 @@ class MainWindow(QMainWindow):
         # Undo/Redo shortcuts (Session 61); menu items added in kodacad.py
         from PySide6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence.StandardKey.Undo, self, self.editUndo)
+        # StandardKey.Redo is Ctrl+Shift+Z on Linux -- bind it AND the
+        # Ctrl+Y the Edit menu advertises (Session 61, Doug's report)
         QShortcut(QKeySequence.StandardKey.Redo, self, self.editRedo)
+        QShortcut(QKeySequence("Ctrl+Y"), self, self.editRedo)
 
         # Internally, everything is always in mm
         # scale user input and output values

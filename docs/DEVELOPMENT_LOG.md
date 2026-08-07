@@ -3992,3 +3992,15 @@ Doug pulled the trigger (perf confirmed restored; save/reload regression check p
 ## Session 61 (cont'd): version 1.2.0
 
 Doug confirmed undo/redo working in-app (deletes of parts and assemblies, a part move -- all round-tripping; fuller test pass planned). Version bumped 1.1.0 -> 1.2.0 per semver discipline: substantial new capability, no compatibility break (session files remain plain STEP). The 2.0.0 milestone number is deliberately held in reserve -- the sketch engine landing would be a worthy occasion. version.py documents the 1.1.x -> 1.2.0 span; the STEP header's originating_system now carries the version ('KodaCAD 1.2.0'), so saved files self-identify their authoring version -- useful forensics given how much this project has learned from interrogating its own output files.
+
+## Session 61 (cont'd): two test-pass findings fixed -- Ctrl+Y binding, rename-to-product propagation
+
+Doug's thorough undo/redo test pass surfaced two minor issues, both fixed:
+
+1. **Ctrl+Y dead**: QKeySequence.StandardKey.Redo maps to Ctrl+Shift+Z on Linux (which worked all along) -- the Edit menu advertised Ctrl+Y. Both are now bound explicitly.
+
+2. **Rename didn't reach CAD Assistant/FreeCAD** (renamed 'button'->'can', saved under a new name, CA/FC still showed 'button'): the Session 57 naming asymmetry from the rename direction -- change_label_name renamed only the OCCURRENCE (what Kodacad displays); the PRODUCT (what CA/FC display) kept the old name. Now a rename of a part with a referred product names BOTH per the add_component convention: product = base name (typed name stripped of trailing _N), occurrence = typed name or base_1 when they'd collide (identical names trigger the Session 17 NAUO blanking -- the suffix exists exactly for this). Typing 'can': product 'can' (CA/FC), tree 'can_1' (consistent with every other entry). Shared products: siblings keep their old occurrence names -- only the part's identity and THIS occurrence change. Bonus consistency: renaming the top assembly now names its product properly too, and the Session 57 export unwrap sees the suffixed occurrence as auto-pattern and correctly exports the base name.
+
+### Lesson for future development
+
+**Every naming operation must answer for BOTH name populations** -- occurrence (Kodacad's display) and product (the rest of the world's display). Session 57 fixed creation; the rename path had the same single-population blind spot and waited for a user test to reveal it. The checklist now demands the cross-viewer check for rename explicitly, and any future operation that touches names (reparent already does, import does) should be audited against the two-population rule rather than trusted.

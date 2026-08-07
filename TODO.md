@@ -83,11 +83,6 @@ snap is supported. See PyurCAD for reference implementation.
 
 ## 3. Future development ideas (Big jobs - Not likely any time soon)
 
-#### Undo/Redo
-OCCT's `TDocStd_Document` has built-in undo/redo support via
-`TDocStd_Document::NewCommand()` and `Undo()`/`Redo()`. This would
-be a significant quality-of-life improvement.
-
 #### Native save format
 Currently uses STEP as a save/load surrogate. OCCT's native
 `.xbf` (BinXCAF) format preserves more data and is faster. The
