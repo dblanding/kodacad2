@@ -4069,3 +4069,17 @@ Doug's parallel-cline example (a free click choosing which SIDE the new line goe
 ### Lesson for future development
 
 **A counterexample to a fresh principle is usually a missing DISTINCTION, not a refutation** -- 'no catch, no point' survived Doug's example intact once the taxonomy separated clicks-that-define-coordinates from clicks-that-choose-alternatives; both the principle and the exception got crisper, and the flush-out pass inherits a question to answer per click ('which class is this?') instead of a rule to bend.
+
+## Session 62 (cont'd): the Pyurcad catch square, and geometry lines join the candidate pool
+
+Two upgrades from Doug's request, one rewrite of snap_engine.py:
+
+1. **The catch indicator is now Pyurcad's little SQUARE** -- a wire outline drawn ON the workplane at the catch point, half-side sized in pixels (view.Convert) so it stays constant at any zoom, orange, deliberately unlike the legacy pre-built yellow-'+'-turning-blue markers it supersedes. Same non-selectable, rebuild-only-on-change discipline as before.
+
+2. **Geometry lines participate in catching** ('intersections of either construction or geometry lines'): the workplane's linear edges are extracted to UV segments each sweep (BRepAdaptor line check -> endpoints -> ElSLib.Parameters), contributing endpoint candidates, geom x geom and geom x cline intersections (with proper on-segment bounds checks via parametric projection), and on-segment nearest points. ARCS in geometry are deferred -- arc x line and arc x arc intersection candidates are a bounded follow-up (workplane.py already has line_circ_inters/circ_circ_inters; the missing piece is arc angular-range checks).
+
+Note toward step 4: with the square now carrying the catch-feedback role, the legacy pre-built intersection-point markers have lost their last unique purpose for MIGRATED tools -- their retirement awaits only the remaining collectors' migration (line/circle/cline, the established one-line pattern).
+
+### Lesson for future development
+
+**When replacing a feedback mechanism, make the replacement visually unconfusable with what it replaces** -- the first marker was a yellow '+', near-identical to the legacy markers, which would have made it impossible for Doug to tell WHICH system was talking to him during the transition. The orange square is unambiguous: square = the engine speaks.

@@ -1,45 +1,34 @@
 """
-snap_engine.py -- Step 1 of the sketch engine (Session 62; design in
+snap_engine.py -- the sketch engine (Sessions 62+; design in
 docs/SKETCH_ENGINE_DESIGN.md).
 
-The bridge and the hover-only snap marker. Zero behavioral change to
-any existing tool: this module only OBSERVES mouse motion and shows a
-glyph at the point the engine would catch. Later steps route tool
-input through find_snap().
+screen_to_uv: THE bridge (cursor ray -> gp_Pln -> UV).
+find_snap: app-side candidate search in workplane UV space, calling
+workplane.py's Pyurcad-lineage math. Candidates now include GEOMETRY
+LINES (Doug's request): linear-edge endpoints and intersections
+(geom x geom, geom x cline) alongside the construction categories.
+SnapHover: the catch indicator -- a small SQUARE outline drawn on
+the workplane at the catch point (the Pyurcad glyph), deliberately
+unlike the legacy pre-built '+' markers it supersedes. Non-selectable,
+never steals picks.
 
-Architecture (the Pyurcad inversion): the snap engine is OURS, in
-workplane UV space; OCCT is just a projector. screen_to_uv() converts
-every cursor position to workplane coordinates; candidates come from
-the workplane's own construction data using workplane.py's
-Pyurcad-lineage math (intersection, line_circ_inters,
-circ_circ_inters, proj_pt_on_line -- already in this codebase);
-ranking is by PIXEL distance (view.Convert for a zoom-constant catch
-radius).
-
-Candidate categories (step 1 -- construction geometry, matching the
-current sketching paradigm; profile endpoints/midpoints arrive with
-step 2):
-    isect   cline x cline, cline x ccirc, ccirc x ccirc  (on the fly)
-    center  ccirc centers
-    origin  workplane origin
-    on      nearest point ON a cline / ccirc  (lower priority)
+Input philosophy (binding, see design doc): NO CATCH -> NO POINT for
+coordinate input; free clicks exist only as GESTURES (side/direction
+choices). The square is the permission indicator.
 """
 
 from OCP.gp import gp_Pnt
-from OCP.Geom import Geom_CartesianPoint
-from OCP.AIS import AIS_Point
-from OCP.Prs3d import Prs3d_PointAspect
-from OCP.Aspect import Aspect_TypeOfMarker
+from OCP.AIS import AIS_Shape
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
 from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
 from OCP.ElSLib import ElSLib
 
 import workplane as wpm  # the Pyurcad-lineage 2D math lives here
 
-# Higher = wins ties; candidates within tolerance rank by
-# (priority desc, pixel distance asc)
-PRIORITY = {"isect": 3, "center": 3, "origin": 2, "on": 1}
+PRIORITY = {"isect": 4, "endpoint": 4, "center": 3, "origin": 2, "on": 1}
 
-SNAP_PIXELS = 12  # catch radius on screen, constant at any zoom
+SNAP_PIXELS = 12       # catch radius on screen, constant at any zoom
+MARKER_PIXELS = 5      # half-side of the catch square, in pixels
 
 
 def _elslib(name_base):
@@ -51,7 +40,7 @@ def _elslib(name_base):
 
 def screen_to_uv(view, x, y, gp_pln):
     """Cursor pixel -> (u, v) on the plane, or None if the view ray
-    is parallel to the plane. THE bridge (design doc, 'The bridge')."""
+    is parallel to the plane. THE bridge."""
     try:
         px, py, pz, vx, vy, vz = view.ConvertWithProj(int(x), int(y))
     except Exception:
@@ -81,17 +70,52 @@ def _dist(p, q):
     return ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5
 
 
+def _geom_segments_uv(wp):
+    """Extract the workplane's LINEAR geometry edges as UV segments
+    ((u1,v1),(u2,v2)) -- geometry participates in catching (Doug:
+    'intersections of either construction or geometry lines').
+    Non-linear edges (arcs) are deferred; noted in the log."""
+    segs = []
+    try:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_CurveType
+        for edge in getattr(wp, "edgeList", ()) or ():
+            try:
+                crv = BRepAdaptor_Curve(edge)
+                if crv.GetType() != GeomAbs_CurveType.GeomAbs_Line:
+                    continue
+                p1 = crv.Value(crv.FirstParameter())
+                p2 = crv.Value(crv.LastParameter())
+                u1, v1 = _elslib("Parameters")(wp.gpPlane, p1)
+                u2, v2 = _elslib("Parameters")(wp.gpPlane, p2)
+                segs.append(((u1, v1), (u2, v2)))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return segs
+
+
+def _on_segment(p, a, b, eps=1.0e-6):
+    """Is point p (on the infinite line ab) within the segment ab?"""
+    du, dv = b[0] - a[0], b[1] - a[1]
+    L2 = du * du + dv * dv
+    if L2 < eps * eps:
+        return False
+    t = ((p[0] - a[0]) * du + (p[1] - a[1]) * dv) / L2
+    return -eps <= t <= 1.0 + eps
+
+
 def find_snap(wp, uv, tol):
-    """Best snap candidate near cursor uv within tol (model units on
-    the plane -- the plane is an isometric embedding, so world tol ==
-    UV tol). Returns (kind, (u, v)) or None. All candidate math is
-    workplane.py's own; every pair is guarded so one degenerate
+    """Best snap candidate near cursor uv within tol. Returns
+    (kind, (u, v)) or None. Guarded per pair -- one degenerate
     entity can't kill the sweep."""
     cands = []
     clines = list(getattr(wp, "clines", ()) or ())
     ccircs = list(getattr(wp, "ccircs", ()) or ())
+    segs = _geom_segments_uv(wp)
 
-    # intersections, computed on the fly near the cursor
+    # --- construction x construction ---
     for i in range(len(clines)):
         for j in range(i + 1, len(clines)):
             try:
@@ -117,7 +141,42 @@ def find_snap(wp, uv, tol):
             except Exception:
                 pass
 
-    # centers and origin
+    # --- geometry lines (Session 62, Doug's request) ---
+    seg_coefs = []
+    for a, b in segs:
+        try:
+            seg_coefs.append((wpm.cnvrt_2pts_to_coef(a, b), a, b))
+        except Exception:
+            seg_coefs.append((None, a, b))
+        cands.append(("endpoint", a))
+        cands.append(("endpoint", b))
+    # geom x geom
+    for i in range(len(seg_coefs)):
+        for j in range(i + 1, len(seg_coefs)):
+            ci, ai, bi = seg_coefs[i]
+            cj, aj, bj = seg_coefs[j]
+            if ci is None or cj is None:
+                continue
+            try:
+                p = wpm.intersection(ci, cj)
+                if (p is not None and _on_segment(p, ai, bi)
+                        and _on_segment(p, aj, bj)):
+                    cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+    # geom x cline
+    for ci, ai, bi in seg_coefs:
+        if ci is None:
+            continue
+        for cl in clines:
+            try:
+                p = wpm.intersection(ci, cl)
+                if p is not None and _on_segment(p, ai, bi):
+                    cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+
+    # --- centers and origin ---
     for cc in ccircs:
         try:
             pc = cc[0]
@@ -126,8 +185,7 @@ def find_snap(wp, uv, tol):
             pass
     cands.append(("origin", (0.0, 0.0)))
 
-    # on-curve (lower priority; only offered when nothing sharper is
-    # within reach)
+    # --- on-curve (lower priority) ---
     for cl in clines:
         try:
             p = wpm.proj_pt_on_line(cl, uv)
@@ -142,6 +200,15 @@ def find_snap(wp, uv, tol):
                 f = r / d
                 cands.append(("on", (pc[0] + (uv[0] - pc[0]) * f,
                                      pc[1] + (uv[1] - pc[1]) * f)))
+        except Exception:
+            pass
+    for ci, a, b in seg_coefs:
+        if ci is None:
+            continue
+        try:
+            p = wpm.proj_pt_on_line(ci, uv)
+            if _on_segment(p, a, b):
+                cands.append(("on", (p[0], p[1])))
         except Exception:
             pass
 
@@ -159,44 +226,60 @@ def find_snap(wp, uv, tol):
 
 
 class SnapHover:
-    """Hover-only marker (step 1). Observes mouse motion; shows a
-    non-selectable glyph at the current best snap. Never participates
-    in selection (Deactivate after Display) and never intercepts
-    input -- pure visualization until later steps consume
-    find_snap()."""
+    """The catch indicator: a small SQUARE outline drawn ON the
+    workplane at the catch point (Pyurcad's glyph -- Doug's request,
+    deliberately unlike the legacy pre-built '+' markers). Rebuilt
+    only when the snap result changes; sized in pixels via
+    view.Convert so it stays constant on screen. Non-selectable --
+    it can never steal a pick."""
+
+    COLOR = (1.0, 0.45, 0.0)  # orange, distinct from legacy markers
 
     def __init__(self, win):
         self.win = win
         self._marker = None
-        self._last = None  # last shown (kind, (u,v)) or None
+        self._last = None
 
     def _context(self):
         display = getattr(self.win.canvas, "_display", None)
         return None if display is None else display.Context
 
-    def _ensure_marker(self, pnt):
+    def _square_edge(self, wp, u, v):
+        """A square wire in the workplane at (u, v), half-side sized
+        MARKER_PIXELS on screen."""
+        try:
+            s = abs(self.win.canvas.view.Convert(MARKER_PIXELS))
+        except Exception:
+            s = 0.5
+        corners = ((u - s, v - s), (u + s, v - s),
+                   (u + s, v + s), (u - s, v + s))
+        poly = BRepBuilderAPI_MakePolygon()
+        for cu, cv in corners:
+            poly.Add(gp_Pnt(cu, cv, 0).Transformed(wp.Trsf))
+        poly.Close()
+        return poly.Wire()
+
+    def _show(self, wp, snap):
         context = self._context()
         if context is None:
-            return None
+            return
+        wire = self._square_edge(wp, snap[1][0], snap[1][1])
         if self._marker is None:
-            self._marker = AIS_Point(Geom_CartesianPoint(pnt))
-            color = Quantity_Color(1.0, 0.85, 0.0,
-                                   Quantity_TypeOfColor.Quantity_TOC_RGB)
-            try:
-                aspect = Prs3d_PointAspect(
-                    Aspect_TypeOfMarker.Aspect_TOM_PLUS, color, 4.0)
-                self._marker.Attributes().SetPointAspect(aspect)
-            except Exception:
-                pass
+            self._marker = AIS_Shape(wire)
             context.Display(self._marker, False)
             try:
+                context.SetColor(
+                    self._marker,
+                    Quantity_Color(*self.COLOR,
+                                   Quantity_TypeOfColor.Quantity_TOC_RGB),
+                    False)
                 context.Deactivate(self._marker)  # never pickable
             except Exception:
                 pass
         else:
-            self._marker.SetComponent(Geom_CartesianPoint(pnt))
+            self._marker.SetShape(wire)
             context.Redisplay(self._marker, False)
-        return context
+        context.UpdateCurrentViewer()
 
     def _hide(self):
         if self._marker is not None:
@@ -209,8 +292,7 @@ class SnapHover:
             self._marker = None
 
     def on_move(self, x, y):
-        """Mouse-move callback from the viewport (hover only -- the
-        viewport does not call this during drags)."""
+        """Mouse-move callback from the viewport (hover only)."""
         try:
             wp = getattr(self.win, "activeWp", None)
             if wp is None:
@@ -236,14 +318,10 @@ class SnapHover:
                     self._last = None
                 return
             if snap == self._last:
-                return  # unchanged -- no redisplay churn
-            pnt = uv_to_world(wp.gpPlane, snap[1][0], snap[1][1])
-            context = self._ensure_marker(pnt)
-            if context is not None:
-                context.UpdateCurrentViewer()
+                return
+            self._show(wp, snap)
             self._last = snap
         except Exception as e:
-            # hover must never break the viewport -- report once
             if not getattr(self, "_warned", False):
                 print(f"[snap_hover] disabled after error: {e}")
                 self._warned = True
