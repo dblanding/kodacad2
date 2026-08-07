@@ -773,6 +773,11 @@ if __name__ == "__main__":
     win.canvas.update()
     display = win.canvas._display
     win.install_highlight_sync()  # bidirectional tree<->viewport
+    # Snap engine step 1 (Session 62): hover-only snap marker --
+    # shows what the engine would catch; changes no tool behavior.
+    from snap_engine import SnapHover
+    win.snap_hover = SnapHover(win)
+    win.canvas.register_move_callback(win.snap_hover.on_move)
     a2d = M2D(win, display)
 
     selectSubMenu = QMenu("Select Mode")

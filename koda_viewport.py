@@ -143,6 +143,12 @@ class KodaViewport(QWidget):
         self._vc = AIS_ViewController()
         self._press_pos = None
         self._drag_distance = 0.0
+        # Hover-move callbacks (Session 62, snap engine step 1).
+        # setMouseTracking makes Qt deliver move events with NO button
+        # held -- required for hover. Callbacks fire only when no
+        # button is down, so drags/orbits are untouched.
+        self.setMouseTracking(True)
+        self._move_callbacks = []
         self._drag_threshold = 4.0
         self._rmb_press_pos = None
 
@@ -465,6 +471,16 @@ class KodaViewport(QWidget):
             dy = event.position().y() - self._press_pos.y()
             self._drag_distance = (dx**2 + dy**2) ** 0.5
 
+        # Hover (no buttons): snap-engine move callbacks (Session 62).
+        # Pure observation -- returns immediately after, leaving all
+        # drag/orbit handling below untouched for button-down moves.
+        if not event.buttons():
+            for cb in self._move_callbacks:
+                try:
+                    cb(event.position().x(), event.position().y())
+                except Exception:
+                    pass
+
         if self._manip_dragging and self._manipulator is not None:
             x, y = int(event.position().x()), int(event.position().y())
             try:
@@ -569,6 +585,10 @@ class KodaViewport(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         event.accept()
+
+    def register_move_callback(self, cb):
+        """cb(x, y) on hover moves (no buttons down). Session 62."""
+        self._move_callbacks.append(cb)
 
     def _on_click(self):
         if self.context is None or self._display is None:

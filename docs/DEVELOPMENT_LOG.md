@@ -4004,3 +4004,19 @@ Doug's thorough undo/redo test pass surfaced two minor issues, both fixed:
 ### Lesson for future development
 
 **Every naming operation must answer for BOTH name populations** -- occurrence (Kodacad's display) and product (the rest of the world's display). Session 57 fixed creation; the rename path had the same single-population blind spot and waited for a user test to reveal it. The checklist now demands the cross-viewer check for rename explicitly, and any future operation that touches names (reparent already does, import does) should be audited against the two-population rule rather than trusted.
+
+## Session 62: SKETCH ENGINE STEP 1 -- the UV bridge and the hover-only snap marker
+
+The design (docs/SKETCH_ENGINE_DESIGN.md) begins per its own incremental path: zero behavioral change, pure observation. New module snap_engine.py:
+
+- **screen_to_uv(view, x, y, gp_pln)** -- THE bridge: ConvertWithProj cursor ray -> gp_Pln intersection (one line of algebra, guarded for parallel rays) -> ElSLib.Parameters -> (u, v). With this, the viewport supplies continuous cursor position in workplane coordinates, exactly as Pyurcad's tkinter canvas did -- the realization the whole design rests on.
+- **find_snap(wp, uv, tol)** -- app-side candidate search calling workplane.py's OWN Pyurcad-lineage math (intersection, line_circ_inters, circ_circ_inters, proj_pt_on_line -- the recon's happy discovery: the 2D brain was already in this codebase). Step-1 categories: cline/ccirc pairwise intersections computed ON THE FLY (the pre-built intersection-point paradigm's replacement), ccirc centers, wp origin, on-curve (lower priority). Ranking: (priority, distance), tolerance = view.Convert(12 px) -> zoom-constant catch radius. Every pair guarded so one degenerate entity can't kill the sweep.
+- **SnapHover** -- a non-selectable AIS_Point glyph (Deactivate after Display: it can never steal a pick) at the current best snap; redisplayed only when the snap RESULT changes (no per-move churn); hides with no active wp or no catch; any error disables it with one printed line rather than ever breaking the viewport.
+- **koda_viewport**: setMouseTracking(True) (Qt only delivers buttonless moves with tracking on), register_move_callback, and a hover branch in mouseMoveEvent that fires ONLY when event.buttons() is empty -- drags, orbits, and the manipulator path are untouched.
+- **kodacad**: installed right after highlight sync.
+
+**Doug's test**: create/activate a workplane, draw a few clines and a ccircle, then just HOVER: a yellow '+' should appear when the cursor comes within ~12 px of any construction intersection, circle center, the wp origin, or (when nothing sharper is near) the nearest point ON a cline/ccircle -- at any zoom level, with the 3D model visible behind. No tool behavior has changed anywhere.
+
+### Lesson for future development
+
+**When a design names its foundation ('the missing bridge is one function'), build exactly that first and make it observable** -- the hover marker is scaffolding-as-feature: it validates the bridge, the candidate math, and the tolerance model in one glance-able artifact before any tool depends on them, and its cost was almost entirely reuse -- the recon found the entire Pyurcad math library already living in workplane.py, waiting for the coordinate bridge the design predicted it needed.
