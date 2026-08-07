@@ -4188,3 +4188,28 @@ Doug's call, his words as the release rationale: 'we have arrived at a foundatio
 ### Lesson for future development
 
 **The best design requirements arrive during pauses** -- Doug stated the cseg requirement while stepping back, BEFORE project-edges exists, which means the feature will be designed around the right data model instead of retrofitted onto the wrong one. A pause that produces one sentence like 'we will need c-line segments' has paid for itself.
+
+## Session 63: PROJECT-EDGES -- csegs land, and mounting holes have a home
+
+Doug's post-pause priority #1, built on the cseg design he banked before the pause. UI decision: TOOLBAR, not menubar -- projection tools are sketching INPUT operations used mid-flow, the same class as line/circle/cline (and CoCreate agrees: Project lives in its Draw group). Two buttons on the construction toolbar ('Project Face Edges', 'Project Edge'), wired to icons/proj_face.gif and icons/proj_edge.gif -- Doug supplies the icons; absent files show text-only buttons, fully functional.
+
+The build, five files:
+- **workplane.py**: csegs data model ([((u1,v1),(u2,v2))]) + wp.cseg(p1,p2), with the banked rationale in the comment (finite, or the layout floods with false catches).
+- **mainwindow.py draw_wp**: csegs drawn dashed magenta like clines, finite extent.
+- **snap_engine.py**: ONE structural line -- csegs join the same segment machinery as geometry lines, so endpoints (a projected face's CORNERS -- the mounting-hole landmarks), seg x seg / seg x cline intersections, and Ctrl+Shift midpoints all work for free. The reuse the design doc predicted.
+- **m2d.py**: _project_edge_onto_wp (linear edge -> cseg via ElSLib.Parameters projection of endpoints; circular edge with axis parallel to the wp normal -> construction CIRCLE at the projected center -- THE mounting-hole case; perpendicular lines project to points and are skipped; oblique circles (ellipses) skipped with a count -- honest v1 scope); projectFaceEdges (face pick -> all its edges, deduplicated) and projectEdge (single edge), both chaining with per-pick status counts, middle-click ends.
+- **kodacad.py**: the two toolbar actions.
+
+**Doug's test**: activate a wp coincident with (or parallel to) a plate face, Project Face Edges, pick the plate's top face -- the outline arrives as dashed csegs and every hole as a dashed c-circle; corners and hole centers (Ctrl+Shift) catch; sketch the bracket against them. The workflow his triage named: 'show where the mounting holes in my plate will go.'
+
+### Lesson for future development
+
+**A data model designed one session before its feature costs one structural line at integration** -- csegs slid into the snap engine's existing segment machinery exactly as the banked design note predicted, because the note was written when the machinery was fresh in mind and the feature wasn't yet rushing anyone.
+
+## Session 63 (cont'd): project-edges fixed -- the TopoDS_Edge downcast
+
+Doug's instrumented run delivered a textbook diagnosis in one paste: the collector fired, the face arrived, and every edge raised BRepAdaptor_Curve's pybind signature error -- TopExp_Explorer.Current() returns generic TopoDS_Shape, and the constructor demands a downcast TopoDS_Edge. Fixed with TopoDS.Edge_s() in both paths (the face-edge explorer and the single-edge pick, where SelectedShape likewise returns TopoDS_Shape even in edge mode) -- the same idiom the codebase already uses for Face_s. Diagnostic chatter trimmed to one result line per pick; the raised-print stays as a permanent tripwire (silent unless something actually fails -- the guarded-silence lesson from this very bug).
+
+### Lesson for future development
+
+**A guarded except that swallows silently converts a one-paste diagnosis into a mystery** -- the original helper caught this exact error and said nothing; the instrumented build's only real change was letting the exception SPEAK, and the fix was then obvious from the error text alone. Guards should be quiet on success and loud on failure, never quiet on failure.

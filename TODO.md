@@ -19,13 +19,6 @@ If operation is to delete geom lines, then perhaps c-lines and c-circles should 
 
 ## 2. UI improvement ideas
 
-#### Access center point of circles and arcs using ctrl+shift keys
-* In HP SolidDesigner (later CoCreate Modeling / Creo Elements/Direct Modeling), holding down Ctrl + Shift while moving the mouse temporarily forces the catch/snap mode to the center of circles and arcs. 
-* Using the Center Snap Modifier
-    * Key combination: Hold Ctrl + Shift simultaneously while an active command expects a point input.
-    * Behavior: It overrides current settings to temporarily catch center points of circles/arcs (and midpoints of straight edges).
-    * Visual cue: The flyby highlighting changes dynamically on the element as you hover over it.
-
 ### 2D
 
 #### Add More workplane creation modes
@@ -51,11 +44,6 @@ If operation is to delete geom lines, then perhaps c-lines and c-circles should 
 Essential for referencing existing geometry when sketching.
 * Pick an edge on a part and project c-line onto the active workplane.
 * Pick a face and project all edges.
-
-#### Clickable snap points on all sketch tools
-* Full 2D CAD snap behavior: snap to endpoints, midpoints,
-intersections, centers. Currently only cline/ccirc intersection
-snap is supported. See PyurCAD for reference implementation.
 
 ### 3D
 

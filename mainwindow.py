@@ -1276,6 +1276,27 @@ class MainWindow(QMainWindow):
                 aisline.SetAttributes(drawer)
                 context.Display(aisline, False)  # (see comment below)
                 # 'False' above enables 'context' mode display & selection
+            # Construction SEGMENTS (Session 63): finite, dashed
+            # magenta like clines -- the projected-edge entity
+            for cs in getattr(wp, 'csegs', ()):
+                try:
+                    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge
+                                                    as _MkE)
+                    from OCP.gp import gp_Pnt
+                    g1 = gp_Pnt(cs[0][0], cs[0][1], 0).Transformed(wp.Trsf)
+                    g2 = gp_Pnt(cs[1][0], cs[1][1], 0).Transformed(wp.Trsf)
+                    if g1.Distance(g2) < 1.0e-9:
+                        continue
+                    ais_cs = AIS_Shape(_MkE(g1, g2).Edge())
+                    csdrawer = ais_cs.Attributes()
+                    csasp = Prs3d_LineAspect(
+                        clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
+                    csdrawer.SetLineAspect(csasp)
+                    csdrawer.SetWireAspect(csasp)
+                    ais_cs.SetAttributes(csdrawer)
+                    context.Display(ais_cs, False)
+                except Exception as cse:
+                    print(f"[draw_wp] cseg display failed: {cse}")
             # RETIRED (Session 62, sketch engine step 4): the
             # pre-built intersection-point markers (wp.intersectPts()
             # displayed as vertex-selectable '+' glyphs) are gone --

@@ -161,7 +161,12 @@ def find_snap(wp, uv, tol, mode="normal"):
     cands = []
     clines = list(getattr(wp, "clines", ()) or ())
     ccircs = list(getattr(wp, "ccircs", ()) or ())
-    segs = _geom_segments_uv(wp)
+    segs = _geom_segments_uv(wp) + [
+        (s[0], s[1]) for s in getattr(wp, "csegs", ()) or ()]
+    # csegs (Session 63) ride the SAME segment machinery as geometry
+    # lines: endpoints catch (a projected face's corners are the
+    # mounting-hole landmarks), seg x seg / seg x cline intersections,
+    # Ctrl+Shift midpoints -- all for free.
 
     if mode == "center":
         # ENTITY-ANCHORED (Session 62 refinement -- Doug verified

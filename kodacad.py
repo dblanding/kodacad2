@@ -802,6 +802,15 @@ if __name__ == "__main__":
     )
     win.wcToolBar.addAction(
         QIcon(QPixmap("icons/acl.gif")), "Angled", a2d.clineAng)
+    # Project edges (Session 63): drop icons/proj_face.gif and
+    # icons/proj_edge.gif into icons/ -- absent icons show text-only
+    # buttons, still fully functional
+    win.wcToolBar.addAction(
+        QIcon(QPixmap("icons/proj_face.gif")), "Project Face Edges",
+        a2d.projectFaceEdges)
+    win.wcToolBar.addAction(
+        QIcon(QPixmap("icons/proj_edge.gif")), "Project Edge",
+        a2d.projectEdge)
     # win.wcToolBar.addAction(QIcon(QPixmap('icons/refangcl.gif')), 'Ref-Ang', a2d.clineRefAng)
     # win.wcToolBar.addAction(QIcon(QPixmap('icons/abcl.gif')), 'Angular Bisector', a2d.clineAngBisec)
     win.wcToolBar.addAction(

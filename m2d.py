@@ -80,6 +80,196 @@ class M2D:
                 self._snap_input_warned = True
             return False
 
+    # --- PROJECT EDGES (Session 63, Doug's post-2.0 priority #1:
+    # 'I need that to show where the mounting holes in my plate will
+    # go'). Two tools: project ALL edges of a picked FACE, or project
+    # a single picked EDGE. Linear edges -> finite csegs; circular
+    # edges whose axis is parallel to the wp normal (holes seen
+    # square-on) -> construction CIRCLES at the projected center.
+    # Oblique circles (ellipses) and other curve types are skipped
+    # with a count in the status bar -- honest v1 scope. Both tools
+    # chain (pick face after face); middle-click ends. ---
+
+    def _project_edge_onto_wp(self, wp, edge):
+        """Project one TopoDS edge onto the active wp. Returns
+        'cseg', 'ccirc', or None (skipped)."""
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_CurveType
+        from snap_engine import _elslib
+        from workplane import cr_from_3p as wpm_cr3p
+        try:
+            crv = BRepAdaptor_Curve(edge)
+            ctype = crv.GetType()
+            if ctype == GeomAbs_CurveType.GeomAbs_Line:
+                p1 = crv.Value(crv.FirstParameter())
+                p2 = crv.Value(crv.LastParameter())
+                u1, v1 = _elslib("Parameters")(wp.gpPlane, p1)
+                u2, v2 = _elslib("Parameters")(wp.gpPlane, p2)
+                if abs(u2 - u1) < 1.0e-9 and abs(v2 - v1) < 1.0e-9:
+                    return None  # edge perpendicular to wp: projects
+                    # to a point
+                wp.cseg((u1, v1), (u2, v2))
+                return 'cseg'
+            if ctype == GeomAbs_CurveType.GeomAbs_Circle:
+                c = crv.Circle()
+                cdir = c.Axis().Direction()
+                ndir = wp.gpPlane.Axis().Direction()
+                dot = (cdir.X() * ndir.X() + cdir.Y() * ndir.Y()
+                       + cdir.Z() * ndir.Z())
+                if abs(dot) < 0.9999:
+                    print(f"[proj]   skipped circle: oblique "
+                          f"(|dot|={abs(dot):.4f})")
+                    return None
+                u, v = _elslib("Parameters")(wp.gpPlane, c.Location())
+                wp.circle((u, v), c.Radius(), constr=True)
+                return 'ccirc'
+            # Fall-through (Session 63, Doug's plate): hole arcs can
+            # arrive as BSPLINES -- some authoring systems encode arcs
+            # that way -- so type-checking for Circle was too literal.
+            # SAMPLE-AND-RECOGNIZE: project sample points and let the
+            # geometry declare itself -- circle fit (Doug's own
+            # cr_from_3p) -> c-circle; straight fit -> cseg; neither
+            # -> honest skip with reason.
+            f0, f1 = crv.FirstParameter(), crv.LastParameter()
+            n_s = 9
+            uvs = []
+            for i in range(n_s):
+                p = crv.Value(f0 + (f1 - f0) * i / (n_s - 1))
+                uvs.append(_elslib("Parameters")(wp.gpPlane, p))
+            span = max(abs(uvs[-1][0] - uvs[0][0]),
+                       abs(uvs[-1][1] - uvs[0][1]),
+                       1.0e-9)
+            # straight? max deviation of samples from the end-chord
+            import math as _m
+            x1, y1 = uvs[0]
+            x2, y2 = uvs[-1]
+            chord = _m.hypot(x2 - x1, y2 - y1)
+            if chord > 1.0e-6:
+                devmax = 0.0
+                for (u, v) in uvs[1:-1]:
+                    devmax = max(devmax, abs((x2 - x1) * (y1 - v)
+                                             - (x1 - u) * (y2 - y1))
+                                 / chord)
+                if devmax < max(1.0e-6, chord * 1.0e-4):
+                    wp.cseg(uvs[0], uvs[-1])
+                    return 'cseg'
+            # circular? fit through 3 spread samples, verify all
+            try:
+                ctr, rad = wpm_cr3p(uvs[0], uvs[n_s // 3],
+                                    uvs[(2 * n_s) // 3])
+                ok = all(abs(_m.hypot(u - ctr[0], v - ctr[1]) - rad)
+                         < max(1.0e-6, rad * 1.0e-4)
+                         for (u, v) in uvs)
+                if ok and rad > 1.0e-6:
+                    # dedupe: seam-split arc pairs yield one hole
+                    for (pc, r) in list(wp.ccircs):
+                        if (abs(pc[0] - ctr[0]) < 1.0e-6
+                                and abs(pc[1] - ctr[1]) < 1.0e-6
+                                and abs(r - rad) < 1.0e-6):
+                            return 'ccirc'
+                    wp.circle((round(ctr[0], 9), round(ctr[1], 9)),
+                              round(rad, 9), constr=True)
+                    return 'ccirc'
+            except Exception:
+                pass
+            print(f"[proj]   skipped edge: unrecognized curve "
+                  f"(type {ctype})")
+        except Exception as pe:
+            print(f"[proj]   edge projection raised: {pe}")
+        return None
+
+    def _project_shape_edges(self, wp, shape):
+        """Project every edge of shape (a face). Returns
+        (n_projected, n_skipped)."""
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_ShapeEnum
+        n_proj = 0
+        n_skip = 0
+        seen = []
+        from OCP.TopoDS import TopoDS
+        exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+        while exp.More():
+            # Current() returns generic TopoDS_Shape; BRepAdaptor_Curve
+            # demands a downcast TopoDS_Edge (Doug's diagnostic run
+            # caught the exact pybind error). Same idiom as Face_s
+            # elsewhere in the codebase.
+            edge = TopoDS.Edge_s(exp.Current())
+            if not any(edge.IsSame(e) for e in seen):
+                seen.append(edge)
+                if self._project_edge_onto_wp(wp, edge) is not None:
+                    n_proj += 1
+                else:
+                    n_skip += 1
+            exp.Next()
+        return n_proj, n_skip
+
+    def projectFaceEdges(self):
+        """Project all edges of a picked face onto the active wp."""
+        if self.win.activeWp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane -- activate one first.", 4000)
+            return
+        self.win.registerCallback(self.projectFaceEdgesC)
+        self.display.SetSelectionModeFace()
+        self.win.statusBar().showMessage(
+            "Pick a face to project its edges onto the active "
+            "workplane (middle-click to end).")
+
+    def projectFaceEdgesC(self, shapeList, *args):
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        for shape in shapeList:
+            if shape is None:
+                continue
+            n_proj, n_skip = self._project_shape_edges(wp, shape)
+            print(f"[proj] {n_proj} projected, {n_skip} skipped; "
+                  f"wp: {len(wp.csegs)} cseg(s), "
+                  f"{len(wp.ccircs)} ccirc(s)")
+            msg = (f"{n_proj} edge(s) projected"
+                   + (f", {n_skip} skipped (oblique/unsupported)"
+                      if n_skip else "")
+                   + ". Pick another face (middle-click to end).")
+            self.win.statusBar().showMessage(msg)
+        self.win.draw_wp(self.win.activeWpUID)
+
+    def projectEdge(self):
+        """Project a single picked edge onto the active wp."""
+        if self.win.activeWp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane -- activate one first.", 4000)
+            return
+        self.win.registerCallback(self.projectEdgeC)
+        self.display.SetSelectionModeEdge()
+        self.win.statusBar().showMessage(
+            "Pick an edge to project onto the active workplane "
+            "(middle-click to end).")
+
+    def projectEdgeC(self, shapeList, *args):
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        for shape in shapeList:
+            if shape is None:
+                continue
+            try:
+                from OCP.TopoDS import TopoDS
+                edge = TopoDS.Edge_s(shape)
+            except Exception:
+                self.win.statusBar().showMessage(
+                    "That pick wasn't an edge -- try again.", 3000)
+                continue
+            kind = self._project_edge_onto_wp(wp, edge)
+            if kind is not None:
+                self.win.statusBar().showMessage(
+                    f"Edge projected ({kind}). Pick another edge "
+                    "(middle-click to end).")
+            else:
+                self.win.statusBar().showMessage(
+                    "Edge skipped (oblique circle or unsupported "
+                    "type). Pick another edge.", 4000)
+        self.win.draw_wp(self.win.activeWpUID)
+
     def gesture_uv_from_args(self, args):
         """GESTURE INPUT (Session 62, the second input class): return
         the click's RAW workplane UV, deliberately WITHOUT snapping

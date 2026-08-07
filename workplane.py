@@ -479,6 +479,12 @@ class WorkPlane():
         self.border = self.makeWpBorder(self.size)
         self.clines = set()  # set of c-lines with (a, b, c) coefficients
         self.ccircs = set()  # set of c-circs with (pc, r) coefficients
+        self.csegs = []  # FINITE construction segments
+        # [((u1,v1),(u2,v2)), ...] -- Session 63, required by
+        # project-edges (Doug's design call, made ahead of the
+        # feature): projected part edges must be finite, or every
+        # projected edge extended to infinity floods the layout with
+        # clutter and false catches far from the part.
         self.edgeList = []  # List of profile lines type: <TopoDS_Edge>
         self.wire = None
         self.accuracy = 1e-6   # min distance between two points
@@ -530,6 +536,12 @@ class WorkPlane():
     # In order to find intersection points (x, y), 'Geom2d_Circle' is needed.
     # Methods are provided to generate all the various types needed.
     # =======================================================================
+
+    def cseg(self, p1, p2):
+        """Add a finite construction SEGMENT from p1 to p2 (uv
+        tuples). Session 63 -- the projected-edge entity."""
+        self.csegs.append(((float(p1[0]), float(p1[1])),
+                           (float(p2[0]), float(p2[1]))))
 
     def cline_gen(self, cline):
         a, b, c = cline
