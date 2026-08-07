@@ -380,9 +380,12 @@ class M2D:
             pnt1 = self.win.xyPtStack.pop()
             wp.line(pnt1, pnt2)
             self.win.xyPtStack = []
+            self._preview_stop()
+            self._preview_start(self.lineC, self._line_preview_builder)
             self.win.draw_wp(self.win.activeWpUID)
         else:
             self.win.registerCallback(self.lineC)
+            self._preview_start(self.lineC, self._line_preview_builder)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
             self.win.lineEdit.setFocus()
@@ -407,9 +410,12 @@ class M2D:
             pnt1 = self.win.xyPtStack.pop()
             wp.rect(pnt1, pnt2)
             self.win.xyPtStack = []
+            self._preview_stop()
+            self._preview_start(self.rectC, self._rect_preview_builder)
             self.win.draw_wp(self.win.activeWpUID)
         else:
             self.win.registerCallback(self.rectC)
+            self._preview_start(self.rectC, self._rect_preview_builder)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
             self.win.lineEdit.setFocus()
@@ -436,6 +442,8 @@ class M2D:
             wp.circle(p1, rad, constr=False)
             self.win.xyPtStack = []
             self.win.floatStack = []
+            self._preview_stop()
+            self._preview_start(self.circleC, self._circle_preview_builder)
             self.win.draw_wp(self.win.activeWpUID)
         elif self.win.xyPtStack and self.win.floatStack:
             pnt = self.win.xyPtStack.pop()
@@ -443,9 +451,12 @@ class M2D:
             wp.circle(pnt, rad, constr=False)
             self.win.xyPtStack = []
             self.win.floatStack = []
+            self._preview_stop()
+            self._preview_start(self.circleC, self._circle_preview_builder)
             self.win.draw_wp(self.win.activeWpUID)
         else:
             self.win.registerCallback(self.circleC)
+            self._preview_start(self.circleC, self._circle_preview_builder)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
             self.win.floatStack = []
@@ -514,8 +525,9 @@ class M2D:
             # Seamless restart (Session 62, Doug's suggestion): the
             # operation stays live -- reset the preview and re-prompt
             # so the next arc starts immediately. End Operation exits.
-            self._arc_preview_stop()
-            self._arc_preview_start()
+            self._preview_stop()
+            self._preview_start(self.arc3pC,
+                                self._arc_preview_builder)
             self.win.draw_wp(self.win.activeWpUID)
             self.win.statusBar().showMessage(
                 "Arc created. Pick 2 end points for the next arc "
@@ -524,7 +536,8 @@ class M2D:
             self.win.registerCallback(self.arc3pC)
             self.display.SetSelectionModeVertex()
             self.win.xyPtStack = []
-            self._arc_preview_start()
+            self._preview_start(self.arc3pC,
+                                self._arc_preview_builder)
             statusText = "Pick 2 end points, then a point on the arc."
             self.win.statusBar().showMessage(statusText)
 
@@ -553,89 +566,147 @@ class M2D:
         if n == 3:
             self.arc3p()
 
-    # --- arc3p live preview (Session 62, sketch engine step 2) ---
+    # --- GENERIC live preview (Session 62): one mechanism, any tool ---
+    # A tool starts a preview with _preview_start(owner_cb, builder);
+    # builder(wp, uv) returns the preview TopoDS shape for the current
+    # cursor (or None to keep the last one). Self-cleaning: if the
+    # owner is no longer the registered callback, the first stray move
+    # erases and unregisters. Grown from the arc's dedicated preview,
+    # generalized when Doug asked for rectangle rubber lines -- now
+    # arc, line, rect, and circle all ride the same few lines.
 
-    def _arc_preview_start(self):
-        self._arc_prev_ais = None
+    def _preview_start(self, owner_cb, builder):
+        self._prev_owner = owner_cb
+        self._prev_builder = builder
+        self._prev_ais = None
         try:
-            self.win.canvas.register_move_callback(self._arc_preview_move)
+            self.win.canvas.register_move_callback(self._preview_move)
         except Exception:
             pass
 
-    def _arc_preview_stop(self):
+    def _preview_stop(self):
         try:
-            self.win.canvas.unregister_move_callback(self._arc_preview_move)
+            self.win.canvas.unregister_move_callback(self._preview_move)
         except Exception:
             pass
-        ais = getattr(self, "_arc_prev_ais", None)
+        ais = getattr(self, "_prev_ais", None)
         if ais is not None:
             try:
                 self.display.Context.Erase(ais, True)
             except Exception:
                 pass
-        self._arc_prev_ais = None
+        self._prev_ais = None
+        self._prev_owner = None
+        self._prev_builder = None
 
-    def _arc_preview_move(self, x, y):
-        """Rubber band for arc3p: 1 point picked -> line to cursor;
-        2 points -> arc through the cursor. Self-cleaning: if the
-        operation is no longer active (End Operation, tool switch),
-        the first stray move erases the preview and unregisters."""
+    def _preview_move(self, x, y):
         try:
-            if self.win.registeredCallback != self.arc3pC:
-                self._arc_preview_stop()
+            if self.win.registeredCallback != getattr(self, "_prev_owner",
+                                                      None):
+                self._preview_stop()
                 return
             wp = self.win.activeWp
-            n = len(self.win.xyPtStack)
-            if wp is None or n < 1 or n > 2:
+            if wp is None:
                 return
             from snap_engine import screen_to_uv
             uv = screen_to_uv(self.win.canvas.view, x, y, wp.gpPlane)
             if uv is None:
                 return
-            from OCP.gp import gp_Pnt
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
-            if n == 1:
-                p1 = self.win.xyPtStack[0]
-                g1 = gp_Pnt(p1[0], p1[1], 0).Transformed(wp.Trsf)
-                g2 = gp_Pnt(uv[0], uv[1], 0).Transformed(wp.Trsf)
-                if g1.Distance(g2) < 1.0e-6:
-                    return
-                edge = BRepBuilderAPI_MakeEdge(g1, g2).Edge()
-            else:
-                from OCP.GC import GC_MakeArcOfCircle
-                e1, e2 = self.win.xyPtStack[0], self.win.xyPtStack[1]
-                g1 = gp_Pnt(e1[0], e1[1], 0).Transformed(wp.Trsf)
-                g3 = gp_Pnt(e2[0], e2[1], 0).Transformed(wp.Trsf)
-                g2 = gp_Pnt(uv[0], uv[1], 0).Transformed(wp.Trsf)
-                maker = GC_MakeArcOfCircle(g1, g2, g3)
-                if not maker.IsDone():
-                    return  # collinear/degenerate -- keep last preview
-                edge = BRepBuilderAPI_MakeEdge(maker.Value()).Edge()
+            shape = self._prev_builder(wp, uv)
+            if shape is None:
+                return
             context = self.display.Context
-            if self._arc_prev_ais is None:
+            if self._prev_ais is None:
                 from OCP.AIS import AIS_Shape
                 from OCP.Quantity import (Quantity_Color,
                                           Quantity_TypeOfColor)
-                self._arc_prev_ais = AIS_Shape(edge)
-                context.Display(self._arc_prev_ais, False)
+                self._prev_ais = AIS_Shape(shape)
+                context.Display(self._prev_ais, False)
                 try:
                     context.SetColor(
-                        self._arc_prev_ais,
+                        self._prev_ais,
                         Quantity_Color(1.0, 0.55, 0.0,
                                        Quantity_TypeOfColor.Quantity_TOC_RGB),
                         False)
-                    context.Deactivate(self._arc_prev_ais)  # never pickable
+                    context.Deactivate(self._prev_ais)  # never pickable
                 except Exception:
                     pass
             else:
-                self._arc_prev_ais.SetShape(edge)
-                context.Redisplay(self._arc_prev_ais, False)
+                self._prev_ais.SetShape(shape)
+                context.Redisplay(self._prev_ais, False)
             context.UpdateCurrentViewer()
         except Exception as e:
-            if not getattr(self, "_arc_prev_warned", False):
-                print(f"[arc preview] disabled after error: {e}")
-                self._arc_prev_warned = True
-            self._arc_preview_stop()
+            if not getattr(self, "_prev_warned", False):
+                print(f"[preview] disabled after error: {e}")
+                self._prev_warned = True
+            self._preview_stop()
+
+    # --- per-tool preview builders ---
+
+    def _uvpnt(self, wp, u, v):
+        from OCP.gp import gp_Pnt
+        return gp_Pnt(u, v, 0).Transformed(wp.Trsf)
+
+    def _arc_preview_builder(self, wp, uv):
+        n = len(self.win.xyPtStack)
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        if n == 1:
+            p1 = self.win.xyPtStack[0]
+            g1 = self._uvpnt(wp, p1[0], p1[1])
+            g2 = self._uvpnt(wp, uv[0], uv[1])
+            if g1.Distance(g2) < 1.0e-6:
+                return None
+            return BRepBuilderAPI_MakeEdge(g1, g2).Edge()
+        if n == 2:
+            from OCP.GC import GC_MakeArcOfCircle
+            e1, e2 = self.win.xyPtStack[0], self.win.xyPtStack[1]
+            g1 = self._uvpnt(wp, e1[0], e1[1])
+            g3 = self._uvpnt(wp, e2[0], e2[1])
+            g2 = self._uvpnt(wp, uv[0], uv[1])
+            maker = GC_MakeArcOfCircle(g1, g2, g3)
+            if not maker.IsDone():
+                return None
+            return BRepBuilderAPI_MakeEdge(maker.Value()).Edge()
+        return None
+
+    def _line_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 1:
+            return None
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        p1 = self.win.xyPtStack[0]
+        g1 = self._uvpnt(wp, p1[0], p1[1])
+        g2 = self._uvpnt(wp, uv[0], uv[1])
+        if g1.Distance(g2) < 1.0e-6:
+            return None
+        return BRepBuilderAPI_MakeEdge(g1, g2).Edge()
+
+    def _rect_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 1:
+            return None
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
+        p1 = self.win.xyPtStack[0]
+        u1, v1 = p1[0], p1[1]
+        u2, v2 = uv[0], uv[1]
+        if abs(u2 - u1) < 1.0e-6 or abs(v2 - v1) < 1.0e-6:
+            return None  # degenerate rectangle -- keep last preview
+        poly = BRepBuilderAPI_MakePolygon()
+        for cu, cv in ((u1, v1), (u2, v1), (u2, v2), (u1, v2)):
+            poly.Add(self._uvpnt(wp, cu, cv))
+        poly.Close()
+        return poly.Wire()
+
+    def _circle_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 1:
+            return None
+        from OCP.gp import gp_Circ, gp_Ax2
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        pc = self.win.xyPtStack[0]
+        r = ((uv[0] - pc[0]) ** 2 + (uv[1] - pc[1]) ** 2) ** 0.5
+        if r < 1.0e-6:
+            return None
+        center = self._uvpnt(wp, pc[0], pc[1])
+        circ = gp_Circ(gp_Ax2(center, wp.wDir), r)
+        return BRepBuilderAPI_MakeEdge(circ).Edge()
 
     def geom(self):
         pass

@@ -4099,3 +4099,18 @@ The design doc's four-step incremental path is hereby COMPLETE: bridge -> hover 
 ### Lesson for future development
 
 **Retiring an old paradigm is safe exactly when its replacement already carries every role the old one had** -- markers had two jobs (feedback and pickable input); the square took feedback in the previous session and engine input took clicking in this one, so the retirement commit deletes a display block and changes nothing else. Migration order was the whole safety argument.
+
+## Session 62 (cont'd): rubber bands for everyone -- the preview mechanism generalized
+
+Doug: 'It's beautiful! ... Can we get rectangles to have rubber lines?' Rather than clone the arc's preview a third time, the mechanism was generalized: _preview_start(owner_cb, builder) / _preview_move / _preview_stop -- one self-cleaning machine, per-tool builder functions of a few lines each (builder(wp, uv) -> preview shape or None-to-hold). Wired into ALL FOUR point-sequence tools:
+- arc (ported from its dedicated code -- one mechanism now, tested across all tools),
+- line (rubber line from first end point),
+- RECT (Doug's request -- live rectangle from first corner to cursor; degenerate zero-width/height held rather than flickered),
+- circle (live circle centered on the first pick, radius to cursor; both completion routes -- second point AND typed radius -- restart the preview for seamless chaining).
+All previews: orange, non-selectable, updated only when the builder yields, self-cleaning when the operation ends any way at all.
+
+**Parking lot noted at Doug's request**: Pyurcad has additional tools not yet in Kodacad; SOME may come over SOMEDAY -- no commitment now. The migration cost per tool keeps falling as the engine matures (a new tool is: a collector on engine input + a builder + wp geometry op).
+
+### Lesson for future development
+
+**The second copy is the signal, the third request is the deadline** -- the arc's dedicated preview was fine as a first implementation; the moment a second tool wanted the same behavior, the mechanism belonged in one place with per-tool builders. Generalizing AT the second request cost less than the third clone would have, and every future tool's rubber band is now a ~15-line builder.
