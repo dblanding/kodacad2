@@ -283,12 +283,52 @@ def revolve():
 
 
 def revolveC(shapeList, *args):
-    """Callback (collector) for revolve"""
+    """Callback (collector) for revolve.
 
-    for shape in shapeList:
-        vrtx = TopoDS.Vertex_s(shape)
-        gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
-        win.ptStack.append(gpPt)
+    Session 63 sweep: same retired-paradigm consumer as the
+    calculator's distPtPt was -- it expected wp intersection-point
+    VERTEX picks for the axis, which no longer exist. ENGINE INPUT
+    FIRST (a catch on the active wp becomes a world point -- the
+    natural way to define an axis in the sketch), 3D vertex pick as
+    fallback, polite decline otherwise. Fixed BEFORE it bit, per the
+    every-consumer-sweep lesson."""
+    pt = None
+    try:
+        click_xy = args[1] if len(args) > 1 else None
+        wp = win.activeWp
+        if (click_xy is not None and click_xy[0] is not None
+                and wp is not None):
+            from snap_engine import (screen_to_uv, find_snap,
+                                     uv_to_world, SNAP_PIXELS,
+                                     current_snap_mode)
+            uv = screen_to_uv(win.canvas.view, click_xy[0],
+                              click_xy[1], wp.gpPlane)
+            if uv is not None:
+                try:
+                    tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
+                except Exception:
+                    tol = 1.0
+                snap = find_snap(wp, uv, tol, current_snap_mode())
+                if snap is not None:
+                    pt = uv_to_world(wp.gpPlane, snap[1][0], snap[1][1])
+    except Exception as se:
+        print(f"[revolve] engine path failed: {se}")
+    if pt is None:
+        for shape in shapeList:
+            if shape is None:
+                continue
+            try:
+                vrtx = TopoDS.Vertex_s(shape)
+                pt = BRep_Tool.Pnt_s(vrtx)
+                break
+            except Exception:
+                continue
+    if pt is None:
+        win.statusBar().showMessage(
+            "No catch or vertex there -- click a workplane catch or "
+            "a part vertex for the axis.", 3000)
+        return
+    win.ptStack.append(pt)
     if len(win.ptStack) == 1:
         statusText = "Select 2nd point on revolve axis."
         win.statusBar().showMessage(statusText)

@@ -1467,13 +1467,61 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(statusText)
 
     def distPtPtC(self, shapeList, *args):
-        """Callback (collector) for distPtPt"""
-        logger.debug("Edges selected: %s", shapeList)
-        logger.debug("args: %s", args)  # args = x, y mouse coords
-        for shape in shapeList:
-            vrtx = TopoDS.Vertex_s(shape)
-            gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
-            self.ptStack.append(gpPt)
+        """Callback (collector) for distPtPt.
+
+        Session 63 (answering the old comment in distPtPt itself --
+        'How to enable selecting intersection points on WP?'):
+        ENGINE INPUT FIRST -- a catch on the active workplane
+        (intersection/endpoint, or Ctrl+Shift center/midpoint)
+        becomes a measurable world point via uv_to_world; the 3D
+        VERTEX pick remains as fallback for measuring between part
+        vertices. Both yield world gp_Pnts, so a wp catch and a 3D
+        vertex can be measured AGAINST EACH OTHER. No catch and no
+        vertex -> the click is declined with a hint, never a
+        traceback."""
+        pt = None
+        # 1. Engine path: catch on the active workplane
+        try:
+            click_xy = args[1] if len(args) > 1 else None
+            wp = self.activeWp
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import (screen_to_uv, find_snap,
+                                         uv_to_world, SNAP_PIXELS,
+                                         current_snap_mode)
+                uv = screen_to_uv(self.canvas.view, click_xy[0],
+                                  click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    try:
+                        tol = abs(self.canvas.view.Convert(SNAP_PIXELS))
+                    except Exception:
+                        tol = 1.0
+                    snap = find_snap(wp, uv, tol, current_snap_mode())
+                    if snap is not None:
+                        pt = uv_to_world(wp.gpPlane, snap[1][0],
+                                         snap[1][1])
+        except Exception as se:
+            print(f"[distPtPt] engine path failed: {se}")
+        # 2. Fallback: a genuine 3D vertex pick
+        if pt is None:
+            for shape in shapeList:
+                if shape is None:
+                    continue
+                try:
+                    vrtx = TopoDS.Vertex_s(shape)
+                    pt = BRep_Tool.Pnt_s(vrtx)
+                    break
+                except Exception:
+                    continue
+        if pt is None:
+            self.statusBar().showMessage(
+                "No catch or vertex there -- click a workplane catch "
+                "or a part vertex.", 3000)
+            return
+        self.ptStack.append(pt)
+        if len(self.ptStack) == 1:
+            self.statusBar().showMessage(
+                "Point 1 set. Select the second point.")
         if len(self.ptStack) == 2:
             self.distPtPt()
 

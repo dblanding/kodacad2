@@ -162,10 +162,14 @@ class M2D:
                          for (u, v) in uvs)
                 if ok and rad > 1.0e-6:
                     # dedupe: seam-split arc pairs yield one hole
+                    # dedupe tol 1e-4 (Session 63: 1e-6 was tighter
+                    # than two seam-arc halves' fitted centers agree
+                    # -- Doug got 12 ccircs for 6 holes; 0.1um apart
+                    # is the same hole)
                     for (pc, r) in list(wp.ccircs):
-                        if (abs(pc[0] - ctr[0]) < 1.0e-6
-                                and abs(pc[1] - ctr[1]) < 1.0e-6
-                                and abs(r - rad) < 1.0e-6):
+                        if (abs(pc[0] - ctr[0]) < 1.0e-4
+                                and abs(pc[1] - ctr[1]) < 1.0e-4
+                                and abs(r - rad) < 1.0e-4):
                             return 'ccirc'
                     wp.circle((round(ctr[0], 9), round(ctr[1], 9)),
                               round(rad, 9), constr=True)

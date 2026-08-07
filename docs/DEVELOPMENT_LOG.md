@@ -4213,3 +4213,20 @@ Doug's instrumented run delivered a textbook diagnosis in one paste: the collect
 ### Lesson for future development
 
 **A guarded except that swallows silently converts a one-paste diagnosis into a mystery** -- the original helper caught this exact error and said nothing; the instrumented build's only real change was letting the exception SPEAK, and the fix was then obvious from the error text alone. Guards should be quiet on success and loud on failure, never quiet on failure.
+
+## Session 63 (cont'd): project-edges WORKING (95% by Doug's score) -- the calculator learns to catch, and the seam-arc dedupe loosened
+
+Doug's verdict on projection after the sample-and-recognize fix: 4 plate sides as csegs, all 6 holes as c-circles, clines drawn through the centers via Ctrl+Shift catches, geometry created against them -- '95% solution'. The BSpline-encoded hole arcs (some authoring systems write arcs that way) are now recognized by sampling + Doug's own cr_from_3p circle fit. Two follow-ups from his terminal:
+
+1. **The missing 5%: the calculator's pnt-2-pnt measurement** expected VERTEX picks -- retired-paradigm input -- and traceback-spammed on wp clicks. Migrated to ENGINE INPUT FIRST with the 3D-vertex path as fallback; both yield world gp_Pnts, so a wp catch and a part vertex can now be measured AGAINST each other (a capability upgrade, not just a fix). Poetic detail: distPtPt contained Doug's own old comment 'How to enable selecting intersection points on WP?' -- the engine is the answer, years later. Per-pick ack added; no-catch clicks decline politely.
+2. **Seam-arc dedupe** was 1e-6 -- tighter than two arc halves' sample-fitted centers agree (12 ccircs for 6 holes, visually coincident). Loosened to 1e-4: 0.1um apart is the same hole.
+
+Remaining known measurement-family candidates for the same migration when they bite: edgeLen (edge picks still valid -- geometry edges exist as AIS), others as encountered.
+
+### Lesson for future development
+
+**Retiring an input paradigm obligates a sweep of EVERY consumer, not just the obvious ones** -- the 2D collectors were migrated as a family, but the calculator's measurement tools consumed the same vertex-pick paradigm from another file and were missed until they traceback'd. The grep that would have found them: SetSelectionModeVertex callers.
+
+## Session 63 (cont'd): the sweep completes -- revolveC migrated BEFORE it bit
+
+The SetSelectionModeVertex sweep demanded by the previous lesson found one more retired-paradigm consumer: revolveC (the revolve axis was defined by picking wp intersection-point vertices -- gone). Migrated with the identical hybrid: engine catch first (a wp catch is the natural way to define an axis in the sketch plane), 3D vertex fallback, polite decline. wpBy3PtsC audited and left alone -- it picks vertices on 3D PARTS, which still exist and still pick. The other 14 SetSelectionModeVertex hits are migrated collectors' entry points (harmless mode-setting). Sweep closed.
