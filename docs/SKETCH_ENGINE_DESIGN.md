@@ -159,3 +159,26 @@ space. Consequences, binding on every tool migrated to engine input:
     (Helper: gesture_uv_from_args -- raw UV, no snap, no rejection.)
   Every tool in the flush-out pass declares which class each of its
   clicks belongs to; there is no third class.
+
+## Construction SEGMENTS (csegs) -- required by project-edges (Doug, pre-2.0 pause)
+
+Projecting part edges onto a workplane requires a NEW construction
+entity: the c-line SEGMENT -- finite, ((u1,v1),(u2,v2)) -- as opposed
+to the infinite c-line. Rationale (why not just infinite clines
+through each projected edge): every projected edge extended to
+infinity would flood the layout with clutter and combinatorial FALSE
+catches far from the part; segments keep the layout local to the
+geometry that cast it. This is how CoCreate projects.
+
+Data-model and engine implications, recorded ahead of implementation:
+- wp gains a csegs collection alongside clines/ccircs.
+- Display: dashed construction style (magenta), finite extent.
+- Snap engine: cseg endpoints are catches (a projected face's CORNERS
+  are exactly the mounting-hole landmarks Doug needs); cseg x cseg,
+  cseg x cline, cseg x ccirc, cseg x geometry intersections with
+  on-segment bounds checks (the machinery already exists for geometry
+  segments -- csegs reuse it); Ctrl+Shift midpoints of csegs.
+- Delete-all-construction (future tool) includes csegs.
+- Projected circular edges (holes) will analogously need c-ARCS or
+  c-circles at projected positions -- decide during project-edges
+  implementation.

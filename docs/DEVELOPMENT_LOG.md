@@ -4151,3 +4151,40 @@ Doug: both CoCreate and Pyurcad end an operation with a middle click, and it's i
 ### Lesson for future development
 
 **'It's in my muscle memory' is a requirement with a precise spec attached** -- decades of CoCreate use define exactly what the gesture must do, and honoring it costs a press-position test and one hook. Input conventions from a user's formative tool are the cheapest ergonomics wins available.
+
+## Session 62 (MILESTONE): the first part from the new sketcher -- and the honest Tier-3 ledger
+
+Doug's screenshot: a block extruded on the plate, sketched end-to-end with the new engine -- construction layout beneath, bold geometry, catch-driven input, rubber-banded, extruded, in the assembly. His words: 'a huge improvement in the main step in the process of creating a new part.' The design doc's destination picture, achieved.
+
+**Honest audit in answer to 'am I missing anything?' -- the Tier-3 FOUNDATION is complete; Tier 3 itself is not:**
+
+COMPLETE: the sketch engine (bridge, catch policy with Ctrl+Shift entity-anchored centers, engine input on all collectors, generic rubber-band previews on all four point-sequence tools, old intersection-point paradigm retired, middle-click end-op, bold-black geometry, input philosophy codified).
+
+REMAINING in Tier 3, all cheaper now:
+- Extrude cluster: two-wire (inner/outer) profiles; direction choice; negative values. Doug's Creo E/D 'Pull' screenshot BANKED AS THE SPEC: explicit Direction field (+w/-w) in the flow, Distance field, 'Operation: Automatic' (add/remove material auto-determined), Keep WP / Keep Profile options.
+- Project part edges onto workplane (Doug's screenshot also shows the reference: wp-created-on-face with the face's edges projected -- doubles as reference for the workplane-creation-modes work).
+- Parallel clines (gesture_uv_from_args is waiting; tool not built).
+- Arc-over-ccircle DELETION -- honest correction: NOT yet dissolved. Point collectors migrated to engine input, but the DELETE tools still pick entities via OCCT selection where both remain selectable. The per-operation entity-class filter is still owed.
+- Booleans; Move Face; scars/healing.
+
+**Version question raised by Doug**: the sketch engine landing was this log's own stated criterion for 2.0.0 ('a new era'). Options presented: 2.0.0 now (the character of the app changed today -- sketching IS the new era, per the criterion), or 1.3.0 now with 2.0.0 reserved for the completed sketch-to-solid workflow (direction control + multi-wire + project-edges). Doug's call.
+
+### Lesson for future development
+
+**'Have we finished X?' deserves a ledger, not a cheer** -- the foundation's completion is real and version-worthy, and five features still sit in the tier it enables. Conflating the two would have cost the remaining items their visibility exactly when the re-triage Doug plans should weigh them against his 90% workflow (two-wire holes serve the plates-and-brackets use case directly; booleans may not).
+
+## Session 62 (RELEASE): KodaCAD 2.0.0 -- the sketch engine era
+
+Doug's call, his words as the release rationale: 'we have arrived at a foundation that, quite honestly, I didn't think was achievable. Now, a whole bunch of things can be tackled.' Version 2.0.0 per the criterion this log set when 1.2.0 shipped (the sketch engine landing = the new era). version.py carries the era summary; the STEP header and title bar carry the number automatically. A PAUSE follows, at Doug's instigation -- commit, use the tool, let priorities settle.
+
+**Post-pause priorities, Doug's triage:**
+1. **PROJECT-EDGES first** -- he needs it to place mounting holes in his plates (the 90% workflow speaking).
+2. Two-wire extrude: LOW -- workaround exists (make the plate, add holes subsequently).
+3. Direction choice: small, but Doug wants thinking time on dialog design and option count (the Creo Pull spec is banked).
+4. Arc-over-ccircle delete filter: owed, small.
+
+**Design requirement banked ahead of project-edges (Doug): construction SEGMENTS.** Projected edges must be finite c-SEGMENTS, not infinite c-lines -- infinite lines through every projected edge would flood the layout with clutter and combinatorial false catches far from the part; segments keep the layout local. Full data-model/engine implications recorded in SKETCH_ENGINE_DESIGN.md (csegs collection, endpoint/midpoint/intersection catches reusing the geometry-segment machinery, projected holes needing c-arcs -- decide at implementation).
+
+### Lesson for future development
+
+**The best design requirements arrive during pauses** -- Doug stated the cseg requirement while stepping back, BEFORE project-edges exists, which means the feature will be designed around the right data model instead of retrofitted onto the wrong one. A pause that produces one sentence like 'we will need c-line segments' has paid for itself.
