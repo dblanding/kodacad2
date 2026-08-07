@@ -778,6 +778,8 @@ if __name__ == "__main__":
     from snap_engine import SnapHover
     win.snap_hover = SnapHover(win)
     win.canvas.register_move_callback(win.snap_hover.on_move)
+    # Middle-click = End Operation (CoCreate/Pyurcad muscle memory)
+    win.canvas.on_middle_click = win.clearCallback
     a2d = M2D(win, display)
 
     selectSubMenu = QMenu("Select Mode")

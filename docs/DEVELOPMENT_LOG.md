@@ -4143,3 +4143,11 @@ Doug verified against both reference implementations (Creo E/D and Pyurcad) and 
 ### Lesson for future development
 
 **When a behavior imitates a reference application, verify against the reference before shipping the guess** -- the proximity-based center mode was a plausible reading of the TODO's description; Doug's ten minutes with Creo E/D and Pyurcad produced the correct semantics (entity-anchored) plus two bonus decisions (the chord, the line styling). For workflow features with a living reference, the reference IS the spec, and checking it is cheaper than iterating on approximations.
+
+## Session 62 (cont'd): middle-click ends the operation -- muscle memory honored
+
+Doug: both CoCreate and Pyurcad end an operation with a middle click, and it's in his muscle memory. Implemented: a middle CLICK (press-pos + drag-threshold test, the same discrimination the left button uses to separate click from orbit) fires an app-installed hook wired to win.clearCallback -- identical to pressing End Operation. Middle-DRAG panning via AIS_ViewController is untouched. Tool previews self-clean on the next move as designed (they watch registeredCallback), and a middle click with no operation active is a harmless status reset.
+
+### Lesson for future development
+
+**'It's in my muscle memory' is a requirement with a precise spec attached** -- decades of CoCreate use define exactly what the gesture must do, and honoring it costs a press-position test and one hook. Input conventions from a user's formative tool are the cheapest ergonomics wins available.

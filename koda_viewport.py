@@ -149,6 +149,12 @@ class KodaViewport(QWidget):
         # button is down, so drags/orbits are untouched.
         self.setMouseTracking(True)
         self._move_callbacks = []
+        # Middle-CLICK ends the current operation (Session 62 --
+        # CoCreate/Pyurcad muscle memory, Doug's request). Middle-DRAG
+        # still pans via AIS_ViewController; the same press-pos +
+        # drag-threshold test that separates LMB click from orbit
+        # separates MMB click from pan. The app installs the hook.
+        self.on_middle_click = None
         self._drag_threshold = 4.0
         self._rmb_press_pos = None
 
@@ -563,6 +569,14 @@ class KodaViewport(QWidget):
             if (self._press_pos is not None and
                     self._drag_distance < self._drag_threshold):
                 self._on_click(event.position().x(), event.position().y())
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            if (self._press_pos is not None and
+                    self._drag_distance < self._drag_threshold and
+                    self.on_middle_click is not None):
+                try:
+                    self.on_middle_click()
+                except Exception:
+                    pass
         elif event.button() == Qt.MouseButton.RightButton:
             if self._rmb_press_pos is not None:
                 dx = event.position().x() - self._rmb_press_pos.x()
