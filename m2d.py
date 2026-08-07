@@ -55,7 +55,8 @@ class M2D:
                 tol = abs(view.Convert(SNAP_PIXELS))
             except Exception:
                 tol = 1.0
-            snap = find_snap(wp, uv, tol)
+            from snap_engine import current_snap_mode
+            snap = find_snap(wp, uv, tol, current_snap_mode())
             if snap is None:
                 # NO CATCH -> NO POINT (Session 62, Doug's design
                 # principle -- the drafter's #6-pencil layout method:
@@ -66,8 +67,8 @@ class M2D:
                 # marker is the permission indicator: no marker, no
                 # input.
                 self.win.statusBar().showMessage(
-                    "No catch -- move to a construction feature "
-                    "(intersection, center, on-line) and click.", 3000)
+                    "No catch -- intersections/endpoints catch "
+                    "(hold Ctrl+Shift for centers & midpoints).", 3000)
                 return True  # handled: engine had jurisdiction,
                 # deliberately added no point (no legacy fallback)
             pt = snap[1]

@@ -25,7 +25,8 @@ from OCP.ElSLib import ElSLib
 
 import workplane as wpm  # the Pyurcad-lineage 2D math lives here
 
-PRIORITY = {"isect": 4, "endpoint": 4, "center": 3, "origin": 2, "on": 1}
+PRIORITY = {"isect": 4, "endpoint": 4, "center": 4, "midpoint": 4,
+            "origin": 2, "on": 1}
 
 SNAP_PIXELS = 12       # catch radius on screen, constant at any zoom
 MARKER_PIXELS = 5      # half-side of the catch square, in pixels
@@ -96,6 +97,45 @@ def _geom_segments_uv(wp):
     return segs
 
 
+def current_snap_mode():
+    """'center' while Ctrl+Shift are held (the CoCreate modifier:
+    temporarily catch ONLY centers of circles/arcs and midpoints of
+    straight edges), else 'normal'. Session 62, Doug's TODO item."""
+    try:
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt
+        mods = QApplication.keyboardModifiers()
+        if (mods & Qt.KeyboardModifier.ControlModifier
+                and mods & Qt.KeyboardModifier.ShiftModifier):
+            return "center"
+    except Exception:
+        pass
+    return "normal"
+
+
+def _geom_circles_uv(wp):
+    """The workplane's circular geometry edges as (center_uv, radius)
+    -- their CENTERS participate in Ctrl+Shift catching."""
+    circs = []
+    try:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_CurveType
+        for edge in getattr(wp, "edgeList", ()) or ():
+            try:
+                crv = BRepAdaptor_Curve(edge)
+                if crv.GetType() != GeomAbs_CurveType.GeomAbs_Circle:
+                    continue
+                c = crv.Circle()
+                loc = c.Location()
+                u, v = _elslib("Parameters")(wp.gpPlane, loc)
+                circs.append(((u, v), c.Radius()))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return circs
+
+
 def _on_segment(p, a, b, eps=1.0e-6):
     """Is point p (on the infinite line ab) within the segment ab?"""
     du, dv = b[0] - a[0], b[1] - a[1]
@@ -106,14 +146,63 @@ def _on_segment(p, a, b, eps=1.0e-6):
     return -eps <= t <= 1.0 + eps
 
 
-def find_snap(wp, uv, tol):
+def find_snap(wp, uv, tol, mode="normal"):
     """Best snap candidate near cursor uv within tol. Returns
     (kind, (u, v)) or None. Guarded per pair -- one degenerate
-    entity can't kill the sweep."""
+    entity can't kill the sweep.
+
+    MODES (Session 62, Doug's catch policy):
+    - 'normal': INTERSECTIONS (+ endpoints, origin). On-curve and
+      centers are NOT offered -- a drafter draws dark lines between
+      intersections of the layout, not 'somewhere along' a line.
+    - 'center' (Ctrl+Shift held, the CoCreate override): centers of
+      circles/arcs (construction AND geometry) and MIDPOINTS of
+      straight geometry edges, EXCLUSIVELY."""
     cands = []
     clines = list(getattr(wp, "clines", ()) or ())
     ccircs = list(getattr(wp, "ccircs", ()) or ())
     segs = _geom_segments_uv(wp)
+
+    if mode == "center":
+        # ENTITY-ANCHORED (Session 62 refinement -- Doug verified
+        # against Creo E/D and Pyurcad): the cursor points at the
+        # ENTITY, anywhere along it; the glyph appears at ITS
+        # center/midpoint, which may be FAR from the cursor. (The
+        # center of a circle has no visible feature at it -- making
+        # the user aim at empty space was backwards. Point at what
+        # you can see.) Ranking is by distance to the CURVE, not to
+        # the anchor point. Click takes the glyph's location.
+        best = None
+        best_d = None
+        for cc in ccircs:  # construction circles: distance to rim
+            try:
+                pc, r = cc[0], cc[1]
+                d = abs(_dist(uv, (pc[0], pc[1])) - r)
+                if d <= tol and (best_d is None or d < best_d):
+                    best_d = d
+                    best = ("center", (pc[0], pc[1]))
+            except Exception:
+                pass
+        for pc, r in _geom_circles_uv(wp):  # geometry circles/arcs
+            d = abs(_dist(uv, (pc[0], pc[1])) - r)
+            if d <= tol and (best_d is None or d < best_d):
+                best_d = d
+                best = ("center", (pc[0], pc[1]))
+        for a, b in segs:  # geometry segments: distance to segment
+            try:
+                coef = wpm.cnvrt_2pts_to_coef(a, b)
+                p = wpm.proj_pt_on_line(coef, uv)
+                if _on_segment(p, a, b):
+                    d = _dist(uv, p)
+                else:
+                    d = min(_dist(uv, a), _dist(uv, b))
+                if d <= tol and (best_d is None or d < best_d):
+                    best_d = d
+                    best = ("midpoint", ((a[0] + b[0]) / 2.0,
+                                         (a[1] + b[1]) / 2.0))
+            except Exception:
+                pass
+        return best
 
     # --- construction x construction ---
     for i in range(len(clines)):
@@ -176,41 +265,10 @@ def find_snap(wp, uv, tol):
             except Exception:
                 pass
 
-    # --- centers and origin ---
-    for cc in ccircs:
-        try:
-            pc = cc[0]
-            cands.append(("center", (pc[0], pc[1])))
-        except Exception:
-            pass
+    # --- origin (normal mode; centers/on-curve deliberately absent:
+    # centers live behind Ctrl+Shift, on-curve is not a drafter's
+    # catch -- Session 62 policy) ---
     cands.append(("origin", (0.0, 0.0)))
-
-    # --- on-curve (lower priority) ---
-    for cl in clines:
-        try:
-            p = wpm.proj_pt_on_line(cl, uv)
-            cands.append(("on", (p[0], p[1])))
-        except Exception:
-            pass
-    for cc in ccircs:
-        try:
-            pc, r = cc[0], cc[1]
-            d = _dist(uv, (pc[0], pc[1]))
-            if d > 1.0e-9:
-                f = r / d
-                cands.append(("on", (pc[0] + (uv[0] - pc[0]) * f,
-                                     pc[1] + (uv[1] - pc[1]) * f)))
-        except Exception:
-            pass
-    for ci, a, b in seg_coefs:
-        if ci is None:
-            continue
-        try:
-            p = wpm.proj_pt_on_line(ci, uv)
-            if _on_segment(p, a, b):
-                cands.append(("on", (p[0], p[1])))
-        except Exception:
-            pass
 
     best = None
     best_key = None
@@ -233,7 +291,9 @@ class SnapHover:
     view.Convert so it stays constant on screen. Non-selectable --
     it can never steal a pick."""
 
-    COLOR = (1.0, 0.45, 0.0)  # orange, distinct from legacy markers
+    COLOR = (1.0, 0.45, 0.0)        # normal mode: orange
+    COLOR_CENTER = (0.0, 0.85, 0.9)  # Ctrl+Shift center mode: cyan
+    # -- the flyby colour tells you which catch set is live
 
     def __init__(self, win):
         self.win = win
@@ -259,26 +319,27 @@ class SnapHover:
         poly.Close()
         return poly.Wire()
 
-    def _show(self, wp, snap):
+    def _show(self, wp, snap, mode):
         context = self._context()
         if context is None:
             return
         wire = self._square_edge(wp, snap[1][0], snap[1][1])
+        rgb = self.COLOR_CENTER if mode == "center" else self.COLOR
         if self._marker is None:
             self._marker = AIS_Shape(wire)
             context.Display(self._marker, False)
-            try:
-                context.SetColor(
-                    self._marker,
-                    Quantity_Color(*self.COLOR,
-                                   Quantity_TypeOfColor.Quantity_TOC_RGB),
-                    False)
-                context.Deactivate(self._marker)  # never pickable
-            except Exception:
-                pass
         else:
             self._marker.SetShape(wire)
             context.Redisplay(self._marker, False)
+        try:
+            context.SetColor(
+                self._marker,
+                Quantity_Color(*rgb,
+                               Quantity_TypeOfColor.Quantity_TOC_RGB),
+                False)
+            context.Deactivate(self._marker)  # never pickable
+        except Exception:
+            pass
         context.UpdateCurrentViewer()
 
     def _hide(self):
@@ -311,16 +372,17 @@ class SnapHover:
                 tol = abs(view.Convert(SNAP_PIXELS))
             except Exception:
                 tol = 1.0
-            snap = find_snap(wp, uv, tol)
+            mode = current_snap_mode()
+            snap = find_snap(wp, uv, tol, mode)
             if snap is None:
                 if self._last is not None:
                     self._hide()
                     self._last = None
                 return
-            if snap == self._last:
+            if (mode, snap) == self._last:
                 return
-            self._show(wp, snap)
-            self._last = snap
+            self._show(wp, snap, mode)
+            self._last = (mode, snap)
         except Exception as e:
             if not getattr(self, "_warned", False):
                 print(f"[snap_hover] disabled after error: {e}")

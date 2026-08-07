@@ -1295,7 +1295,20 @@ class MainWindow(QMainWindow):
                 context.Display(aiscirc, False)  # (see comment below)
                 # 'False' above enables 'context' mode display & selection
             for edge in wp.edgeList:
-                self.canvas._display.DisplayShape(edge, color="WHITE")
+                # BOLD BLACK geometry (Session 62, Doug: Creo E/D
+                # draws geometry in bold black and it reads far
+                # better than white -- Pyurcad's white-on-black
+                # doesn't translate to this canvas)
+                ais_geom = self.canvas._display.DisplayShape(edge)
+                if ais_geom is not None:
+                    from OCP.Quantity import (Quantity_Color as _QC,
+                                              Quantity_NOC_BLACK)
+                    try:
+                        context.SetColor(ais_geom,
+                                         _QC(Quantity_NOC_BLACK), False)
+                        context.SetWidth(ais_geom, 3.0, False)
+                    except Exception:
+                        pass
             self.canvas._display.Repaint()
 
     def draw_shape(self, uid):

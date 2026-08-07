@@ -4114,3 +4114,32 @@ All previews: orange, non-selectable, updated only when the builder yields, self
 ### Lesson for future development
 
 **The second copy is the signal, the third request is the deadline** -- the arc's dedicated preview was fine as a first implementation; the moment a second tool wanted the same behavior, the mechanism belonged in one place with per-tool builders. Generalizing AT the second request cost less than the third clone would have, and every future tool's rubber band is now a ~15-line builder.
+
+## Session 62 (cont'd): the Ctrl+Shift catch override -- and the default catch set tightened to intersections
+
+Doug's original TODO item lands, timed exactly when the engine can express it in a few lines. His framing also tightened the DEFAULT: on-curve catching ('anywhere along the line shows it selectable') was step-1 scaffolding a drafter doesn't want -- dark lines are drawn between INTERSECTIONS.
+
+Final catch policy (also written into the design doc):
+- **Normal**: intersections (construction x construction, geometry x geometry, geometry x cline), geometry endpoints, origin. NO on-curve, NO centers.
+- **Ctrl+Shift held**: EXCLUSIVELY centers of circles/arcs -- construction ccircs AND geometry circles (new _geom_circles_uv extraction) -- and MIDPOINTS of straight geometry edges. The CoCreate override verbatim from the TODO's own description.
+- The catch square changes colour: orange = normal set, CYAN = center/midpoint set -- the flyby feedback tells you which catch set is live (the TODO's 'flyby highlighting changes dynamically' requirement).
+- Mode read via QApplication.keyboardModifiers() at each move/click; hover marker keys its change-detection on (mode, snap) so pressing the modifier re-colours on the next move. Click input (add_snap_pt_to_xyPtStack) honors the same mode, so marker and click can never disagree. No-catch hint updated to teach the modifier.
+- On-curve remains IN the engine (a future trim tool will want it) but no default input path offers it.
+
+Known small limitation, logged: pressing/releasing Ctrl+Shift without moving the mouse updates the marker on the NEXT move (modifiers are sampled per move event); a keyboard-event refresh is a cosmetic follow-up if it ever matters in practice.
+
+### Lesson for future development
+
+**A feature request is also a chance to re-examine the defaults it touches** -- Doug asked for the Ctrl+Shift override and, in describing it, revealed that the default on-curve catch contradicted the drafter's model entirely. Scaffolding categories that made the engine demonstrable in step 1 are not automatically the right production policy; the user's workflow language ('only intersections') is the specification.
+
+## Session 62 (cont'd): center mode goes ENTITY-ANCHORED; geometry goes bold black
+
+Doug verified against both reference implementations (Creo E/D and Pyurcad) and refined three things:
+
+1. **Center mode is ENTITY-ANCHORED, not proximity-based** -- the first implementation searched for centers/midpoints near the CURSOR, which meant aiming at the empty space where a circle's center is: backwards, since the center has no visible feature. The CoCreate way: point at the ENTITY (anywhere along it, within the catch radius of the CURVE -- rim distance for circles, segment distance for lines), and the square appears at ITS center/midpoint, possibly far from the cursor; click takes the glyph's location. find_snap's center branch rewritten accordingly (ranking by curve distance). Entity hover-highlighting itself was already in place (the 2D entities are live AIS objects) and is retained as the base feedback.
+2. **The chord**: Pyurcad uses plain Shift; CoCreate uses Ctrl+Shift; Kodacad follows CoCreate, per Doug -- already implemented, now recorded as a decision.
+3. **Geometry lines render BOLD BLACK** (width 3.0) instead of white -- Creo E/D style, which Doug judges will read better on Kodacad's canvas than Pyurcad's white-on-black translated. Construction stays dashed magenta; the visual hierarchy is now: faint dashed construction layout, bold black finished geometry -- literally the #6-pencil-then-dark-lines metaphor, rendered.
+
+### Lesson for future development
+
+**When a behavior imitates a reference application, verify against the reference before shipping the guess** -- the proximity-based center mode was a plausible reading of the TODO's description; Doug's ten minutes with Creo E/D and Pyurcad produced the correct semantics (entity-anchored) plus two bonus decisions (the chord, the line styling). For workflow features with a living reference, the reference IS the spec, and checking it is cheaper than iterating on approximations.

@@ -49,9 +49,25 @@ mouse move, search them for snap candidates near the cursor UV:
 
 Candidate ranking: distance in PIXELS, converted to model units via
 `view.Convert(n_pixels)` so the catch radius stays constant on screen
-at every zoom -- exactly the tkinter behavior. Modifier keys re-rank:
-Ctrl+Shift = centers-only (the CoCreate center-snap override) is a
-one-line filter on the candidate list.
+at every zoom -- exactly the tkinter behavior.
+
+CATCH POLICY (final, Session 62 -- Doug): the DEFAULT catch set is
+INTERSECTIONS (+ geometry endpoints, origin). On-curve and centers
+are deliberately NOT in the default -- a drafter draws dark lines
+between intersections of the layout, not 'somewhere along' a line.
+Holding CTRL+SHIFT switches EXCLUSIVELY to centers of circles/arcs
+(construction and geometry) and midpoints of straight geometry edges
+-- the CoCreate override, ENTITY-ANCHORED (verified by Doug against
+Creo E/D and Pyurcad): the cursor points at the ENTITY, anywhere
+along it, and the glyph appears at ITS center/midpoint -- possibly
+far from the cursor -- because the center of a circle has no visible
+feature to aim at. Click takes the glyph's location. Ranking is by
+distance to the curve. (Pyurcad uses plain Shift; Kodacad uses the
+CoCreate chord, Ctrl+Shift, by Doug's decision.)
+The catch square changes colour (orange -> cyan) so the flyby
+feedback tells you which catch set is live. On-curve remains
+available in the engine for tools that explicitly want it (e.g. a
+future trim), but no default input path offers it.
 
 Every input tool (line, arc, circle, dimension, trim...) consumes the
 same engine: tool declares which candidate categories it accepts;
