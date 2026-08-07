@@ -562,7 +562,7 @@ class KodaViewport(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if (self._press_pos is not None and
                     self._drag_distance < self._drag_threshold):
-                self._on_click()
+                self._on_click(event.position().x(), event.position().y())
         elif event.button() == Qt.MouseButton.RightButton:
             if self._rmb_press_pos is not None:
                 dx = event.position().x() - self._rmb_press_pos.x()
@@ -597,9 +597,16 @@ class KodaViewport(QWidget):
         except ValueError:
             pass
 
-    def _on_click(self):
+    def _on_click(self, x=None, y=None):
         if self.context is None or self._display is None:
             return
+        # Click pixel coords ride along as a THIRD callback arg
+        # (Session 62, sketch engine step 3): 2D input tools convert
+        # them to workplane UV via the snap engine, so a click lands
+        # where the hover marker shows -- including on EMPTY plane
+        # space, with no pre-built vertex required. 3D operation
+        # callbacks and highlight sync ignore extras via *args.
+        click_xy = (x, y) if x is not None else None
         self.context.InitSelected()
         if self.context.MoreSelected():
             shape = self.context.SelectedShape()
@@ -614,6 +621,6 @@ class KodaViewport(QWidget):
                 ais_obj = self.context.SelectedInteractive()
             except Exception:
                 pass
-            self._display.call_select_callbacks(shape, ais_obj)
+            self._display.call_select_callbacks(shape, ais_obj, click_xy)
         else:
-            self._display.call_select_callbacks(None, None)
+            self._display.call_select_callbacks(None, None, click_xy)

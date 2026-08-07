@@ -4036,3 +4036,36 @@ Doug's verdict on the hover marker: catch radius feels reasonable -- the bridge,
 ## Session 62 (cont'd): arc3p confirmed by Doug; two UX refinements from his notes
 
 Doug confirmed the reordered arc + rubber band works exactly as intended. Two refinements he suggested in passing, both implemented immediately since they were adjacent and small: (1) per-pick acknowledgement in the status bar ('End point 1 set. Pick the second end point.' / 'End point 2 set. Pick a point on the arc.') -- reassuring for the first-time user; (2) seamless restart -- the operation was already staying registered after completion, so the missing pieces were just restarting the preview and re-prompting ('Arc created. Pick 2 end points for the next arc (or End Operation).'). Continuous arc creation now flows without re-invoking the tool; End Operation exits as before, and the preview's self-clean handles that path.
+
+## Session 62 (cont'd): STEP 3 -- clicks migrate to engine input; the arc is the first customer
+
+The path-forward milestone, per Doug's directive (mechanism to the goal first, tool-by-tool flush-out after). The essence in one sentence: clicks stop asking OCCT 'what vertex did I hit?' and start asking the engine 'where does this land?' -- which makes the hover marker the literal input preview: the click lands EXACTLY where the marker shows, snapped when within the catch radius, free (raw UV) otherwise, INCLUDING on empty plane space with no pre-built vertex anywhere near.
+
+Mechanism:
+- koda_viewport._on_click now carries the click's pixel coords as a THIRD callback arg (contract: shape_list, ais_obj, click_xy). 3D operation callbacks and highlight sync absorb it via *args untouched; both the picked and empty-click branches pass it (empty clicks MUST reach 2D tools now -- that's the point).
+- m2d.add_snap_pt_to_xyPtStack(args): pixel coords -> screen_to_uv -> find_snap with the SAME tolerance the hover marker uses -> push snapped-or-raw UV. Returns False (no coords / no wp / bridge failure) so callers can fall back to the legacy vertex path -- migration is per-tool and reversible.
+- arc3pC is the first customer: engine input primary, legacy vertex path as fallback. Typed-coordinate entry (lineEdit) unchanged.
+
+Deliberately NOT yet done (the flush-out pass): migrating line/circle/cline collectors (same one-line pattern as arc3pC), retiring the pre-built intersection-point display (step 4 -- only after nothing depends on it), and dropping SetSelectionModeVertex from migrated tools.
+
+**Doug's step-3 test**: start an arc; hover until the marker catches an intersection; CLICK -- the endpoint lands on the snap. Then click somewhere on EMPTY plane space -- the point lands at the raw cursor position (impossible before: clicks needed a vertex). Chain a few arcs. The marker-then-click agreement is the thing to feel.
+
+### Lesson for future development
+
+**Adding a data channel to an existing callback contract beats adding a parallel callback system** -- the click coords ride as one more *args element that every existing consumer already ignores by construction, so the 3D operation flow, highlight sync, and the legacy vertex path all continue byte-identical while the new input path switches on per-tool with a one-line change and a built-in fallback.
+
+## Session 62 (cont'd): Doug's design principle -- NO CATCH, NO POINT
+
+Doug, on testing step 3: free-space clicking works but he will NEVER use it -- construction lines are the embodiment of a drafter's layout drawing (#6 hard-lead layout, dark lines drawn at the layout's intersections). Elevated from preference to principle and encoded in both the engine and the design doc: a click lands only where the engine catches; a no-catch click is REJECTED with a status hint ('No catch -- move to a construction feature...') rather than placing a raw-cursor point -- because a near-miss silently placing a slightly-wrong point is the exact imprecision the layout method exists to prevent. The hover marker is thereby the permission indicator: no marker, no input. Return-value semantics refined (True = engine had jurisdiction, point pushed OR deliberately rejected; False = engine couldn't operate, legacy fallback). Per-pick acknowledgement now fires only when a point was actually added, so a rejected click's hint isn't overwritten. Design doc gained a binding 'Input philosophy' section for every tool in the flush-out pass; numeric lineEdit entry remains the other first-class path (how the first clines bootstrap, along with origin/axis snaps).
+
+### Lesson for future development
+
+**When the user explains WHY with a metaphor from their craft, they are handing over a design principle, not feedback on a feature** -- the #6-pencil layout method defines what input IS in this application, and encoding it as the engine's default (catch-only, opt-in for anything freer) means every future tool inherits the philosophy instead of re-litigating it.
+
+## Session 62 (cont'd): the two-class click taxonomy -- point input vs gesture input
+
+Doug's parallel-cline example (a free click choosing which SIDE the new line goes) refined the input philosophy rather than reversing it: there are TWO classes of clicks. POINT INPUT defines coordinates that become geometry -- catch-only governs, no catch no point (add_snap_pt_to_xyPtStack). GESTURE INPUT chooses among discrete alternatives (side, direction, which-of-two-intersections) -- the click means 'this half-plane', not 'this exact spot'; precision is irrelevant by construction, so a free raw-UV click is the natural interface (new helper gesture_uv_from_args: raw UV, no snap, no rejection). The design doc now requires every tool in the flush-out pass to declare which class each of its clicks belongs to; there is no third class. The parallel-cline tool, when migrated, is the first gesture customer.
+
+### Lesson for future development
+
+**A counterexample to a fresh principle is usually a missing DISTINCTION, not a refutation** -- 'no catch, no point' survived Doug's example intact once the taxonomy separated clicks-that-define-coordinates from clicks-that-choose-alternatives; both the principle and the exception got crisper, and the flush-out pass inherits a question to answer per click ('which class is this?') instead of a rule to bend.

@@ -24,6 +24,87 @@ class M2D:
     #
     #############################################
 
+    def add_snap_pt_to_xyPtStack(self, args):
+        """ENGINE INPUT (Session 62, sketch engine step 3): convert
+        the click's pixel coords (rides callbacks as the 3rd arg) to
+        workplane UV via screen_to_uv, snap through find_snap with
+        the same tolerance the hover marker uses -- so the click
+        lands EXACTLY where the marker showed -- and push the point.
+        NO CATCH -> NO POINT: a click lands only where the engine
+        catches (the hover marker is the permission indicator); a
+        free-space click is rejected with a status hint. Returns True
+        when the engine had jurisdiction (point pushed OR click
+        deliberately rejected); False only when the engine could not
+        operate (no coords / no wp / bridge failure), letting the
+        caller fall back to the legacy vertex path.
+        """
+        click_xy = args[1] if len(args) > 1 else None
+        if click_xy is None or click_xy[0] is None:
+            return False
+        wp = self.win.activeWp
+        if wp is None:
+            return False
+        try:
+            from snap_engine import (screen_to_uv, find_snap,
+                                     SNAP_PIXELS)
+            view = self.win.canvas.view
+            uv = screen_to_uv(view, click_xy[0], click_xy[1], wp.gpPlane)
+            if uv is None:
+                return False
+            try:
+                tol = abs(view.Convert(SNAP_PIXELS))
+            except Exception:
+                tol = 1.0
+            snap = find_snap(wp, uv, tol)
+            if snap is None:
+                # NO CATCH -> NO POINT (Session 62, Doug's design
+                # principle -- the drafter's #6-pencil layout method:
+                # construction lines ARE the input space; a free-space
+                # click near-missing an intersection would silently
+                # place a slightly-wrong point, the exact imprecision
+                # the layout method exists to prevent). The hover
+                # marker is the permission indicator: no marker, no
+                # input.
+                self.win.statusBar().showMessage(
+                    "No catch -- move to a construction feature "
+                    "(intersection, center, on-line) and click.", 3000)
+                return True  # handled: engine had jurisdiction,
+                # deliberately added no point (no legacy fallback)
+            pt = snap[1]
+            self.win.xyPtStack.append((pt[0], pt[1]))
+            return True
+        except Exception as e:
+            if not getattr(self, "_snap_input_warned", False):
+                print(f"[snap input] fell back to vertex picks: {e}")
+                self._snap_input_warned = True
+            return False
+
+    def gesture_uv_from_args(self, args):
+        """GESTURE INPUT (Session 62, the second input class): return
+        the click's RAW workplane UV, deliberately WITHOUT snapping
+        and without rejection -- for clicks that CHOOSE among
+        discrete alternatives rather than define coordinates: which
+        SIDE for a parallel cline (Doug's canonical example), which
+        direction, which of two intersections. The click means 'this
+        half-plane', not 'this exact spot' -- precision is irrelevant
+        by construction, so catch-only does not apply. Returns
+        (u, v) or None when unavailable (no coords / no wp / bridge
+        failure). Tools consuming gestures use this; tools consuming
+        POINTS use add_snap_pt_to_xyPtStack.
+        """
+        click_xy = args[1] if len(args) > 1 else None
+        if click_xy is None or click_xy[0] is None:
+            return None
+        wp = self.win.activeWp
+        if wp is None:
+            return None
+        try:
+            from snap_engine import screen_to_uv
+            return screen_to_uv(self.win.canvas.view,
+                                click_xy[0], click_xy[1], wp.gpPlane)
+        except Exception:
+            return None
+
     def add_vertex_to_xyPtStack(self, shapeList):
         """Helper function to convert vertex to gp_Pnt and put on ptStack.
 
@@ -437,14 +518,21 @@ class M2D:
             self.win.statusBar().showMessage(statusText)
 
     def arc3pC(self, shapeList, *args):
-        """Callback (collector) for arc3p"""
-        self.add_vertex_to_xyPtStack(shapeList)
+        """Callback (collector) for arc3p -- first tool on ENGINE
+        INPUT (step 3): the click lands where the hover marker
+        showed, snapped or free, pre-built vertices not required."""
+        n_before = len(self.win.xyPtStack)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
         self.win.lineEdit.setFocus()
         if self.win.lineEditStack:
             self.processLineEdit()
-        # Per-pick acknowledgement (Session 62, Doug's suggestion --
-        # reassuring for the first-time user)
+        # Per-pick acknowledgement -- only when a point was actually
+        # ADDED this click (a rejected no-catch click keeps its own
+        # hint on the status bar instead of being overwritten)
         n = len(self.win.xyPtStack)
+        if n == n_before:
+            return
         if n == 1:
             self.win.statusBar().showMessage(
                 "End point 1 set. Pick the second end point.")

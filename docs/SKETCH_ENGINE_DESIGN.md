@@ -110,3 +110,36 @@ plane-space AIS_Line/AIS_Circle updates work for the in-plane case.
 Pyurcad's catch logic should transplant with little surgery -- it was
 always the right architecture; it was waiting for the coordinate
 bridge.
+
+## Input philosophy (Session 62, Doug): NO CATCH -> NO POINT
+
+The drafter's layout method, stated by Doug as the governing metaphor:
+a drafter lays out with a #6 (hard-lead) pencil -- very light
+construction lines -- then draws the dark final lines at the
+INTERSECTIONS of that layout. The construction geometry IS the input
+space. Consequences, binding on every tool migrated to engine input:
+
+- A click lands ONLY where the engine catches. No catch -> the click
+  is rejected with a status hint; no point is created.
+- Free-space input does not exist. (A near-miss click silently
+  placing a slightly-wrong point is the exact imprecision the layout
+  method prevents; rejecting it makes precision STRUCTURAL.)
+- The hover marker is therefore the PERMISSION INDICATOR: no marker
+  visible, no input possible.
+- Numeric entry (lineEdit) remains the other first-class input path
+  (that is how the first construction lines bootstrap, along with
+  snaps to origin/axes).
+- REFINEMENT (same session, Doug's parallel-cline example): there
+  are TWO CLASSES of clicks, and the principle governs only the
+  first.
+  * POINT INPUT -- the click DEFINES COORDINATES that become
+    geometry. Catch-only. No catch -> no point. (Helper:
+    add_snap_pt_to_xyPtStack.)
+  * GESTURE INPUT -- the click CHOOSES among discrete alternatives:
+    which SIDE for a parallel cline, which direction, which of two
+    intersections. The click means 'this half-plane', not 'this
+    exact spot'; precision is irrelevant by construction, so a free
+    raw-UV click is the NATURAL interface, not an exception.
+    (Helper: gesture_uv_from_args -- raw UV, no snap, no rejection.)
+  Every tool in the flush-out pass declares which class each of its
+  clicks belongs to; there is no third class.
