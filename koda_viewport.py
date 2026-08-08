@@ -80,11 +80,42 @@ class DisplayShim:
             self.Context.SetAutoActivateSelection(True)
             try: self.Context.Activate(0)
             except Exception: pass
+            self._redeactivate_never_pick()
             return
         mode = AIS_Shape.SelectionMode_s(shape_type)
         try: self.Context.Deactivate(0)
         except Exception: pass
         self.Context.Activate(mode)
+        self._redeactivate_never_pick()
+
+    # --- never-pick registry (Session 63, Doug's pick-barrier saga):
+    # Context.Activate(mode) with no object is GLOBAL -- it re-arms
+    # every displayed object, including display-only scenery that was
+    # individually Deactivated (the wp pane blocked face picks this
+    # way: deactivated at display, re-activated by every tool start).
+    # Scenery registers here, and every mode change re-deactivates it.
+
+    def add_never_pick(self, ais):
+        if not hasattr(self, "never_pick"):
+            self.never_pick = []
+        self.never_pick.append(ais)
+        try:
+            self.Context.Deactivate(ais)
+        except Exception:
+            pass
+
+    def remove_never_pick(self, ais):
+        try:
+            self.never_pick.remove(ais)
+        except (ValueError, AttributeError):
+            pass
+
+    def _redeactivate_never_pick(self):
+        for ais in getattr(self, "never_pick", []):
+            try:
+                self.Context.Deactivate(ais)
+            except Exception:
+                pass
 
     def SetSelectionModeVertex(self):   self._set_selection_mode(TopAbs_VERTEX)
     def SetSelectionModeEdge(self):     self._set_selection_mode(TopAbs_EDGE)

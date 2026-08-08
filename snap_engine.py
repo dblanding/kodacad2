@@ -410,6 +410,10 @@ class SnapHover:
         if self._marker is None:
             self._marker = AIS_Shape(wire)
             context.Display(self._marker, False)
+            try:
+                self.win.canvas._display.add_never_pick(self._marker)
+            except Exception:
+                pass
         else:
             self._marker.SetShape(wire)
             context.Redisplay(self._marker, False)
@@ -432,6 +436,10 @@ class SnapHover:
                     context.Erase(self._marker, True)
                 except Exception:
                     pass
+            try:
+                self.win.canvas._display.remove_never_pick(self._marker)
+            except Exception:
+                pass
             self._marker = None
 
     def on_move(self, x, y):

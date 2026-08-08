@@ -4321,3 +4321,19 @@ Also: **creation-time H&V origin clines RESTORED by Doug's preference** -- safe 
 ### Lesson for future development
 
 **Every displayed object is a selection participant unless told otherwise** -- the pane competed in every pick since the original port, masked because nothing needed to pick THROUGH it until project-face. Display-only objects (panes, glyphs, previews, labels) must be Deactivated at display time as a discipline, not case by case after each new workflow exposes one.
+
+## Session 63 (cont'd): the pick barrier's REAL mechanism -- global mode activation re-armed the pane; the never-pick registry ends it
+
+Doug's refined symptom ('dead-normal to the face it NEVER highlights; oblique sometimes works') exposed why the previous Deactivate didn't cure it: koda_viewport's _set_selection_mode uses Context.Activate(mode) with NO object argument -- the GLOBAL overload -- re-arming EVERY displayed object for the new mode, including individually-deactivated scenery. Every tool start (SetSelectionModeFace at projectFaceEdges entry) re-activated the pane; dead-normal the coplanar pane then won the pick tie consistently, oblique the sensitivity regions let the part face through intermittently.
+
+FIX -- the never-pick registry, enforced at the source: the viewport display keeps never_pick; add_never_pick(ais) deactivates AND registers; _set_selection_mode (all modes incl. Neutral) ends with _redeactivate_never_pick(). Registered: wp pane, border outline, corner label (mainwindow, with unregistration in the erase-before-redraw preamble), the snap hover marker, and all tool previews. Scenery is now structurally unpickable across every mode change.
+
+Also, answering Doug's gestalt complaint ('not seeing what looks like the CoCreate wp -- greenish border, transparent interior'): the pane interior goes from 0.8 to 0.92 transparency (barely-there), and the outline is now teal-green width 2.0 (was thin black) -- the fine green edge over a whisper of fill. Stroke label retained (it is non-pickable edges and was never the blocker; no need to revert to AIS_TextLabel).
+
+### Lesson for future development
+
+**A deactivation that can be globally re-activated is a suggestion, not a policy** -- the fix that 'worked' lasted exactly until the next tool start, because mode changes re-arm everything. Policies about selection must live where modes are SET (the registry consulted by _set_selection_mode), not where objects are displayed. Doug's precise symptom report (normal-view-always vs oblique-sometimes) was the differential that separated 'not deactivated' from 'deactivated then re-activated'.
+
+## Session 63 (cont'd): pick-barrier fix CONFIRMED by Doug
+
+Dead-normal face picking through the workplane works. The never-pick registry closes the selection-mode saga. Workplane appearance-and-behavior clump effectively complete pending Doug's final gestalt verdict.

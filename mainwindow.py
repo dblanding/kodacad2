@@ -1383,6 +1383,7 @@ class MainWindow(QMainWindow):
                     context.Remove(old_ais, False)
                 except Exception:
                     pass
+                self.canvas._display.remove_never_pick(old_ais)
             _reg = self._wp_ais_reg[uid] = []
             try:
                 wp.update_border()  # auto-fit (Session 63)
@@ -1402,12 +1403,10 @@ class MainWindow(QMainWindow):
             # highlight flicker, and sometimes the pane's rectangular
             # highlight winning outright. The pane is scenery, not an
             # entity; it never participates in selection.
-            try:
-                context.Deactivate(aisBorder)
-            except Exception:
-                pass
+            self.canvas._display.add_never_pick(aisBorder)
             context.SetColor(aisBorder, borderColor, True)
-            transp = 0.8  # 0.0 <= transparency <= 1.0
+            # 0.92: barely-there interior, CoCreate-like (Session 63)
+            transp = 0.92  # 0.0 <= transparency <= 1.0
             context.SetTransparency(aisBorder, transp, True)
             drawer = aisBorder.DynamicHilightAttributes()
             context.HilightWithColor(aisBorder, drawer, True)
@@ -1424,14 +1423,14 @@ class MainWindow(QMainWindow):
                     ais_outline = AIS_Shape(owire)
                     _reg.append(ais_outline)
                     context.Display(ais_outline, False)
-                    context.SetColor(
-                        ais_outline,
-                        Quantity_Color(Quantity_NOC_BLACK), False)
-                    context.SetWidth(ais_outline, 1.0, False)
                     try:
-                        context.Deactivate(ais_outline)
+                        from OCP.Quantity import Quantity_NOC_TEAL
+                        _oc = Quantity_Color(Quantity_NOC_TEAL)
                     except Exception:
-                        pass
+                        _oc = Quantity_Color(Quantity_NOC_DARKGREEN)
+                    context.SetColor(ais_outline, _oc, False)
+                    context.SetWidth(ais_outline, 2.0, False)
+                    self.canvas._display.add_never_pick(ais_outline)
             except Exception as oe:
                 if not getattr(self, "_wpoutline_warned", False):
                     print(f"[draw_wp] border outline failed: {oe}")
@@ -1458,10 +1457,7 @@ class MainWindow(QMainWindow):
                             ais_label,
                             Quantity_Color(Quantity_NOC_BLACK), False)
                         context.SetWidth(ais_label, 1.5, False)
-                        try:
-                            context.Deactivate(ais_label)
-                        except Exception:
-                            pass
+                        self.canvas._display.add_never_pick(ais_label)
             except Exception as le:
                 if not getattr(self, "_wplabel_warned", False):
                     print(f"[draw_wp] wp label failed: {le}")

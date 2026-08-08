@@ -889,6 +889,10 @@ class M2D:
                 self.display.Context.Erase(ais, True)
             except Exception:
                 pass
+            try:
+                self.win.canvas._display.remove_never_pick(ais)
+            except Exception:
+                pass
         self._prev_ais = None
         self._prev_owner = None
         self._prev_builder = None
@@ -916,6 +920,11 @@ class M2D:
                                           Quantity_TypeOfColor)
                 self._prev_ais = AIS_Shape(shape)
                 context.Display(self._prev_ais, False)
+                try:
+                    self.win.canvas._display.add_never_pick(
+                        self._prev_ais)
+                except Exception:
+                    pass
                 try:
                     context.SetColor(
                         self._prev_ais,
