@@ -476,6 +476,13 @@ class WorkPlane():
         self.wVec = gp_Vec(wDir)
         self.face = face
         self.size = size
+        # FLOOR for auto-fit (Session 63, Doug's 'disappearing wp'):
+        # the border never shrinks below this rectangle. Default wps:
+        # the default square (point-like content -- e.g. one H+V pair
+        # at the origin -- no longer collapses the pane to the
+        # minimum margins). Face-created wps: seeded to face+margins
+        # by seed_min_bounds_from_face (Creo behavior).
+        self.min_bounds = (-size, -size, size, size)
         self.border = self.makeWpBorder(self.size)
         self.clines = set()  # set of c-lines with (a, b, c) coefficients
         self.ccircs = set()  # set of c-circs with (pc, r) coefficients
@@ -493,7 +500,13 @@ class WorkPlane():
         self.edgeList = []  # List of profile lines type: <TopoDS_Edge>
         self.wire = None
         self.accuracy = 1e-6   # min distance between two points
-        self.hvcl((0, 0))    # Make H-V clines through origin
+        # Session 63 (Doug's report): creation-time H&V clines
+        # through the origin RETIRED -- same obsolete pattern as
+        # wp.circle's auto-clines (pre-engine center pickability);
+        # the origin is a snap candidate in its own right. Also
+        # cures the tiny-workplane bug: those two clines counted
+        # as 'content' with a single-point bbox, so auto-fit
+        # shrank a fresh wp to the minimum margins.
 
     def makeSqProfile(self, size):
         # points and segments need to be in CW sequence to get W pointing along Z
@@ -518,7 +531,151 @@ class WorkPlane():
         myFaceProfile = BRepBuilderAPI_MakeFace(wireProfile)
         if myFaceProfile.IsDone():
             border = myFaceProfile.Face()
+        self.border_ll = (-size, -size)  # for the corner label
+        self.border_bounds = (-size, -size, size, size)
         return border  # TopoDS_Face
+
+    def seed_min_bounds_from_face(self, face):
+        """Face-created wp (Session 63, Doug + Creo behavior): the
+        pane starts at FACE size + 12.5%% margins -- and never
+        shrinks below it. Samples the face's edges in wp UV."""
+        try:
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_ShapeEnum
+            from OCP.TopoDS import TopoDS
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.ElSLib import ElSLib
+            _params = getattr(ElSLib, "Parameters_s", None) or \
+                getattr(ElSLib, "Parameters")
+            us = []
+            vs = []
+            exp = TopExp_Explorer(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+            while exp.More():
+                try:
+                    crv = BRepAdaptor_Curve(TopoDS.Edge_s(exp.Current()))
+                    f0, f1 = crv.FirstParameter(), crv.LastParameter()
+                    for i in range(7):
+                        p = crv.Value(f0 + (f1 - f0) * i / 6.0)
+                        u_, v_ = _params(self.gpPlane, p)
+                        us.append(u_)
+                        vs.append(v_)
+                except Exception:
+                    pass
+                exp.Next()
+            if not us:
+                return
+            mu = max(0.125 * (max(us) - min(us)), 5.0)
+            mv = max(0.125 * (max(vs) - min(vs)), 5.0)
+            self.min_bounds = (min(us) - mu, min(vs) - mv,
+                               max(us) + mu, max(vs) + mv)
+        except Exception as se:
+            print(f"[wp] face seed failed: {se}")
+
+    def makeRectProfile(self, u1, v1, u2, v2):
+        """Rectangular border wire (CW sequence, W along Z) --
+        Session 63: the auto-fit border need not be square."""
+        pa = gp_Pnt(u1, v2, 0).Transformed(self.Trsf)
+        pb = gp_Pnt(u2, v2, 0).Transformed(self.Trsf)
+        pc = gp_Pnt(u2, v1, 0).Transformed(self.Trsf)
+        pd = gp_Pnt(u1, v1, 0).Transformed(self.Trsf)
+        segs = [GC_MakeSegment(pa, pb).Value(),
+                GC_MakeSegment(pb, pc).Value(),
+                GC_MakeSegment(pc, pd).Value(),
+                GC_MakeSegment(pd, pa).Value()]
+        edges = [BRepBuilderAPI_MakeEdge(s).Edge() for s in segs]
+        wire_mkr = BRepBuilderAPI_MakeWire(edges[0], edges[1],
+                                           edges[2], edges[3])
+        return wire_mkr.Wire()
+
+    def update_border(self):
+        """AUTO-FIT (Session 63, Doug's spec): the border adjusts to
+        the sketch -- 10-15%% margins (12.5%% used) on all four sides
+        of the content's bounding box, growing AND shrinking as
+        elements come and go, rectangular as needed. Fit set: H/V
+        clines (their defining coordinate -- an angled cline crosses
+        any border and constrains nothing), ccirc/carc extents,
+        cseg endpoints, geometry edges, and the ORIGIN (the border
+        should never exclude its own origin). An EMPTY workplane
+        keeps the existing default square, per Doug: no reason to
+        change the default."""
+        pts_u = [0.0]
+        pts_v = [0.0]
+        n_content = 0
+        eps = 1.0e-9
+        for (a, b, c) in self.clines:
+            if abs(a) < 1.0e-6 and abs(b) > eps:      # horizontal
+                pts_v.append(-c / b)
+                n_content += 1
+            elif abs(b) < 1.0e-6 and abs(a) > eps:    # vertical
+                pts_u.append(-c / a)
+                n_content += 1
+        for (pc_, r_) in self.ccircs:
+            pts_u.extend((pc_[0] - r_, pc_[0] + r_))
+            pts_v.extend((pc_[1] - r_, pc_[1] + r_))
+            n_content += 1
+        for (pc_, r_, _a0, _a1) in self.carcs:
+            pts_u.extend((pc_[0] - r_, pc_[0] + r_))
+            pts_v.extend((pc_[1] - r_, pc_[1] + r_))
+            n_content += 1
+        for (p1_, p2_) in self.csegs:
+            pts_u.extend((p1_[0], p2_[0]))
+            pts_v.extend((p1_[1], p2_[1]))
+            n_content += 1
+        # geometry edges: endpoints for lines, extents for circles,
+        # samples otherwise (self-contained -- no snap_engine import
+        # to keep the module dependency one-directional)
+        try:
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GeomAbs import GeomAbs_CurveType
+            from OCP.ElSLib import ElSLib
+            _params = getattr(ElSLib, "Parameters_s", None) or \
+                getattr(ElSLib, "Parameters")
+            for edge in self.edgeList:
+                try:
+                    crv = BRepAdaptor_Curve(edge)
+                    ct = crv.GetType()
+                    if ct == GeomAbs_CurveType.GeomAbs_Circle:
+                        cc = crv.Circle()
+                        u_, v_ = _params(self.gpPlane, cc.Location())
+                        r_ = cc.Radius()
+                        pts_u.extend((u_ - r_, u_ + r_))
+                        pts_v.extend((v_ - r_, v_ + r_))
+                    else:
+                        f0, f1 = (crv.FirstParameter(),
+                                  crv.LastParameter())
+                        for i in range(5):
+                            p = crv.Value(f0 + (f1 - f0) * i / 4.0)
+                            u_, v_ = _params(self.gpPlane, p)
+                            pts_u.append(u_)
+                            pts_v.append(v_)
+                    n_content += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        mb = getattr(self, "min_bounds",
+                     (-self.size, -self.size, self.size, self.size))
+        if n_content == 0:
+            u1, v1, u2, v2 = mb
+        else:
+            u_min, u_max = min(pts_u), max(pts_u)
+            v_min, v_max = min(pts_v), max(pts_v)
+            mu = max(0.125 * (u_max - u_min), 5.0)
+            mv = max(0.125 * (v_max - v_min), 5.0)
+            # content fit, floored by min_bounds
+            u1 = min(u_min - mu, mb[0])
+            v1 = min(v_min - mv, mb[1])
+            u2 = max(u_max + mu, mb[2])
+            v2 = max(v_max + mv, mb[3])
+        try:
+            wire = self.makeRectProfile(u1, v1, u2, v2)
+            face_mkr = BRepBuilderAPI_MakeFace(wire)
+            if face_mkr.IsDone():
+                self.border = face_mkr.Face()
+                self.border_ll = (u1, v1)
+                self.border_bounds = (u1, v1, u2, v2)
+        except Exception as be:
+            print(f"[wp] border auto-fit failed: {be}")
 
     # =======================================================================
     # Utility functions (Relayed)

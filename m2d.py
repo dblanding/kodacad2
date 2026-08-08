@@ -80,6 +80,38 @@ class M2D:
                 self._snap_input_warned = True
             return False
 
+    def delAllConstr(self):
+        """Delete ALL construction geometry on the active workplane
+        (clines, ccircs, carcs, csegs). Session 63 -- also lets the
+        auto-fit border's SHRINK behavior be exercised."""
+        wp = self.win.activeWp
+        if wp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane.", 3000)
+            return
+        n = (len(wp.clines) + len(wp.ccircs) + len(wp.carcs)
+             + len(wp.csegs))
+        wp.clines.clear()
+        wp.ccircs.clear()
+        wp.carcs.clear()
+        wp.csegs.clear()
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            f"{n} construction element(s) deleted.", 4000)
+
+    def delAllGeom(self):
+        """Delete ALL profile geometry on the active workplane."""
+        wp = self.win.activeWp
+        if wp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane.", 3000)
+            return
+        n = len(wp.edgeList)
+        wp.edgeList.clear()
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            f"{n} geometry element(s) deleted.", 4000)
+
     # --- PROJECT EDGES (Session 63, Doug's post-2.0 priority #1:
     # 'I need that to show where the mounting holes in my plate will
     # go'). Two tools: project ALL edges of a picked FACE, or project

@@ -139,6 +139,9 @@ def wpOnFace(*args):
     faceU = win.faceStack.pop()
     faceW = win.faceStack.pop()
     wp = workplane.WorkPlane(100, face=faceW, faceU=faceU)
+    # Creo behavior (Session 63): pane sized to the picked face +
+    # margins from the start, and floored there
+    wp.seed_min_bounds_from_face(faceW)
     new_uid = win.get_wp_uid(wp)
     display_new_active_wp(prev_uid, new_uid)
     win.clearCallback()
@@ -851,6 +854,12 @@ if __name__ == "__main__":
     win.wcToolBar.addAction(
         QIcon(QPixmap("icons/proj_edge.gif")), "Project Edge",
         a2d.projectEdge)
+    win.wcToolBar.addAction(
+        QIcon(QPixmap("icons/del_constr.gif")), "Del All Constr",
+        a2d.delAllConstr)
+    win.wgToolBar.addAction(
+        QIcon(QPixmap("icons/del_geom.gif")), "Del All Geom",
+        a2d.delAllGeom)
     # win.wcToolBar.addAction(QIcon(QPixmap('icons/refangcl.gif')), 'Ref-Ang', a2d.clineRefAng)
     # win.wcToolBar.addAction(QIcon(QPixmap('icons/abcl.gif')), 'Angular Bisector', a2d.clineAngBisec)
     win.wcToolBar.addAction(

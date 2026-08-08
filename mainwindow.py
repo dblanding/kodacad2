@@ -31,10 +31,11 @@ from OCP.AIS import AIS_Shape, AIS_Line, AIS_Circle
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.CPnts import CPnts_AbscissaPoint
-from OCP.gp import gp_Vec
+from OCP.gp import gp_Vec, gp_Pnt
 from OCP.Prs3d import Prs3d_LineAspect
 from OCP.Aspect import Aspect_TypeOfLine
-from OCP.Quantity import (
+from OCP.Quantity import (Quantity_NOC_BLACK,
+                          
     Quantity_Color,
     Quantity_NOC_GRAY,
     Quantity_NOC_DARKGREEN,
@@ -240,6 +241,44 @@ def _occt_version_string():
         except Exception:
             continue
     return ""
+
+
+def _clip_line_to_rect(cline, bounds):
+    """Clip infinite line ax+by+c=0 to rectangle (u1,v1,u2,v2).
+    Returns ((ua,va),(ub,vb)) or None if the line misses it."""
+    a, b, c = cline
+    u1, v1, u2, v2 = bounds
+    pts = []
+    eps = 1.0e-9
+    if abs(b) > eps:  # crossings with vertical border edges
+        for u in (u1, u2):
+            v = -(a * u + c) / b
+            if v1 - eps <= v <= v2 + eps:
+                pts.append((u, v))
+    if abs(a) > eps:  # crossings with horizontal border edges
+        for v in (v1, v2):
+            u = -(b * v + c) / a
+            if u1 - eps <= u <= u2 + eps:
+                pts.append((u, v))
+    # dedupe corner double-hits
+    uniq = []
+    for p in pts:
+        if not any(abs(p[0] - q[0]) < 1.0e-7 and
+                   abs(p[1] - q[1]) < 1.0e-7 for q in uniq):
+            uniq.append(p)
+    if len(uniq) < 2:
+        return None
+    # take the two most distant
+    best = (uniq[0], uniq[1])
+    best_d = -1.0
+    for i in range(len(uniq)):
+        for j in range(i + 1, len(uniq)):
+            d = ((uniq[i][0] - uniq[j][0]) ** 2
+                 + (uniq[i][1] - uniq[j][1]) ** 2)
+            if d > best_d:
+                best_d = d
+                best = (uniq[i], uniq[j])
+    return best
 
 
 def _needs_analytic_workaround(shape):
@@ -801,6 +840,8 @@ class MainWindow(QMainWindow):
         uid = item.text(1)
         if uid in self.wp_dict:
             del self.wp_dict[uid]
+            if hasattr(self, "_wp_ais_reg"):
+                self._wp_ais_reg.pop(uid, None)
             self.build_tree()
             self.redraw()
             print(f"Workplane {name} deleted.")
@@ -1252,30 +1293,109 @@ class MainWindow(QMainWindow):
         context = self.canvas._display.Context
         if uid:
             wp = self.wp_dict[uid]
+            # ERASE-BEFORE-REDRAW (Session 63, Doug's double-border
+            # report): draw_wp used to only ADD -- identical objects
+            # stacked invisibly until the auto-fit border changed
+            # size between redraws and exposed the accumulation as a
+            # 'second workplane'. Every AIS this method displays is
+            # registered per-uid and removed at the next redraw.
+            if not hasattr(self, "_wp_ais_reg"):
+                self._wp_ais_reg = {}
+            for old_ais in self._wp_ais_reg.get(uid, []):
+                try:
+                    context.Remove(old_ais, False)
+                except Exception:
+                    pass
+            _reg = self._wp_ais_reg[uid] = []
+            try:
+                wp.update_border()  # auto-fit (Session 63)
+            except Exception as ube:
+                print(f"[draw_wp] border auto-fit failed: {ube}")
             border = wp.border
             if uid == self.activeWpUID:
                 borderColor = Quantity_Color(Quantity_NOC_DARKGREEN)
             else:
                 borderColor = Quantity_Color(Quantity_NOC_GRAY)
             aisBorder = AIS_Shape(border)
+            _reg.append(aisBorder)
             context.Display(aisBorder, True)
             context.SetColor(aisBorder, borderColor, True)
             transp = 0.8  # 0.0 <= transparency <= 1.0
             context.SetTransparency(aisBorder, transp, True)
             drawer = aisBorder.DynamicHilightAttributes()
             context.HilightWithColor(aisBorder, drawer, True)
+            # '/w#' label at the border's lower-left corner (Session
+            # 63, Doug: the label -- not an origin offset -- is the
+            # U-V orientation cue, per his call to keep the origin
+            # centered). Screen-constant text, never pickable.
+            try:
+                from OCP.AIS import AIS_TextLabel
+                from OCP.TCollection import TCollection_ExtendedString
+                ll = getattr(wp, 'border_ll', None)
+                if ll is not None:
+                    label = AIS_TextLabel()
+                    label.SetText(
+                        TCollection_ExtendedString(f"/{uid}"))
+                    # lifted 0.5 off the pane so the translucent
+                    # border can't occlude the text
+                    lpos = gp_Pnt(ll[0] + 2.0, ll[1] + 2.0,
+                                  0.5).Transformed(wp.Trsf)
+                    label.SetPosition(lpos)
+                    label.SetColor(
+                        Quantity_Color(Quantity_NOC_BLACK))
+                    try:
+                        label.SetHeight(18.0)
+                    except Exception:
+                        pass
+                    _reg.append(label)
+                    context.Display(label, False)
+                    print(f"[draw_wp] label '/{uid}' displayed at "
+                          f"({lpos.X():.1f}, {lpos.Y():.1f}, "
+                          f"{lpos.Z():.1f})")
+                    try:
+                        context.Deactivate(label)
+                    except Exception:
+                        pass
+            except Exception as le:
+                if not getattr(self, "_wplabel_warned", False):
+                    print(f"[draw_wp] wp label unavailable: {le}")
+                    self._wplabel_warned = True
             clClr = Quantity_Color(Quantity_NOC_MAGENTA1)
+            # Clines CLIPPED to the border (Session 63, Doug: Creo
+            # doesn't display clines beyond the pane edge; ours ran
+            # to infinity -- they always had, via AIS_Line of an
+            # infinite Geom_Line). Each cline is drawn as a finite
+            # dashed edge spanning the border rectangle. The line
+            # remains mathematically infinite in the engine; only
+            # the DISPLAY is clipped. A cline that misses the border
+            # entirely (possible for angled clines, which don't
+            # constrain the auto-fit) simply isn't drawn.
+            bb = getattr(wp, 'border_bounds', None)
             for cline in wp.clines:
-                geomline = wp.geomLineBldr(cline)
-                aisline = AIS_Line(geomline)
-                aisline.SetOwner(geomline)
-                drawer = aisline.Attributes()
-                # asp parameters: (color, type, width)
-                asp = Prs3d_LineAspect(clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
-                drawer.SetLineAspect(asp)
-                aisline.SetAttributes(drawer)
-                context.Display(aisline, False)  # (see comment below)
-                # 'False' above enables 'context' mode display & selection
+                seg = _clip_line_to_rect(cline, bb) if bb else None
+                if seg is None:
+                    continue
+                try:
+                    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge
+                                                    as _MkCL)
+                    g1 = gp_Pnt(seg[0][0], seg[0][1],
+                                0).Transformed(wp.Trsf)
+                    g2 = gp_Pnt(seg[1][0], seg[1][1],
+                                0).Transformed(wp.Trsf)
+                    if g1.Distance(g2) < 1.0e-9:
+                        continue
+                    aisline = AIS_Shape(_MkCL(g1, g2).Edge())
+                    drawer = aisline.Attributes()
+                    asp = Prs3d_LineAspect(
+                        clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
+                    drawer.SetLineAspect(asp)
+                    drawer.SetWireAspect(asp)
+                    aisline.SetAttributes(drawer)
+                    _reg.append(aisline)
+                    context.Display(aisline, False)
+                    context.SetColor(aisline, clClr, False)
+                except Exception as cle:
+                    print(f"[draw_wp] cline display failed: {cle}")
             # Construction ARCS (Session 63): finite, dashed
             # magenta -- csegs' logic applied to circles
             for ca in getattr(wp, 'carcs', ()):
@@ -1292,7 +1412,9 @@ class MainWindow(QMainWindow):
                     cadrawer.SetLineAspect(caasp)
                     cadrawer.SetWireAspect(caasp)
                     ais_ca.SetAttributes(cadrawer)
+                    _reg.append(ais_ca)
                     context.Display(ais_ca, False)
+                    context.SetColor(ais_ca, clClr, False)
                 except Exception as cae:
                     print(f"[draw_wp] carc display failed: {cae}")
             # Construction SEGMENTS (Session 63): finite, dashed
@@ -1301,7 +1423,11 @@ class MainWindow(QMainWindow):
                 try:
                     from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge
                                                     as _MkE)
-                    from OCP.gp import gp_Pnt
+                    # (gp_Pnt now module-level -- a function-local
+                    # import here made gp_Pnt local to ALL of
+                    # draw_wp, unbinding it for the label and cline
+                    # blocks that run earlier. Doug's terminal
+                    # diagnosed it verbatim.)
                     g1 = gp_Pnt(cs[0][0], cs[0][1], 0).Transformed(wp.Trsf)
                     g2 = gp_Pnt(cs[1][0], cs[1][1], 0).Transformed(wp.Trsf)
                     if g1.Distance(g2) < 1.0e-9:
@@ -1313,7 +1439,9 @@ class MainWindow(QMainWindow):
                     csdrawer.SetLineAspect(csasp)
                     csdrawer.SetWireAspect(csasp)
                     ais_cs.SetAttributes(csdrawer)
+                    _reg.append(ais_cs)
                     context.Display(ais_cs, False)
+                    context.SetColor(ais_cs, clClr, False)
                 except Exception as cse:
                     print(f"[draw_wp] cseg display failed: {cse}")
             # RETIRED (Session 62, sketch engine step 4): the
@@ -1327,11 +1455,16 @@ class MainWindow(QMainWindow):
             # in workplane.py.
             for ccirc in wp.ccircs:
                 aiscirc = AIS_Circle(wp.convert_circ_to_geomCirc(ccirc))
-                drawer = aisline.Attributes()
+                # (was aisline.Attributes() -- the LAST cline's
+                # drawer, a NameError on any wp with circles but no
+                # clines; latent forever because creation always made
+                # clines, exposed the moment they were retired)
+                drawer = aiscirc.Attributes()
                 # asp parameters: (color, type, width)
                 asp = Prs3d_LineAspect(clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
                 drawer.SetLineAspect(asp)
                 aiscirc.SetAttributes(drawer)
+                _reg.append(aiscirc)
                 context.Display(aiscirc, False)  # (see comment below)
                 # 'False' above enables 'context' mode display & selection
             for edge in wp.edgeList:
@@ -1341,11 +1474,15 @@ class MainWindow(QMainWindow):
                 # doesn't translate to this canvas)
                 ais_geom = self.canvas._display.DisplayShape(edge)
                 if ais_geom is not None:
-                    from OCP.Quantity import (Quantity_Color as _QC,
-                                              Quantity_NOC_BLACK)
+                    _reg.append(ais_geom)
+                    # (local Quantity import removed -- it shadowed
+                    # module-level Quantity_NOC_BLACK function-wide,
+                    # unbinding it for the label block that runs
+                    # earlier; same scoping bug as gp_Pnt)
                     try:
                         context.SetColor(ais_geom,
-                                         _QC(Quantity_NOC_BLACK), False)
+                                         Quantity_Color(
+                                             Quantity_NOC_BLACK), False)
                         context.SetWidth(ais_geom, 3.0, False)
                     except Exception:
                         pass

@@ -4244,3 +4244,58 @@ The [proj] report now counts carcs. Awaiting Doug's re-test: the plate should no
 ### Lesson for future development
 
 **When a helper auto-creates side entities, its callers inherit policy they never chose** -- wp.circle quietly bundled 'and two clines' into 'a construction circle', reasonable in the era that needed it, clutter in the era that doesn't. Side-effect generation belongs at the call site (or behind an explicit flag), so each era's policy is written where it can be seen and retired.
+
+## Session 63 (cont'd): workplane auto-fit + corner label, per Doug's sizing specification
+
+Doug's spec, recorded and implemented:
+- **Default wp unchanged** (his call: no reason to change size or the CENTERED origin -- the '/w#' label, not an origin offset, is the U-V orientation cue; the lower-left-origin item from the cosmetics list is hereby DROPPED as a design decision, not deferred).
+- **Auto-fit border**: content bounding box + 12.5% margins (his 10-15% band) per side, on all four sides, growing AND shrinking with the sketch, rectangular as needed (no square requirement). Fit set: H/V clines by their defining coordinate (an angled cline crosses any border and constrains nothing), ccirc/carc extents (center +/- r), cseg endpoints, geometry edges (line endpoints, circle extents, 5-point samples otherwise -- self-contained extraction in workplane.py to keep the module dependency one-directional), and the ORIGIN (interpretation: the border never excludes its own origin). Empty wp -> default border untouched. New makeRectProfile alongside makeSqProfile; update_border() called at the top of every draw_wp.
+- **'/w#' label**: AIS_TextLabel at the border's lower-left corner (border_ll tracked by both border builders), black, screen-constant, never pickable, graceful one-time warning if the binding misbehaves.
+- **Noted elegance**: a future wp-on-face creation mode inherits Creo's face+margins sizing FOR FREE -- projecting the face's edges auto-fits the border to exactly that.
+- Recon footnote: makeSqProfile(size) builds +/-size, so the nominal '100' default is 200mm across; left exactly as-is per 'no reason to change the default' -- flagged in case Doug ever wants the nominal and actual reconciled.
+
+### Lesson for future development
+
+**A user specification that names percentages, growth AND shrink, and non-requirements ('no requirement to be square') is a gift -- implement it literally** -- every clause mapped to one code decision, the one ambiguity (does the origin stay inside?) was resolved conservatively and DOCUMENTED as an interpretation, and the dropped requirement (origin offset) was recorded as a decision so future sessions don't resurrect it.
+
+## Session 63 (cont'd): the auto-fit shakeout -- four bugs from one screenshot pair
+
+Doug's first field run of the auto-fit border surfaced a cluster, all fixed:
+
+1. **Creation-time H&V origin clines RETIRED** (WorkPlane.__init__ called hvcl((0,0)) -- the same obsolete pre-engine pattern as wp.circle's auto-clines, missed in that sweep). This was ALSO the tiny-workplane bug: those two clines counted as auto-fit 'content' with a single-point bounding box, shrinking a fresh wp to the 5mm minimum margins (a 10mm pane). Empty is empty again -> default border kept.
+2. **draw_wp now ERASES BEFORE REDRAWING** (the 'second workplane'): draw_wp only ever ADDED display objects -- identical duplicates stacked invisibly forever, and the auto-fit border was the first thing to change size between redraws, exposing the accumulation as two panes (and doubled clines). Per-uid AIS registry: everything draw_wp displays is registered and removed at the next call; wp deletion pops its registry entry (redraw()'s RemoveAll covers the context).
+3. **Latent ccirc NameError defused**: the ccirc display loop borrowed 'aisline.Attributes()' -- the last CLINE's drawer -- harmless only because creation always made clines; retiring them would have crashed any wp with circles and no clines. Now uses its own drawer.
+4. **Label made robust**: lifted 0.5 off the pane (the translucent border could occlude coplanar text), guarded SetHeight(18).
+Plus belt-and-suspenders explicit SetColor on cseg/carc AIS (Doug saw gray dashes where magenta belonged -- likely the first-draw duplicates; color now enforced both ways).
+
+**Doug's re-test script**: (1) fresh default wp -> normal-size border, '/wN' at corner, NO clines; (2) wp on the bearing-support face -> default border (not tiny); (3) Project Face -> border refits to profile+margins, ONE pane, profile all magenta-dashed; (4) delete a wp -> everything of it gone.
+
+### Lesson for future development
+
+**Display code that only adds is a debt collected by the first thing that changes shape** -- identical redraws hid the accumulation perfectly; the auto-fit border was simply the first non-identical redraw in the codebase's history. Erase-before-redraw with an explicit registry is the boring, correct discipline -- and the retirement of a 'harmless' auto-behavior (creation clines) instantly exposed a NameError that had been impossible for years, proving again that latent coupling waits for exactly the cleanup that should be safe.
+
+## Session 63 (cont'd): auto-fit round 2 -- the floor, the face seed, clipped clines, delete-alls
+
+Doug's second field pass ('I think we're on the right track') itemized and answered:
+
+1. **The 'disappearing' pane**: it shrank to 10mm -- an H+V pair at the origin is point-like content, and auto-fit dutifully fit it. FIX: min_bounds FLOOR -- the border never shrinks below a floor rectangle. Default wps floor at the default square; update_border unions content-fit with the floor. Point-like sketches keep a sane pane; growth beyond the floor unchanged (Doug's clines at 300,300 will stretch it).
+2. **Face-created wp sized to the face** (Doug: 'make the wp the correct size for the face picked'): new seed_min_bounds_from_face samples the picked face's edges in wp UV and sets the floor to face + 12.5% margins -- Creo's behavior, and the pane starts right-sized before anything is projected.
+3. **Clines clipped to the border** (Doug: Creo doesn't display them beyond the pane edge; ours ran to infinity -- they always had, via AIS_Line of infinite Geom_Line). Clines now draw as finite dashed edges clipped to border_bounds by a small module-level line/rect clipper; mathematically they remain infinite in the engine -- only the display is clipped. An angled cline that misses the pane isn't drawn (angled clines don't constrain the fit; noted). AIS_Line retired from draw_wp.
+4. **Delete-all tools**: delAllConstr (clines+ccircs+carcs+csegs) and delAllGeom, with construction/geometry toolbar buttons (icons/del_constr.gif, del_geom.gif -- text-only until Doug drops icons). Unblocks his shrink test and checks two items off the 2D-sketching list.
+5. **The label hunt continues**: still invisible with no exception -- a diagnostic print now confirms display + world position each draw_wp. If Doug's terminal shows the print while the screen shows nothing, AIS_TextLabel renders-but-invisibly here and the fallback is drawing '/wN' as stroke geometry (always works).
+
+### Lesson for future development
+
+**An auto-fit without a floor treats 'a point of content' as 'a tiny sketch'** -- the spec said grow and shrink with margins, and the degenerate case (content with near-zero extent) needed the unstated third rule every real implementation of the spec must contain: never smaller than the pane's reason to exist.
+
+## Session 63 (cont'd): the invisible label was a Python scoping bug -- one terminal line solved it
+
+Doug's diagnostic print paid off instantly: 'cannot access local variable gp_Pnt where it is not associated with a value.' The cseg display block's function-LOCAL 'from OCP.gp import gp_Pnt' made gp_Pnt a local variable for ALL of draw_wp (Python binds names function-wide), unbinding it for the label and clipped-cline blocks that execute EARLIER in the function. The label never displayed once in any prior build -- the earlier 'no name' reports were all this. Fix: gp_Pnt imported at module level, the local import removed. Clines drawn on a fresh wp would have hit the identical error.
+
+### Lesson for future development
+
+**A function-local import is a function-WIDE name binding** -- convenient inside one guarded block, it silently shadows the name for every other block in the function, including ones that run first. Local imports belong in functions that use the name in exactly one place, or the name belongs at module level.
+
+## Session 63 (cont'd): scoping bug round 2 -- Quantity_NOC_BLACK, and an AST sweep says that's the last
+
+Same disease, next victim: the bold-black geometry block's local 'from OCP.Quantity import (..., Quantity_NOC_BLACK)' shadowed the module-level name function-wide, unbinding it for the label. Removed (module-level import serves). An AST sweep of draw_wp then verified NO remaining local imports shadow module-level names -- the aliased (_Mk*) and label-block-only imports are safe. The whack-a-mole is over by proof, not by hope.
