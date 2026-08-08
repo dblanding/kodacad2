@@ -479,6 +479,11 @@ class WorkPlane():
         self.border = self.makeWpBorder(self.size)
         self.clines = set()  # set of c-lines with (a, b, c) coefficients
         self.ccircs = set()  # set of c-circs with (pc, r) coefficients
+        self.carcs = []  # FINITE construction arcs
+        # [((cu,cv), r, a0, a1), ...] angles in radians CCW from +U
+        # (Session 63, Doug: projected arc edges as full c-circles
+        # could be obscenely large -- arcs are csegs' logic applied
+        # to circles: finite construction, local to what cast it)
         self.csegs = []  # FINITE construction segments
         # [((u1,v1),(u2,v2)), ...] -- Session 63, required by
         # project-edges (Doug's design call, made ahead of the
@@ -542,6 +547,12 @@ class WorkPlane():
         tuples). Session 63 -- the projected-edge entity."""
         self.csegs.append(((float(p1[0]), float(p1[1])),
                            (float(p2[0]), float(p2[1]))))
+
+    def carc(self, cntr, rad, a0, a1):
+        """Add a finite construction ARC: center, radius, angular
+        range [a0, a1] CCW in radians from +U. Session 63."""
+        self.carcs.append(((float(cntr[0]), float(cntr[1])),
+                           float(rad), float(a0), float(a1)))
 
     def cline_gen(self, cline):
         a, b, c = cline
@@ -724,7 +735,10 @@ class WorkPlane():
         circ = (cntr, rad)
         if constr:
             self.ccircs.add(circ)
-            self.hvcl(cntr)
+            # Session 63 (Doug): the automatic H&V clines through the
+            # center are RETIRED -- they existed to make centers
+            # pickable by intersection in the pre-engine era, and
+            # Ctrl+Shift center catching has made them pure clutter.
         else:
             edge = BRepBuilderAPI_MakeEdge(
                 self.convert_circ_to_geomCirc(circ)).Edge()

@@ -4230,3 +4230,17 @@ Remaining known measurement-family candidates for the same migration when they b
 ## Session 63 (cont'd): the sweep completes -- revolveC migrated BEFORE it bit
 
 The SetSelectionModeVertex sweep demanded by the previous lesson found one more retired-paradigm consumer: revolveC (the revolve axis was defined by picking wp intersection-point vertices -- gone). Migrated with the identical hybrid: engine catch first (a wp catch is the natural way to define an axis in the sketch plane), 3D vertex fallback, polite decline. wpBy3PtsC audited and left alone -- it picks vertices on 3D PARTS, which still exist and still pick. The other 14 SetSelectionModeVertex hits are migrated collectors' entry points (harmless mode-setting). Sweep closed.
+
+## Session 63 (cont'd): projection feedback round -- auto-clines retired at the source, construction ARCS arrive
+
+Doug's field feedback after using Project Face:
+
+1. **The H&V clines through hole centers are GONE, retired at their source**: wp.circle(constr=True) auto-called hvcl(cntr) -- a Pyurcad-era mechanism that existed precisely to make centers pickable by intersection, made obsolete by Ctrl+Shift center catching. Every construction circle benefits (interactive tool included), not just projections. The engine's logic catching up with older code.
+
+2. **Construction ARCS (carcs)** -- Doug: projected arc edges as full c-circles 'could end up obscenely large' (a fillet's full circle dwarfing the layout). Csegs' logic applied to circles: finite construction, local to what cast it. New entity ((cu,cv), r, a0, a1 CCW radians): wp.carcs + wp.carc(); dashed magenta display via Geom_Circle + MakeEdge(geom, a0, a1) (the circle's param origin aligns with wp U through convert_circ_to_geomCirc, so UV-measured angles map directly); projection emits carcs for partial arcs (native circles by param span; BSpline-recognized by sampled-angle span with monotone unwrap) while FULL circles stay ccircs -- and a post-face COALESCE merges carcs sharing center+radius whose spans sum to a full circle (a hole arriving as two seam arcs) back into ONE clean c-circle, so holes remain single circles. Snap engine: carc ENDPOINTS catch (a fillet's tangent points are real landmarks), cline x carc / cseg x carc / carc x ccirc / carc x carc intersections via the existing circle helpers filtered by _on_arc angular containment, and Ctrl+Shift centers entity-anchored on the arc's RIM within its angular range.
+
+The [proj] report now counts carcs. Awaiting Doug's re-test: the plate should now project cleanly (4 csegs + 6 ccircs, no clines), and a face with fillets should produce tidy local arcs instead of giant circles.
+
+### Lesson for future development
+
+**When a helper auto-creates side entities, its callers inherit policy they never chose** -- wp.circle quietly bundled 'and two clines' into 'a construction circle', reasonable in the era that needed it, clutter in the era that doesn't. Side-effect generation belongs at the call site (or behind an explicit flag), so each era's policy is written where it can be seen and retired.

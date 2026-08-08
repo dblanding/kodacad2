@@ -97,6 +97,7 @@ class M2D:
         from OCP.GeomAbs import GeomAbs_CurveType
         from snap_engine import _elslib
         from workplane import cr_from_3p as wpm_cr3p
+        import math as _m
         try:
             crv = BRepAdaptor_Curve(edge)
             ctype = crv.GetType()
@@ -121,8 +122,17 @@ class M2D:
                           f"(|dot|={abs(dot):.4f})")
                     return None
                 u, v = _elslib("Parameters")(wp.gpPlane, c.Location())
-                wp.circle((u, v), c.Radius(), constr=True)
-                return 'ccirc'
+                span = abs(crv.LastParameter() - crv.FirstParameter())
+                if span >= 2.0 * _m.pi - 1.0e-3:
+                    wp.circle((u, v), c.Radius(), constr=True)
+                    return 'ccirc'
+                # PARTIAL arc (Session 63, Doug: a full c-circle from
+                # a projected fillet could be obscenely large) ->
+                # construction ARC, angles measured in UV about the
+                # projected center from sampled points.
+                a0, a1 = self._arc_angles_from_samples(wp, crv, (u, v))
+                wp.carc((u, v), c.Radius(), a0, a1)
+                return 'carc'
             # Fall-through (Session 63, Doug's plate): hole arcs can
             # arrive as BSPLINES -- some authoring systems encode arcs
             # that way -- so type-checking for Circle was too literal.
@@ -161,19 +171,21 @@ class M2D:
                          < max(1.0e-6, rad * 1.0e-4)
                          for (u, v) in uvs)
                 if ok and rad > 1.0e-6:
-                    # dedupe: seam-split arc pairs yield one hole
-                    # dedupe tol 1e-4 (Session 63: 1e-6 was tighter
-                    # than two seam-arc halves' fitted centers agree
-                    # -- Doug got 12 ccircs for 6 holes; 0.1um apart
-                    # is the same hole)
-                    for (pc, r) in list(wp.ccircs):
-                        if (abs(pc[0] - ctr[0]) < 1.0e-4
-                                and abs(pc[1] - ctr[1]) < 1.0e-4
-                                and abs(r - rad) < 1.0e-4):
-                            return 'ccirc'
-                    wp.circle((round(ctr[0], 9), round(ctr[1], 9)),
-                              round(rad, 9), constr=True)
-                    return 'ccirc'
+                    a0, a1, span = self._uv_arc_span(uvs, ctr)
+                    if span >= 2.0 * _m.pi - 5.0e-2:
+                        # full circle -- dedupe (0.1um apart is the
+                        # same hole)
+                        for (pc, r) in list(wp.ccircs):
+                            if (abs(pc[0] - ctr[0]) < 1.0e-4
+                                    and abs(pc[1] - ctr[1]) < 1.0e-4
+                                    and abs(r - rad) < 1.0e-4):
+                                return 'ccirc'
+                        wp.circle((round(ctr[0], 9), round(ctr[1], 9)),
+                                  round(rad, 9), constr=True)
+                        return 'ccirc'
+                    wp.carc((round(ctr[0], 9), round(ctr[1], 9)),
+                            round(rad, 9), a0, a1)
+                    return 'carc'
             except Exception:
                 pass
             print(f"[proj]   skipped edge: unrecognized curve "
@@ -181,6 +193,59 @@ class M2D:
         except Exception as pe:
             print(f"[proj]   edge projection raised: {pe}")
         return None
+
+    def _uv_arc_span(self, uvs, ctr):
+        """Angles (a0, a1 stored CCW) and span of an arc from its
+        sampled UV points about center ctr. Samples run monotonically
+        along the edge, so unwrapped angles are monotone."""
+        import math as _m
+        thetas = []
+        prev = None
+        for (u, v) in uvs:
+            t = _m.atan2(v - ctr[1], u - ctr[0])
+            if prev is not None:
+                while t - prev > _m.pi:
+                    t -= 2.0 * _m.pi
+                while prev - t > _m.pi:
+                    t += 2.0 * _m.pi
+            thetas.append(t)
+            prev = t
+        t0, t1 = thetas[0], thetas[-1]
+        span = abs(t1 - t0)
+        if t1 < t0:
+            t0, t1 = t1, t0  # store CCW
+        two_pi = 2.0 * _m.pi
+        t0n = t0 % two_pi
+        return t0n, t0n + (t1 - t0), span
+
+    def _arc_angles_from_samples(self, wp, crv, ctr):
+        """Angles for a native circular edge: sample it, project to
+        UV, measure about the projected center."""
+        from snap_engine import _elslib
+        f0, f1 = crv.FirstParameter(), crv.LastParameter()
+        uvs = []
+        for i in range(9):
+            p = crv.Value(f0 + (f1 - f0) * i / 8.0)
+            uvs.append(_elslib("Parameters")(wp.gpPlane, p))
+        a0, a1, _span = self._uv_arc_span(uvs, ctr)
+        return a0, a1
+
+    def _coalesce_carcs(self, wp):
+        """After projecting a face: carcs sharing center+radius whose
+        spans sum to a full circle (a hole arriving as two seam arcs)
+        merge into ONE clean c-circle."""
+        import math as _m
+        groups = {}
+        for arc in wp.carcs:
+            key = (round(arc[0][0], 4), round(arc[0][1], 4),
+                   round(arc[1], 4))
+            groups.setdefault(key, []).append(arc)
+        for key, arcs in groups.items():
+            total = sum(a[3] - a[2] for a in arcs)
+            if total >= 2.0 * _m.pi - 5.0e-2:
+                for a in arcs:
+                    wp.carcs.remove(a)
+                wp.circle((key[0], key[1]), key[2], constr=True)
 
     def _project_shape_edges(self, wp, shape):
         """Project every edge of shape (a face). Returns
@@ -227,9 +292,11 @@ class M2D:
             if shape is None:
                 continue
             n_proj, n_skip = self._project_shape_edges(wp, shape)
+            self._coalesce_carcs(wp)
             print(f"[proj] {n_proj} projected, {n_skip} skipped; "
                   f"wp: {len(wp.csegs)} cseg(s), "
-                  f"{len(wp.ccircs)} ccirc(s)")
+                  f"{len(wp.ccircs)} ccirc(s), "
+                  f"{len(wp.carcs)} carc(s)")
             msg = (f"{n_proj} edge(s) projected"
                    + (f", {n_skip} skipped (oblique/unsupported)"
                       if n_skip else "")

@@ -1276,6 +1276,25 @@ class MainWindow(QMainWindow):
                 aisline.SetAttributes(drawer)
                 context.Display(aisline, False)  # (see comment below)
                 # 'False' above enables 'context' mode display & selection
+            # Construction ARCS (Session 63): finite, dashed
+            # magenta -- csegs' logic applied to circles
+            for ca in getattr(wp, 'carcs', ()):
+                try:
+                    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge
+                                                    as _MkAE)
+                    geomCirc = wp.convert_circ_to_geomCirc(
+                        (ca[0], ca[1]))
+                    ais_ca = AIS_Shape(
+                        _MkAE(geomCirc, ca[2], ca[3]).Edge())
+                    cadrawer = ais_ca.Attributes()
+                    caasp = Prs3d_LineAspect(
+                        clClr, Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
+                    cadrawer.SetLineAspect(caasp)
+                    cadrawer.SetWireAspect(caasp)
+                    ais_ca.SetAttributes(cadrawer)
+                    context.Display(ais_ca, False)
+                except Exception as cae:
+                    print(f"[draw_wp] carc display failed: {cae}")
             # Construction SEGMENTS (Session 63): finite, dashed
             # magenta like clines -- the projected-edge entity
             for cs in getattr(wp, 'csegs', ()):

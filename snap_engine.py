@@ -146,6 +146,16 @@ def _on_segment(p, a, b, eps=1.0e-6):
     return -eps <= t <= 1.0 + eps
 
 
+def _on_arc(p, cntr, a0, a1, eps=1.0e-3):
+    """Is point p (on the circle) within the arc's angular range
+    [a0, a1] (a1 >= a0, CCW)? Handles wrap via modular arithmetic."""
+    import math as _m
+    t = _m.atan2(p[1] - cntr[1], p[0] - cntr[0])
+    two_pi = 2.0 * _m.pi
+    rel = (t - a0) % two_pi
+    return rel <= (a1 - a0) + eps
+
+
 def find_snap(wp, uv, tol, mode="normal"):
     """Best snap candidate near cursor uv within tol. Returns
     (kind, (u, v)) or None. Guarded per pair -- one degenerate
@@ -167,6 +177,8 @@ def find_snap(wp, uv, tol, mode="normal"):
     # lines: endpoints catch (a projected face's corners are the
     # mounting-hole landmarks), seg x seg / seg x cline intersections,
     # Ctrl+Shift midpoints -- all for free.
+    import math as _m
+    carcs = list(getattr(wp, "carcs", ()) or ())
 
     if mode == "center":
         # ENTITY-ANCHORED (Session 62 refinement -- Doug verified
@@ -193,6 +205,22 @@ def find_snap(wp, uv, tol, mode="normal"):
             if d <= tol and (best_d is None or d < best_d):
                 best_d = d
                 best = ("center", (pc[0], pc[1]))
+        for (cc_, r_, a0_, a1_) in carcs:  # carcs: rim distance,
+            # within the arc's angular range (entity-anchored)
+            try:
+                d_c = _dist(uv, cc_)
+                if d_c < 1.0e-9:
+                    continue
+                d = abs(d_c - r_)
+                on_pt = (cc_[0] + (uv[0] - cc_[0]) * r_ / d_c,
+                         cc_[1] + (uv[1] - cc_[1]) * r_ / d_c)
+                if (_on_arc(on_pt, cc_, a0_, a1_)
+                        and d <= tol
+                        and (best_d is None or d < best_d)):
+                    best_d = d
+                    best = ("center", cc_)
+            except Exception:
+                pass
         for a, b in segs:  # geometry segments: distance to segment
             try:
                 coef = wpm.cnvrt_2pts_to_coef(a, b)
@@ -267,6 +295,55 @@ def find_snap(wp, uv, tol, mode="normal"):
                 p = wpm.intersection(ci, cl)
                 if p is not None and _on_segment(p, ai, bi):
                     cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+
+    # --- construction ARCS (Session 63): endpoints catch;
+    # intersections via the circle helpers filtered by angular range
+    carc_circs = []
+    for (cc_, r_, a0_, a1_) in carcs:
+        carc_circs.append(((cc_, r_), cc_, a0_, a1_))
+        for ang in (a0_, a1_):
+            cands.append(("endpoint",
+                          (cc_[0] + r_ * _m.cos(ang),
+                           cc_[1] + r_ * _m.sin(ang))))
+    for (circ_, cc_, a0_, a1_) in carc_circs:
+        for cl in clines:
+            try:
+                pts = wpm.line_circ_inters(cl, circ_)
+                for p in (pts or ()):
+                    if _on_arc(p, cc_, a0_, a1_):
+                        cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+        for ci, ai, bi in seg_coefs:
+            if ci is None:
+                continue
+            try:
+                pts = wpm.line_circ_inters(ci, circ_)
+                for p in (pts or ()):
+                    if (_on_arc(p, cc_, a0_, a1_)
+                            and _on_segment(p, ai, bi)):
+                        cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+        for cc2 in ccircs:
+            try:
+                pts = wpm.circ_circ_inters(circ_, cc2)
+                for p in (pts or ()):
+                    if _on_arc(p, cc_, a0_, a1_):
+                        cands.append(("isect", (p[0], p[1])))
+            except Exception:
+                pass
+    for i in range(len(carc_circs)):
+        for j in range(i + 1, len(carc_circs)):
+            ca, cb = carc_circs[i], carc_circs[j]
+            try:
+                pts = wpm.circ_circ_inters(ca[0], cb[0])
+                for p in (pts or ()):
+                    if (_on_arc(p, ca[1], ca[2], ca[3])
+                            and _on_arc(p, cb[1], cb[2], cb[3])):
+                        cands.append(("isect", (p[0], p[1])))
             except Exception:
                 pass
 
