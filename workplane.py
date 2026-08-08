@@ -946,6 +946,133 @@ class WorkPlane():
     # Which can be used as a tool to build or modify a face or solid body.
     # =======================================================================
 
+    def make_faces(self):
+        """MULTI-PROFILE face builder (Session 63, the Mill/Pull
+        dialog): chain edgeList into closed loops by endpoint
+        adjacency (reliable because engine input guarantees
+        coincident endpoints), classify containment in UV, and build
+        one face per OUTER loop with its directly-contained loops as
+        HOLES. Returns (faces, err) -- faces a list of TopoDS_Face,
+        err a message or None."""
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.ElSLib import ElSLib
+        _params = getattr(ElSLib, "Parameters_s", None) or \
+            getattr(ElSLib, "Parameters")
+        tol = 1.0e-5
+
+        # --- 1. chain edges into loops ---
+        infos = []  # (edge, p_start(3d), p_end(3d))
+        for edge in self.edgeList:
+            try:
+                crv = BRepAdaptor_Curve(edge)
+                p1 = crv.Value(crv.FirstParameter())
+                p2 = crv.Value(crv.LastParameter())
+                infos.append((edge, p1, p2))
+            except Exception:
+                return [], "unreadable edge in profile"
+        unused = list(range(len(infos)))
+        loops = []
+        while unused:
+            i0 = unused.pop(0)
+            chain = [infos[i0][0]]
+            start = infos[i0][1]
+            cur = infos[i0][2]
+            if start.Distance(cur) < tol:  # closed single edge
+                loops.append(chain)
+                continue
+            closed = False
+            progress = True
+            while progress:
+                progress = False
+                for k in list(unused):
+                    e, a, b = infos[k]
+                    if cur.Distance(a) < tol:
+                        chain.append(e)
+                        cur = b
+                        unused.remove(k)
+                        progress = True
+                    elif cur.Distance(b) < tol:
+                        chain.append(e)
+                        cur = a
+                        unused.remove(k)
+                        progress = True
+                    else:
+                        continue
+                    if cur.Distance(start) < tol:
+                        closed = True
+                    break
+                if closed:
+                    break
+            if not closed:
+                return [], ("profile has an OPEN chain -- every loop "
+                            "must close")
+            loops.append(chain)
+        if not loops:
+            return [], "no profile geometry on the workplane"
+
+        # --- 2. wires + UV polygons for containment ---
+        wires = []
+        polys = []
+        for chain in loops:
+            mkw = BRepBuilderAPI_MakeWire()
+            for e in chain:
+                mkw.Add(e)
+            if not mkw.IsDone():
+                return [], "wire construction failed on a loop"
+            wires.append(mkw.Wire())
+            pts = []
+            for e in chain:
+                crv = BRepAdaptor_Curve(e)
+                f0, f1 = crv.FirstParameter(), crv.LastParameter()
+                for i in range(8):
+                    p = crv.Value(f0 + (f1 - f0) * i / 8.0)
+                    pts.append(_params(self.gpPlane, p))
+            polys.append(pts)
+
+        def _pip(pt, poly):
+            # ray-cast point-in-polygon in UV
+            x, y = pt
+            inside = False
+            n = len(poly)
+            for i in range(n):
+                x1, y1 = poly[i]
+                x2, y2 = poly[(i + 1) % n]
+                if (y1 > y) != (y2 > y):
+                    xi = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+                    if xi > x:
+                        inside = not inside
+            return inside
+
+        n_loops = len(wires)
+        contains = [[False] * n_loops for _ in range(n_loops)]
+        for a in range(n_loops):
+            for b in range(n_loops):
+                if a != b:
+                    contains[a][b] = _pip(polys[b][0], polys[a])
+        depth = [sum(1 for a in range(n_loops) if contains[a][b])
+                 for b in range(n_loops)]
+
+        # --- 3. faces: even-depth outers, their depth+1 loops as
+        # holes ---
+        faces = []
+        for b in range(n_loops):
+            if depth[b] % 2 != 0:
+                continue
+            mkf = BRepBuilderAPI_MakeFace(self.gpPlane, wires[b])
+            for h in range(n_loops):
+                if (depth[h] == depth[b] + 1 and contains[b][h]):
+                    # Reversed() returns generic TopoDS_Shape;
+                    # MakeFace.Add demands the downcast Wire (same
+                    # pybind strictness as the projection Edge_s fix)
+                    from OCP.TopoDS import TopoDS
+                    mkf.Add(TopoDS.Wire_s(wires[h].Reversed()))
+            if not mkf.IsDone():
+                return [], "face construction failed"
+            faces.append(mkf.Face())
+        if not faces:
+            return [], "no closed outer profile found"
+        return faces, None
+
     def makeWire(self):
         """Generate a wire from the edges in self.edgeList."""
         wireBldr = BRepBuilderAPI_MakeWire()

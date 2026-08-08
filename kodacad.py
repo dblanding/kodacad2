@@ -776,8 +776,13 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create 3D", "Extrude", extrude)
     win.add_function_to_menu("Create 3D", "Revolve", revolve)
     win.add_menu("Modify Active Part")
-    win.add_function_to_menu("Modify Active Part", "Mill", mill)
-    win.add_function_to_menu("Modify Active Part", "Pull", pull)
+    # Session 63: Mill & Pull COMBINED into one lean dialog (the
+    # banked Creo Pull spec: Operation / Direction / Distance) with
+    # multi-profile support. Legacy mill()/pull() remain in code.
+    from mill_pull_dialog import show_mill_pull_dialog
+    win.add_function_to_menu(
+        "Modify Active Part", "Mill / Pull...",
+        lambda: show_mill_pull_dialog(win))
     win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
     win.add_function_to_menu("Modify Active Part", "Shell", shell)
     win.add_function_to_menu("Modify Active Part", "Fuse", fuse)

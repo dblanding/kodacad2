@@ -4337,3 +4337,43 @@ Also, answering Doug's gestalt complaint ('not seeing what looks like the CoCrea
 ## Session 63 (cont'd): pick-barrier fix CONFIRMED by Doug
 
 Dead-normal face picking through the workplane works. The never-pick registry closes the selection-mode saga. Workplane appearance-and-behavior clump effectively complete pending Doug's final gestalt verdict.
+
+## Session 63 (cont'd): the MILL/PULL DIALOG -- Doug's banked Creo spec, built lean, with multi-profile
+
+Doug greenlit the combined dialog. Built to the three-field spec from his Creo Pull screenshot, on the Position dialog's modeless pattern:
+
+- **mill_pull_dialog.py** (new): Operation (Remove material (Mill) / Add material (Pull)), Direction (+W / -W), Distance (mm); Apply + Done; single-instance launcher (raised if already open); active-part label from label_dict; every failure mode reports (no part, no wp, non-numeric or non-positive distance, profile problems by name, boolean failures). One ergonomic touch: Direction DEFAULTS with the operation (Mill -> -W into the part, Pull -> +W outward) until the user touches it themselves.
+- **Transaction policy, deliberately OPPOSITE to Position's**: each Apply is a COMPLETE operation, so each Apply is its own undo transaction -- Ctrl+Z peels back one mill or pull at a time. (Position's session is one logical placement; a mill and a pull are not.)
+- **MULTI-PROFILE lands with it** -- wp.make_faces() in workplane.py: chains edgeList into closed loops by endpoint adjacency (reliable because engine input guarantees coincident endpoints), classifies containment via UV ray-cast, builds one face per even-depth OUTER loop with its directly-contained loops as HOLES (nesting by parity, so island-in-hole works). A plate outline plus six hole circles is ONE Apply. Open chains and construction failures return named errors, surfaced verbatim in the dialog. Multiple disjoint outers: prisms fused into one tool, one boolean against the part.
+- **Menu**: 'Mill / Pull...' replaces the separate Mill and Pull items under Modify Active Part; legacy mill()/pull() remain in code, unwired.
+- This closes THREE to-do items at once: the combined dialog, on-the-fly direction choice, and multiple profiles (inner & outer wires).
+
+**Doug's test**: active part + wp on its face -> sketch an outline with a couple of circles inside -> Mill / Pull... -> Remove, -W, depth -> Apply: pocket with islands... actually: outline+holes = pocket leaving bosses at the circles. Then Add/+W on another profile. Ctrl+Z after two Applies must undo them ONE at a time. And the plate-with-holes case: outline + hole circles, one Apply, holes present in the result.
+
+### Lesson for future development
+
+**Transaction scope is a property of the OPERATION's meaning, not of the dialog pattern** -- the same modeless-dialog skeleton carries Position's one-transaction-per-session and Mill/Pull's one-transaction-per-Apply, because a placement is one thing built from many nudges while each mill IS the thing. Reusing the interaction pattern without re-deriving the undo semantics would have been the subtle mistake.
+
+## Session 63 (cont'd): dialog import fix -- dm lives in mainwindow, not docmodel
+
+First launch traceback: the dialog imported dm from docmodel, but the shared DocModel instance is created in mainwindow (module-global there; kodacad itself does 'from mainwindow import MainWindow, dm'). Corrected to the same pattern; safe because the dialog is imported at menu-build time, well after mainwindow is in sys.modules.
+
+## Session 63 (cont'd): Mill/Pull first-run fixes -- the Wire_s downcast, and units honesty
+
+Doug's first Apply (plate_1, rectangle + 3 circles, Remove -W 10) hit the pybind strictness family again: TopoDS_Wire.Reversed() returns generic TopoDS_Shape, and MakeFace.Add demands the downcast Wire -- TopoDS.Wire_s() applied, same idiom as the projection Edge_s fix. And his units reminder honored: the math was already unit-correct (entered value * win.unitscale), but the label hardcoded 'mm' -- the Distance label and the success message now follow win.units, refreshed at every Apply since the modeless dialog can outlive a unit switch.
+
+### Lesson for future development
+
+**Every OCCT method returning a topological shape returns the BASE class -- downcast at every such call site, not just the ones that have bitten** -- Reversed(), Current(), SelectedShape(), Value() have now each claimed a session's minutes; the _s-downcast is not an occasional fix but the standing calling convention of this binding.
+
+## Session 63 (cont'd): Mill/Pull confirmed working; 'Done' renamed 'Close'
+
+Doug: 'That works very well' -- then asked what Apply is for, revealing a naming smell: 'Done' implied commitment when it only closes. Semantics clarified and one word fixed: Apply PERFORMS the operation and keeps the dialog open for chaining (mill, adjust, pull, apply again); Ctrl+Z undoes one Apply at a time (the deliberate per-Apply transaction policy answering 'what if you don't like it'); the closing button now says Close, and the success message teaches the loop ('Apply again (Ctrl+Z undoes), or Close').
+
+## Session 63 (cont'd): Mill/Pull restyled to the Position dialog's conventions -- one dialect, not two
+
+Doug, with both dialogs side by side: they should share one look. Restyled to Position's conventions exactly: header = caption line ('Modifying part:') + BOLD full-path breadcrumb via dm.get_full_path_name (same as Position's 'Moving part / assembly:'); buttons = ONE '\u2705 Done' (the green-check convention), Apply RETIRED at Doug's direction since it exists nowhere else in the project. Done now validates, performs the operation (still one undo transaction), and closes on success -- validation problems keep the dialog open with the message; another operation is a menu reopen; Ctrl+Z semantics unchanged.
+
+### Lesson for future development
+
+**Dialog conventions are a dialect -- the second dialog either speaks it or teaches the user two languages** -- Apply-and-stay was defensible in isolation and wrong in context; the user seeing both windows at once is the test no single-dialog review performs. Doug's screenshot WAS that review.
