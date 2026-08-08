@@ -4377,3 +4377,11 @@ Doug, with both dialogs side by side: they should share one look. Restyled to Po
 ### Lesson for future development
 
 **Dialog conventions are a dialect -- the second dialog either speaks it or teaches the user two languages** -- Apply-and-stay was defensible in isolation and wrong in context; the user seeing both windows at once is the test no single-dialog review performs. Doug's screenshot WAS that review.
+
+## Session 63 (cont'd): multi-profile extrude -- create-new-part joins Mill/Pull on make_faces
+
+Doug hit 'Unable to make wire.' extruding a multi-loop sketch into a NEW part: extrude() still used the legacy single-wire makeWire(). Swapped to the same wp.make_faces() the Mill/Pull dialog uses -- outer-with-holes faces, disjoint outers prismed and fused into one part, profile problems reported by name in the status bar instead of a bare print. makeWire() itself now has no remaining callers in the create/modify paths (legacy mill()/pull() only); candidate for retirement in a cleanup pass.
+
+### Lesson for future development
+
+**When a capability lands, sweep for every sibling of the code it replaces** -- multi-profile shipped in the dialog while the older extrude path kept the single-wire limitation one menu away; the user's very next workflow found the seam. The 'Unable to make wire.' bare print was also a pre-tripwire-era guard: replaced with a named status-bar report.

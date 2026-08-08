@@ -217,14 +217,22 @@ def extrude():
     if len(win.lineEditStack) == 2:
         name = win.lineEditStack.pop()
         length = float(win.lineEditStack.pop()) * win.unitscale
-        wireOK = wp.makeWire()
-        if not wireOK:
-            print("Unable to make wire.")
+        # MULTI-PROFILE (Session 63, Doug: 'use multiple wires to
+        # create a new part'): same wp.make_faces() the Mill/Pull
+        # dialog uses -- outer loops with contained loops as holes;
+        # disjoint outers prism separately and fuse into one part.
+        faces, err = wp.make_faces()
+        if err is not None:
+            win.statusBar().showMessage(f"Profile problem: {err}",
+                                        6000)
+            print(f"[extrude] profile problem: {err}")
             return
-        myFaceProfile = BRepBuilderAPI_MakeFace(wp.wire)
         aPrismVec = wp.wVec * length
-        new_part = BRepPrimAPI_MakePrism(
-            myFaceProfile.Shape(), aPrismVec).Shape()
+        new_part = None
+        for f in faces:
+            prism = BRepPrimAPI_MakePrism(f, aPrismVec).Shape()
+            new_part = prism if new_part is None else \
+                BRepAlgoAPI_Fuse(new_part, prism).Shape()
         loc_new_part = BRepBuilderAPI_Transform(
             new_part, loc.Transformation()).Shape()
         with docmodel.undo_transaction(dm):
