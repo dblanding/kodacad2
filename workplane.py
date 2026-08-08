@@ -500,13 +500,12 @@ class WorkPlane():
         self.edgeList = []  # List of profile lines type: <TopoDS_Edge>
         self.wire = None
         self.accuracy = 1e-6   # min distance between two points
-        # Session 63 (Doug's report): creation-time H&V clines
-        # through the origin RETIRED -- same obsolete pattern as
-        # wp.circle's auto-clines (pre-engine center pickability);
-        # the origin is a snap candidate in its own right. Also
-        # cures the tiny-workplane bug: those two clines counted
-        # as 'content' with a single-point bbox, so auto-fit
-        # shrank a fresh wp to the minimum margins.
+        # Session 63: creation-time H&V origin clines briefly
+        # retired, then RESTORED by Doug's preference -- safe now
+        # because the min_bounds floor means point-like content no
+        # longer collapses the auto-fit pane (the original reason
+        # for removal). They also display clipped to the border.
+        self.hvcl((0, 0))
 
     def makeSqProfile(self, size):
         # points and segments need to be in CW sequence to get W pointing along Z

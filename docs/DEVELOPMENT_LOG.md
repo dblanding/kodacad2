@@ -4307,3 +4307,17 @@ The scoping fixes made the AIS_TextLabel finally appear -- and immediately revea
 ### Lesson for future development
 
 **When a widget's rendering model fights the requirement, geometry IS the rendering model** -- screen-space text has no concept of 'lying on a plane'; twelve stick glyphs do exactly what geometry does, which is exactly what was asked. CAD has drawn its own letters since pen plotters for this reason.
+
+## Session 63 (cont'd): the pick barrier was the border itself -- deactivated, outlined; origin clines restored
+
+Doug's face-pick trouble diagnosed by his own observation: hovering 'through' the wp toward a part face, highlighting flickered, and sometimes 'a rectangular outline of what looks like the inside edge of a border' appeared instead. That outline WAS the border's selection highlight -- the translucent pane is an AIS face that was never Deactivated, so it competed in face-selection mode with the part face behind it (and in every other selection mode, silently, since the original port). Projection's pick-a-face-through-the-pane workflow is simply the first that made the competition visible. FIX: the pane is scenery, not an entity -- Deactivated on display, like every engine glyph.
+
+Answering Doug's question directly: the border has 'existed' the whole time AS the translucent pane (it is what shrank in the tiny-wp bug); what never existed was a distinct OUTLINE. Now it does: a thin black non-pickable rectangle at the pane edge (CoCreate-style), so the pane reads as a bordered object against any background.
+
+Also: **creation-time H&V origin clines RESTORED by Doug's preference** -- safe now because the min_bounds floor removed the original reason for retiring them (point-like content no longer collapses the pane), and they display clipped to the border like all clines.
+
+(Terminal note: the repeated 'QWidgetWindow must be a top level window' lines are a harmless Qt dock-widget warning, and the repeated 'AIS_ViewCube added' lines are redraw()'s RemoveAll+re-add cycle -- noisy but correct.)
+
+### Lesson for future development
+
+**Every displayed object is a selection participant unless told otherwise** -- the pane competed in every pick since the original port, masked because nothing needed to pick THROUGH it until project-face. Display-only objects (panes, glyphs, previews, labels) must be Deactivated at display time as a discipline, not case by case after each new workflow exposes one.

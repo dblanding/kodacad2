@@ -1396,11 +1396,46 @@ class MainWindow(QMainWindow):
             aisBorder = AIS_Shape(border)
             _reg.append(aisBorder)
             context.Display(aisBorder, True)
+            # NON-PICKABLE (Session 63, Doug's 'pick barrier' report):
+            # the translucent pane was a selectable face, competing
+            # with part faces behind it in face-selection mode --
+            # highlight flicker, and sometimes the pane's rectangular
+            # highlight winning outright. The pane is scenery, not an
+            # entity; it never participates in selection.
+            try:
+                context.Deactivate(aisBorder)
+            except Exception:
+                pass
             context.SetColor(aisBorder, borderColor, True)
             transp = 0.8  # 0.0 <= transparency <= 1.0
             context.SetTransparency(aisBorder, transp, True)
             drawer = aisBorder.DynamicHilightAttributes()
             context.HilightWithColor(aisBorder, drawer, True)
+            # Explicit BORDER OUTLINE (Session 63, Doug: the CoCreate
+            # pane has a visible boundary line; ours never did -- the
+            # translucent fill was the only cue, invisible against
+            # some backgrounds). Thin dark rectangle at the pane
+            # edge, non-pickable.
+            try:
+                bo = getattr(wp, 'border_bounds', None)
+                if bo is not None:
+                    owire = wp.makeRectProfile(bo[0], bo[1],
+                                               bo[2], bo[3])
+                    ais_outline = AIS_Shape(owire)
+                    _reg.append(ais_outline)
+                    context.Display(ais_outline, False)
+                    context.SetColor(
+                        ais_outline,
+                        Quantity_Color(Quantity_NOC_BLACK), False)
+                    context.SetWidth(ais_outline, 1.0, False)
+                    try:
+                        context.Deactivate(ais_outline)
+                    except Exception:
+                        pass
+            except Exception as oe:
+                if not getattr(self, "_wpoutline_warned", False):
+                    print(f"[draw_wp] border outline failed: {oe}")
+                    self._wpoutline_warned = True
             # '/w#' label at the border's lower-left corner --
             # drawn as STROKE GEOMETRY lying in the plane (Session
             # 63: AIS_TextLabel was screen-aligned and screen-sized;
