@@ -4299,3 +4299,11 @@ Doug's diagnostic print paid off instantly: 'cannot access local variable gp_Pnt
 ## Session 63 (cont'd): scoping bug round 2 -- Quantity_NOC_BLACK, and an AST sweep says that's the last
 
 Same disease, next victim: the bold-black geometry block's local 'from OCP.Quantity import (..., Quantity_NOC_BLACK)' shadowed the module-level name function-wide, unbinding it for the label. Removed (module-level import serves). An AST sweep of draw_wp then verified NO remaining local imports shadow module-level names -- the aliased (_Mk*) and label-block-only imports are safe. The whack-a-mole is over by proof, not by hope.
+
+## Session 63 (cont'd): the label lies down on the plane -- stroke geometry replaces AIS_TextLabel
+
+The scoping fixes made the AIS_TextLabel finally appear -- and immediately revealed it renders as SCREEN text: horizontal regardless of view, constant pixel size regardless of zoom. Doug wants Creo's behavior: the label square with the wp and zooming with the model. Solution: '/wN' is now drawn as STROKE GEOMETRY -- a small stick font (/, w, p, digits) in UV coordinates transformed onto the plane, one compound of edges, black, non-pickable, height 5% of the pane's smaller dimension (clamped 2.5-12mm). In-plane by construction, zooms by construction, cannot fail to render. AIS_TextLabel retired from draw_wp; the diagnostic print removed with it.
+
+### Lesson for future development
+
+**When a widget's rendering model fights the requirement, geometry IS the rendering model** -- screen-space text has no concept of 'lying on a plane'; twelve stick glyphs do exactly what geometry does, which is exactly what was asked. CAD has drawn its own letters since pen plotters for this reason.

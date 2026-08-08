@@ -243,6 +243,83 @@ def _occt_version_string():
     return ""
 
 
+# Stick font for the in-plane workplane label (Session 63: the
+# AIS_TextLabel was screen-aligned and screen-sized; Doug wants the
+# label lying ON the plane, aligned with U, zooming with the model
+# -- so it is drawn as stroke GEOMETRY, which cannot do otherwise).
+# Each glyph: list of polylines in a 1.0-height em box; advance 0.75.
+_WP_LABEL_GLYPHS = {
+    "/": [[(0.1, 0.0), (0.5, 1.0)]],
+    "w": [[(0.0, 0.6), (0.15, 0.0), (0.3, 0.45), (0.45, 0.0),
+           (0.6, 0.6)]],
+    "p": [[(0.0, -0.35), (0.0, 0.6)],
+          [(0.0, 0.6), (0.4, 0.6), (0.5, 0.5), (0.5, 0.25),
+           (0.4, 0.15), (0.0, 0.15)]],
+    "0": [[(0.1, 0.0), (0.4, 0.0), (0.5, 0.12), (0.5, 0.88),
+           (0.4, 1.0), (0.1, 1.0), (0.0, 0.88), (0.0, 0.12),
+           (0.1, 0.0)]],
+    "1": [[(0.1, 0.8), (0.3, 1.0), (0.3, 0.0)],
+          [(0.1, 0.0), (0.5, 0.0)]],
+    "2": [[(0.0, 0.85), (0.1, 1.0), (0.4, 1.0), (0.5, 0.85),
+           (0.5, 0.6), (0.0, 0.0)], [(0.0, 0.0), (0.5, 0.0)]],
+    "3": [[(0.0, 1.0), (0.5, 1.0), (0.25, 0.55), (0.45, 0.45),
+           (0.5, 0.2), (0.4, 0.0), (0.1, 0.0), (0.0, 0.1)]],
+    "4": [[(0.35, 0.0), (0.35, 1.0), (0.0, 0.35), (0.5, 0.35)]],
+    "5": [[(0.5, 1.0), (0.0, 1.0), (0.0, 0.55), (0.35, 0.55),
+           (0.5, 0.4), (0.5, 0.15), (0.35, 0.0), (0.05, 0.0)]],
+    "6": [[(0.45, 1.0), (0.1, 0.6), (0.0, 0.35), (0.0, 0.15),
+           (0.1, 0.0), (0.4, 0.0), (0.5, 0.15), (0.5, 0.35),
+           (0.4, 0.5), (0.05, 0.5)]],
+    "7": [[(0.0, 1.0), (0.5, 1.0), (0.15, 0.0)]],
+    "8": [[(0.25, 0.55), (0.08, 0.65), (0.05, 0.85), (0.15, 1.0),
+           (0.35, 1.0), (0.45, 0.85), (0.42, 0.65), (0.25, 0.55),
+           (0.08, 0.42), (0.0, 0.2), (0.1, 0.0), (0.4, 0.0),
+           (0.5, 0.2), (0.42, 0.42), (0.25, 0.55)]],
+    "9": [[(0.05, 0.0), (0.4, 0.4), (0.5, 0.65), (0.5, 0.85),
+           (0.4, 1.0), (0.1, 1.0), (0.0, 0.85), (0.0, 0.65),
+           (0.1, 0.5), (0.45, 0.5)]],
+}
+
+
+def _wp_label_shape(text, origin_uv, height, trsf):
+    """Build '/wN' as a TopoDS compound of stroke edges lying in the
+    workplane (UV coords transformed by trsf). Returns None if
+    nothing drawable."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    builder = BRep_Builder()
+    comp = TopoDS_Compound()
+    builder.MakeCompound(comp)
+    n_edges = 0
+    pen_u = origin_uv[0]
+    base_v = origin_uv[1]
+    for ch in text:
+        glyph = _WP_LABEL_GLYPHS.get(ch)
+        if glyph is not None:
+            for stroke in glyph:
+                for i in range(len(stroke) - 1):
+                    x1, y1 = stroke[i]
+                    x2, y2 = stroke[i + 1]
+                    g1 = gp_Pnt(pen_u + x1 * height,
+                                base_v + y1 * height,
+                                0).Transformed(trsf)
+                    g2 = gp_Pnt(pen_u + x2 * height,
+                                base_v + y2 * height,
+                                0).Transformed(trsf)
+                    if g1.Distance(g2) < 1.0e-9:
+                        continue
+                    try:
+                        builder.Add(comp,
+                                    BRepBuilderAPI_MakeEdge(g1, g2)
+                                    .Edge())
+                        n_edges += 1
+                    except Exception:
+                        pass
+        pen_u += 0.75 * height
+    return comp if n_edges else None
+
+
 def _clip_line_to_rect(cline, bounds):
     """Clip infinite line ax+by+c=0 to rectangle (u1,v1,u2,v2).
     Returns ((ua,va),(ub,vb)) or None if the line misses it."""
@@ -1324,41 +1401,35 @@ class MainWindow(QMainWindow):
             context.SetTransparency(aisBorder, transp, True)
             drawer = aisBorder.DynamicHilightAttributes()
             context.HilightWithColor(aisBorder, drawer, True)
-            # '/w#' label at the border's lower-left corner (Session
-            # 63, Doug: the label -- not an origin offset -- is the
-            # U-V orientation cue, per his call to keep the origin
-            # centered). Screen-constant text, never pickable.
+            # '/w#' label at the border's lower-left corner --
+            # drawn as STROKE GEOMETRY lying in the plane (Session
+            # 63: AIS_TextLabel was screen-aligned and screen-sized;
+            # Doug wants it square with the wp and zooming with the
+            # model, which model-space geometry cannot fail to do).
             try:
-                from OCP.AIS import AIS_TextLabel
-                from OCP.TCollection import TCollection_ExtendedString
-                ll = getattr(wp, 'border_ll', None)
-                if ll is not None:
-                    label = AIS_TextLabel()
-                    label.SetText(
-                        TCollection_ExtendedString(f"/{uid}"))
-                    # lifted 0.5 off the pane so the translucent
-                    # border can't occlude the text
-                    lpos = gp_Pnt(ll[0] + 2.0, ll[1] + 2.0,
-                                  0.5).Transformed(wp.Trsf)
-                    label.SetPosition(lpos)
-                    label.SetColor(
-                        Quantity_Color(Quantity_NOC_BLACK))
-                    try:
-                        label.SetHeight(18.0)
-                    except Exception:
-                        pass
-                    _reg.append(label)
-                    context.Display(label, False)
-                    print(f"[draw_wp] label '/{uid}' displayed at "
-                          f"({lpos.X():.1f}, {lpos.Y():.1f}, "
-                          f"{lpos.Z():.1f})")
-                    try:
-                        context.Deactivate(label)
-                    except Exception:
-                        pass
+                bbnds = getattr(wp, 'border_bounds', None)
+                if bbnds is not None:
+                    pane_min = min(bbnds[2] - bbnds[0],
+                                   bbnds[3] - bbnds[1])
+                    lh = max(2.5, min(0.05 * pane_min, 12.0))
+                    lorig = (bbnds[0] + 0.6 * lh, bbnds[1] + 0.6 * lh)
+                    lshape = _wp_label_shape(f"/{uid}", lorig, lh,
+                                             wp.Trsf)
+                    if lshape is not None:
+                        ais_label = AIS_Shape(lshape)
+                        _reg.append(ais_label)
+                        context.Display(ais_label, False)
+                        context.SetColor(
+                            ais_label,
+                            Quantity_Color(Quantity_NOC_BLACK), False)
+                        context.SetWidth(ais_label, 1.5, False)
+                        try:
+                            context.Deactivate(ais_label)
+                        except Exception:
+                            pass
             except Exception as le:
                 if not getattr(self, "_wplabel_warned", False):
-                    print(f"[draw_wp] wp label unavailable: {le}")
+                    print(f"[draw_wp] wp label failed: {le}")
                     self._wplabel_warned = True
             clClr = Quantity_Color(Quantity_NOC_MAGENTA1)
             # Clines CLIPPED to the border (Session 63, Doug: Creo
