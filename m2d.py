@@ -666,6 +666,115 @@ class M2D:
     #
     #############################################
 
+    def cc3p(self):
+        """Construction circle through 3 picked points (Session 63,
+        toolbar layout). Doug's own cr_from_3p does the math; the
+        preview shows the circle through the first two picks and the
+        live cursor."""
+        self.win.registerCallback(self.cc3pC)
+        self.display.SetSelectionModeVertex()
+        self.win.xyPtStack = []
+        self._preview_start(self.cc3pC, self._cc3p_preview_builder)
+        self.win.statusBar().showMessage(
+            "Pick 3 points on the construction circle.")
+
+    def cc3pC(self, shapeList, *args):
+        n_before = len(self.win.xyPtStack)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
+        self.win.lineEdit.setFocus()
+        n = len(self.win.xyPtStack)
+        if n == n_before:
+            return
+        if n < 3:
+            self.win.statusBar().showMessage(
+                f"Point {n} set. Pick point {n + 1}.")
+            return
+        p3 = self.win.xyPtStack.pop()
+        p2 = self.win.xyPtStack.pop()
+        p1 = self.win.xyPtStack.pop()
+        try:
+            from workplane import cr_from_3p
+            ctr, rad = cr_from_3p(p1, p2, p3)
+        except Exception:
+            self.win.statusBar().showMessage(
+                "Those 3 points are collinear -- no circle. "
+                "Start again.", 4000)
+            self.win.xyPtStack = []
+            return
+        wp = self.win.activeWp
+        wp.circle((ctr[0], ctr[1]), rad, constr=True)
+        self.win.xyPtStack = []
+        self._preview_stop()
+        self._preview_start(self.cc3pC, self._cc3p_preview_builder)
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Circle created. Pick 3 points for the next "
+            "(middle-click to end).")
+
+    def _cc3p_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 2:
+            return None
+        try:
+            from workplane import cr_from_3p
+            p1, p2 = self.win.xyPtStack[0], self.win.xyPtStack[1]
+            ctr, rad = cr_from_3p(p1, p2, uv)
+            if rad < 1.0e-6:
+                return None
+            from OCP.gp import gp_Circ, gp_Ax2
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            center = self._uvpnt(wp, ctr[0], ctr[1])
+            return BRepBuilderAPI_MakeEdge(
+                gp_Circ(gp_Ax2(center, wp.wDir), rad)).Edge()
+        except Exception:
+            return None
+
+    def poly(self):
+        """POLYLINE (Session 63, toolbar layout): chained line
+        segments -- each pick continues from the previous point;
+        middle-click ends the chain."""
+        self.win.registerCallback(self.polyC)
+        self.display.SetSelectionModeVertex()
+        self.win.xyPtStack = []
+        self._poly_prev = None
+        self._preview_start(self.polyC, self._poly_preview_builder)
+        self.win.statusBar().showMessage(
+            "Pick the start point of the polyline.")
+
+    def polyC(self, shapeList, *args):
+        n_before = len(self.win.xyPtStack)
+        if not self.add_snap_pt_to_xyPtStack(args):
+            self.add_vertex_to_xyPtStack(shapeList)
+        self.win.lineEdit.setFocus()
+        if len(self.win.xyPtStack) == n_before:
+            return
+        pt = self.win.xyPtStack.pop()
+        self.win.xyPtStack = []
+        wp = self.win.activeWp
+        if self._poly_prev is None:
+            self._poly_prev = pt
+            self.win.statusBar().showMessage(
+                "Start set. Pick the next point "
+                "(middle-click to end).")
+            return
+        wp.line(self._poly_prev, pt)
+        self._poly_prev = pt
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Segment added. Pick the next point "
+            "(middle-click to end).")
+
+    def _poly_preview_builder(self, wp, uv):
+        prev = getattr(self, "_poly_prev", None)
+        if prev is None:
+            return None
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        g1 = self._uvpnt(wp, prev[0], prev[1])
+        g2 = self._uvpnt(wp, uv[0], uv[1])
+        if g1.Distance(g2) < 1.0e-6:
+            return None
+        return BRepBuilderAPI_MakeEdge(g1, g2).Edge()
+
     def line(self):
         """Create a profile geometry line between two end points."""
         if len(self.win.xyPtStack) == 2:

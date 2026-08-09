@@ -4385,3 +4385,16 @@ Doug hit 'Unable to make wire.' extruding a multi-loop sketch into a NEW part: e
 ### Lesson for future development
 
 **When a capability lands, sweep for every sibling of the code it replaces** -- multi-profile shipped in the dialog while the older extrude path kept the single-wire limitation one menu away; the user's very next workflow found the seam. The 'Unable to make wire.' bare print was also a pre-tripwire-era guard: replaced with a named status-bar report.
+
+## Session 63 (cont'd): THE 2-COLUMN 2D TOOL PANEL -- Doug's layout PDF, phase 1
+
+Doug's icon-folder listings decoded the layout completely (his PDF page-1 top-left mystery = noop.gif, Pyurcad's end-operation button; page-1 rows end ccirc/cc3p/cccirc; page-2's oval = slot.gif). Phase-1 build:
+
+- **The panel**: the two QToolBars replaced by one QGridLayout of 2-column QToolButtons hosted inside wcToolBar (wgToolBar hidden), Doug's exact top-to-bottom order, QFrame.HLine separator bars, deletes quarantined at the bottom -- the accident-avoidance requirement. Missing icon -> text fallback; noop.gif needs copying from Pyurcad's icons.
+- **Two new tools implemented live**: cc3p (construction circle through 3 catches, cr_from_3p math, live circle preview through the first 2 picks + cursor, collinear picks decline politely, seamless chaining) and poly (POLYLINE -- each pick chains a wp.line from the previous point, rubber-band from the pen position, middle-click ends the chain).
+- **Live buttons (22)**: End Operation, H+V/H/V/2pt/angled/lin-bisector clines, ccirc, cc3p, both projections, line, poly, rect, circle, both arcs, all four deletes.
+- **Disabled with '(not yet implemented)' tooltips (8)**: refang, angular bisector, parallel (the designed gesture-input first customer), perpendicular, tangent x2, concentric circle, slot, 2D fillet -- the phase-2 build list, each enabling as it lands.
+
+### Lesson for future development
+
+**An 'ls' is worth a thousand icon descriptions** -- two directory listings resolved every ambiguity a page of careful PDF-squinting could not, because filenames carry the original author's intent verbatim. When a spec references assets, ask for the asset LIST before interpreting the pictures.

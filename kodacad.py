@@ -846,69 +846,90 @@ if __name__ == "__main__":
     selectSubMenu.addAction("Shape", display.SetSelectionModeShape)
     selectSubMenu.addAction("Neutral", display.SetSelectionModeNeutral)
     win.popMenu.addAction("Clear Callback", win.clearCallback)
-    # Construction Line Toolbar buttons
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/hcl.gif")), "Horizontal", a2d.clineH)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/vcl.gif")), "Vertical", a2d.clineV)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/hvcl.gif")), "H + V", a2d.clineHV)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/tpcl.gif")), "By 2 Pnts", a2d.cline2Pts
-    )
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/acl.gif")), "Angled", a2d.clineAng)
-    # Project edges (Session 63): drop icons/proj_face.gif and
-    # icons/proj_edge.gif into icons/ -- absent icons show text-only
-    # buttons, still fully functional
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/proj_face.gif")), "Project Face Edges",
-        a2d.projectFaceEdges)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/proj_edge.gif")), "Project Edge",
-        a2d.projectEdge)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/del_constr.gif")), "Del All Constr",
-        a2d.delAllConstr)
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/del_geom.gif")), "Del All Geom",
-        a2d.delAllGeom)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/refangcl.gif')), 'Ref-Ang', a2d.clineRefAng)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/abcl.gif')), 'Angular Bisector', a2d.clineAngBisec)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/lbcl.gif")), "Linear Bisector", a2d.clineLinBisec
-    )
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/parcl.gif')), 'Parallel', a2d.clinePara)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/perpcl.gif')), 'Perpendicular', a2d.clinePerp)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cltan1.gif')), 'Tangent to circle', a2d.clineTan1)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cltan2.gif')), 'Tangent 2 circles', a2d.clineTan2)
-    win.wcToolBar.addAction(
-        QIcon(QPixmap("icons/ccirc.gif")), "Circle", a2d.ccirc)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cc3p.gif')), 'Circle by 3Pts', a2d.ccirc)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cccirc.gif')), 'Concentric Circle', a2d.ccirc)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cctan2.gif')), 'Circ Tangent x2', a2d.ccirc)
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/cctan3.gif')), 'Circ Tangent x3', a2d.ccirc)
-    win.wcToolBar.addSeparator()
-    # win.wcToolBar.addAction(QIcon(QPixmap('icons/del_cel.gif')), 'Delete Constr', a2d.delCl)
-    # Profile Line Toolbar buttons
-    win.wgToolBar.addAction(QIcon(QPixmap("icons/line.gif")), "Line", a2d.line)
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/rect.gif")), "Rectangle", a2d.rect)
-    # win.wgToolBar.addAction(QIcon(QPixmap('icons/poly.gif')), 'Polygon', a2d.geom)
-    # win.wgToolBar.addAction(QIcon(QPixmap('icons/slot.gif')), 'Slot', a2d.geom)
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/circ.gif")), "Circle", a2d.circle)
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/arcc2p.gif")), "Arc Cntr-2Pts", a2d.arcc2p
-    )
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/arc3p.gif")), "Arc by 3Pts", a2d.arc3p)
-    win.wgToolBar.addSeparator()
-    # win.wgToolBar.addAction(QIcon(QPixmap('icons/translate.gif')), 'Translate Profile', a2d.geom)
-    # win.wgToolBar.addAction(QIcon(QPixmap('icons/rotate.gif')), 'Rotate Profile', a2d.geom)
-    win.wgToolBar.addAction(
-        QIcon(QPixmap("icons/del_el.gif")), "Delete Profile Elem", a2d.delEl
-    )
+    # ==== 2-COLUMN 2D TOOL PANEL (Session 63, Doug's layout PDF:
+    # Pyurcad's tool set, two columns on the right edge, deletes
+    # quarantined at the bottom behind a separator). Disabled
+    # buttons = tools not yet implemented; they enable as each
+    # lands. noop.gif lives in the Pyurcad icons folder -- copy it
+    # over (text fallback until then). ====
+    from PySide6.QtWidgets import (QWidget, QGridLayout, QToolButton,
+                                   QFrame)
+    from PySide6.QtCore import QSize
+
+    _TOOL_LAYOUT = [
+        ("noop.gif", "End Operation", win.clearCallback),
+        ("hvcl.gif", "H + V Construction Lines", a2d.clineHV),
+        ("hcl.gif", "Horizontal Construction Line", a2d.clineH),
+        ("vcl.gif", "Vertical Construction Line", a2d.clineV),
+        ("tpcl.gif", "Construction Line by 2 Points", a2d.cline2Pts),
+        ("acl.gif", "Angled Construction Line", a2d.clineAng),
+        ("refangcl.gif", "Reference-Angle Constr Line", None),
+        ("abcl.gif", "Angular Bisector", None),
+        ("lbcl.gif", "Linear Bisector", a2d.clineLinBisec),
+        ("parcl.gif", "Parallel Construction Line", None),
+        ("perpcl.gif", "Perpendicular Constr Line", None),
+        ("cltan1.gif", "Tangent to Circle", None),
+        ("cltan2.gif", "Tangent to 2 Circles", None),
+        ("ccirc.gif", "Construction Circle", a2d.ccirc),
+        ("cc3p.gif", "Constr Circle by 3 Points", a2d.cc3p),
+        ("cccirc.gif", "Concentric Constr Circle", None),
+        ("proj_edge.gif", "Project Edge", a2d.projectEdge),
+        ("proj_face.gif", "Project Face Edges", a2d.projectFaceEdges),
+        "SEP",
+        ("line.gif", "Line", a2d.line),
+        ("poly.gif", "Polyline", a2d.poly),
+        ("rect.gif", "Rectangle", a2d.rect),
+        ("circ.gif", "Circle", a2d.circle),
+        ("arcc2p.gif", "Arc: Center + 2 Points", a2d.arcc2p),
+        ("arc3p.gif", "Arc by 3 Points", a2d.arc3p),
+        ("slot.gif", "Slot", None),
+        ("fillet.gif", "2D Fillet", None),
+        "SEP",
+        ("del_cel.gif", "Delete Construction Element", a2d.delCl),
+        ("del_constr.gif", "Delete ALL Construction",
+         a2d.delAllConstr),
+        ("del_el.gif", "Delete Geometry Element", a2d.delEl),
+        ("del_geom.gif", "Delete ALL Geometry", a2d.delAllGeom),
+    ]
+    _panel = QWidget()
+    _grid = QGridLayout(_panel)
+    _grid.setContentsMargins(2, 2, 2, 2)
+    _grid.setSpacing(2)
+    _row = 0
+    _col = 0
+    for _item in _TOOL_LAYOUT:
+        if _item == "SEP":
+            if _col == 1:
+                _row += 1
+                _col = 0
+            _sep = QFrame()
+            _sep.setFrameShape(QFrame.HLine)
+            _sep.setFrameShadow(QFrame.Sunken)
+            _grid.addWidget(_sep, _row, 0, 1, 2)
+            _row += 1
+            continue
+        _iconfile, _tip, _handler = _item
+        _btn = QToolButton()
+        _pix = QPixmap(f"icons/{_iconfile}")
+        if not _pix.isNull():
+            _btn.setIcon(QIcon(_pix))
+            _btn.setIconSize(QSize(24, 24))
+        else:
+            _btn.setText(_tip.split()[0][:5])
+        if _handler is not None:
+            _btn.setToolTip(_tip)
+            _btn.clicked.connect(_handler)
+        else:
+            _btn.setToolTip(_tip + "  (not yet implemented)")
+            _btn.setEnabled(False)
+        _grid.addWidget(_btn, _row, _col)
+        _col += 1
+        if _col == 2:
+            _col = 0
+            _row += 1
+    win.wcToolBar.clear()
+    win.wcToolBar.addWidget(_panel)
+    win.wgToolBar.setVisible(False)
 
     win.raise_()  # bring the app to the top
     app.exec()

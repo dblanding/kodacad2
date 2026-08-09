@@ -1,6 +1,4 @@
-# KodaCAD TODO
-
-### A good tool should be a *Pleasure To Use*.
+## A good tool should be a *Pleasure To Use*.
 
 * This file is a collection of suggestions aimed at making Kodacad a *Pleasure To Use*, mostly by improving workflow on *typical* projects.
 * Tracks outstanding issues and future development ideas.
@@ -8,74 +6,37 @@
 
 ---
 
-## 1. Broken: (should work but doesn't or doesn't always work)
+## To Do (by priority):
 
-#### View Cube is inoperable when 2D drawing tools are in use (corners, edges, faces of cube no longer highlight)
+* RMB on part in tree to set/edit part color (color picker?)
 
-#### Deleting geom arc overlaying c-circle is tricky (Because both are selectable).
-If operation is to delete geom lines, then perhaps c-lines and c-circles should not be selectable.
+* Implement all the Pyurcad toolbar ops (in 2 columns), with delete tools in a separate section below a separator (at the bottom).
 
----
+* Add More workplane creation modes
+    * Point & Direction
+        * Click point (sets origin)
+        * Click face (sets +W direction)
+        * Click face (sets +U direction) -- In Creo, this is optional. A default direction is shown.
 
-## 2. UI improvement ideas
+* Box-select edges for filleting (eg.: OCC bottle)
+    * Claude: box-select for fillet edges is real and feasible — OCCT has rubber-band selection machinery — moderate effort, worth banking near the top of Misc, because picking twelve bottle edges one at a time is exactly the kind of friction this project exists to remove.
 
-### 2D
+* Multi-item select (from tree) for delete (using ctrl or shift key?)
 
-#### Add More workplane creation modes
-* Point & Direction
-    1. Click point (sets origin)
-    2. Click face (sets +W direction)
-    3. Click face (sets +U direction) -- In Creo, this is optional. A default direction is shown.
+* Booleans (fuse, subtract, intersect)
 
-#### Label Workplanes in viewport
-* Display "w1", "w2" etc. in the lower-left corner of each wp
-    * Makes wp identifiable
-    * identifies U, V directions clearly
-    * Possible approach: `AIS_TextLabel`
+* Heal scars in solids that have been built progressively
+    * Claude: OCCT has `ShapeUpgrade_UnifySameDomain`, which exists precisely to merge same-domain faces and erase those lines. A one-afternoon smoke test could tell us whether healing is nearly free.
 
-#### Adjust workplane size automatically
+* Implement abilty to create and save a 1x scale drawing view in printable format (for checking feature alignment w/ real parts)
+    * Workaround: Export the part in Step format and create the dwg in another app.
 
-#### More 2D sketching tools (see Pyurcad)
-* Parallel c-lines (c-lines highlight so they should be selectable.)
-* Delete all Construction
-* Delete all Geometry (profile)
+## Deferred (Not easily implemented)
 
-#### Project part edges onto workplane as construction lines
-Essential for referencing existing geometry when sketching.
-* Pick an edge on a part and project c-line onto the active workplane.
-* Pick a face and project all edges.
+* View Cube is unresponsive when 2D drawing tools are in use
+    * Claude: Annoying but cosmetic, and it touches the selection-mode plumbing that has historically been the riskiest code in the app to poke.
+    * Workaround: Just middle click to exit 2D tool and use the view cube
 
-### 3D
-
-#### It would be nice if multiple items in the tree could be chosen for delete all at once.
-* In a large assembly, it takes a long time to refresh after deleting each item, one at a  time.
-* Also, the tree does an expand all items with each deletion. that's annoying.
-
-#### Extrude/Mill:
-* Ability to choose on the fly to add or remove mat'l
-    * Choose direction on the fly: +W, -W, Both (symetric)
-    * Entering a negative value doesn't work
-* Can't handle 2 profiles (inner & outer wires)
-* Possible to have undo here?
-
-#### Move Face (on simple "boxy" shapes)
-
-#### 'Scars' (Adding mat'l to an existing face leaves a line at the old edge.)
-* Possible to heal these parts?
-
-#### Booleans: (fuse, subtract, etc)
-
-#### Ability to set, edit part color
-
----
-
-## 3. Future development ideas (Big jobs - Not likely any time soon)
-
-#### Native save format
-Currently uses STEP as a save/load surrogate. OCCT's native
-`.xbf` (BinXCAF) format preserves more data and is faster. The
-infrastructure is in `docmodel.py` (`save_doc`, `open_doc`) but
-is not exposed in the UI. Color and name preservation on round-trip
-would also be better with native format.
-
-
+* Native save / load format
+    * Claude:  Blocked, not hard: native `.xbf` save. Session 49 confirmed the OCP binding bug (CadQuery/OCP#182: `Open` returns an empty document while reporting success). No amount of effort on our side fixes that; the move is to re-run our existing smoke test whenever OCP ships a new version.
+    * Workaround: Just save session (gets saved in .STEP format) and reload as next session. Workplanes are not saved.
