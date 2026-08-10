@@ -1496,6 +1496,7 @@ class MainWindow(QMainWindow):
                     _reg.append(aisline)
                     context.Display(aisline, False)
                     context.SetColor(aisline, clClr, False)
+                    self.canvas._display.add_never_pick(aisline)
                 except Exception as cle:
                     print(f"[draw_wp] cline display failed: {cle}")
             # Construction ARCS (Session 63): finite, dashed
@@ -1517,6 +1518,7 @@ class MainWindow(QMainWindow):
                     _reg.append(ais_ca)
                     context.Display(ais_ca, False)
                     context.SetColor(ais_ca, clClr, False)
+                    self.canvas._display.add_never_pick(ais_ca)
                 except Exception as cae:
                     print(f"[draw_wp] carc display failed: {cae}")
             # Construction SEGMENTS (Session 63): finite, dashed
@@ -1544,6 +1546,7 @@ class MainWindow(QMainWindow):
                     _reg.append(ais_cs)
                     context.Display(ais_cs, False)
                     context.SetColor(ais_cs, clClr, False)
+                    self.canvas._display.add_never_pick(ais_cs)
                 except Exception as cse:
                     print(f"[draw_wp] cseg display failed: {cse}")
             # RETIRED (Session 62, sketch engine step 4): the
@@ -1568,6 +1571,7 @@ class MainWindow(QMainWindow):
                 aiscirc.SetAttributes(drawer)
                 _reg.append(aiscirc)
                 context.Display(aiscirc, False)  # (see comment below)
+                self.canvas._display.add_never_pick(aiscirc)
                 # 'False' above enables 'context' mode display & selection
             for edge in wp.edgeList:
                 # BOLD BLACK geometry (Session 62, Doug: Creo E/D

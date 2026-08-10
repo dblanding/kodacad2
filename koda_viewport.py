@@ -512,7 +512,9 @@ class KodaViewport(QWidget):
         # Pure observation -- returns immediately after, leaving all
         # drag/orbit handling below untouched for button-down moves.
         if not event.buttons():
-            for cb in self._move_callbacks:
+            # iterate a COPY: callbacks may unregister themselves
+            # mid-sweep (Session 63)
+            for cb in list(self._move_callbacks):
                 try:
                     cb(event.position().x(), event.position().y())
                 except Exception:

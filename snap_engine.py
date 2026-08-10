@@ -373,7 +373,8 @@ class SnapHover:
     view.Convert so it stays constant on screen. Non-selectable --
     it can never steal a pick."""
 
-    COLOR = (1.0, 0.45, 0.0)        # normal mode: orange
+    COLOR = (1.0, 1.0, 0.0)         # normal mode: BRIGHT YELLOW
+    # (Session 63, Doug: the orange was too subtle on this canvas)
     COLOR_CENTER = (0.0, 0.85, 0.9)  # Ctrl+Shift center mode: cyan
     # -- the flyby colour tells you which catch set is live
 

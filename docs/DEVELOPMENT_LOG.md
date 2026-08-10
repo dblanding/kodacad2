@@ -4398,3 +4398,93 @@ Doug's icon-folder listings decoded the layout completely (his PDF page-1 top-le
 ### Lesson for future development
 
 **An 'ls' is worth a thousand icon descriptions** -- two directory listings resolved every ambiguity a page of careful PDF-squinting could not, because filenames carry the original author's intent verbatim. When a spec references assets, ask for the asset LIST before interpreting the pictures.
+
+## Session 63 (cont'd): toolbar review round 1 -- delCl reborn as an engine entity pick; everything goes bright yellow
+
+Doug's toolbar review: clean sweep except Delete Construction Element. Two findings inside that one bug: the traceback line was an old mangled edit, but the tool was a KNOWN TODO since the original port (its own docstring: AIS_Line identification 'haven't figured out how to get') -- it never worked; the toolbar gave it its first real button. REWRITTEN as an engine ENTITY PICK: the click resolves the nearest construction entity by curve distance (cline perpendicular distance, cseg segment distance, ccirc/carc rim distance with angular containment), deletes it from the wp's own data, redraws. No OCCT selection involved -- which closes BOTH c/g filter items from the to-do list structurally: delCl searches only construction data and delEl only edgeList, so cross-type accidents are impossible rather than filtered.
+
+Also per Doug: the catch square (normal mode) and all rubber bands go BRIGHT YELLOW (1,1,0) -- the orange was too subtle on this canvas. Center-mode cyan retained as the mode signal.
+
+**Phase 2 spec received**: Doug walked Pyurcad's parallel-cline flow with its exact status messages ('Pick a straight element or enter an offset distance' -> 'Pick a straight element to be parallel to' -> 'Pick on (+) side of line' -- the gesture pick, arriving at last) and wants all eight greyed tools to work IDENTICALLY, messages included. Pyurcad's m2d.py requested for verbatim porting.
+
+### Lesson for future development
+
+**Some bugs are best dissolved, not fixed** -- the AIS-identification problem delCl carried for its whole life had no good solution in that paradigm; the engine's entity resolution makes the question 'which AIS did I click' simply never arise. When a rewrite has been circling anyway, a stubborn old bug is often pointing at the paradigm, not at a missing fix.
+
+## Session 63 (cont'd): PHASE 2 COMPLETE -- seven Pyurcad tools ported verbatim; the gesture pick arrives
+
+Doug uploaded pyurcad.py (single-file app; there is no m2d module -- Kodacad's m2d descends from it). Recon jackpot: EVERY needed math helper already lived in workplane.py from the original port (para_line/para_lines, perp_line, ang_bisector, line_tan_to_circ, line_tan_to_2circs, extendline, find_common_pt, find_fillet_pts) -- only the tool FLOWS were missing. All seven ported with Doug's required VERBATIM status messages, adapted to the engine's input classes (entity picks and side picks = gestures; geometry-defining points = catches):
+
+- **clinePara** -- both Pyurcad modes: typed offset + straight-element pick + 'Pick on (+) side of line' (THE GESTURE PICK, the design doc's first customer, finally cashed) / element + through-point (catch). Repeats with the same offset like Pyurcad.
+- **clinePerp** -- element gesture + point catch -> perp_line.
+- **clineAngBisec** -- optional factor (default .5) + three catches -> ang_bisector.
+- **clineTan1** -- circle entity gesture + point catch -> BOTH tangent clines; inside-the-circle picks decline politely.
+- **clineTan2** -- two circle gestures -> external tangent cline.
+- **cccirc** -- circle entity + relative radius (typed, r0+delta) OR point on the new circle; non-positive results decline.
+- **slot** -- two catches + width -> Pyurcad's exact construction (perp/para lines, extendline tips, two arc3p ends, two side lines) producing a proper obround PROFILE.
+- **fillet2d** -- radius + a CATCH on the corner (the shared endpoint -- the engine makes 'pick the corner' literally a catch); finds the two meeting line edges, trims them (IsSame identity removal), inserts the tangent arc with Pyurcad's own ordering logic; oversized radii decline; repeats at the same radius.
+Entity resolution via two new helpers (_nearest_straight over clines/csegs/geometry lines; _nearest_circle_ent over ccircs/carcs/geometry circles). clineRefAng RETIRED: no such tool exists in Pyurcad either (icon only) -- button stays greyed with an annotation, pending Doug.
+
+All seven toolbar buttons lit. The 2D toolset is now Pyurcad-complete minus split/join/move (Doug's exclusions) and refang (never existed).
+
+### Lesson for future development
+
+**Port the flows, inherit the brains** -- the original workplane.py port carried every geometry function these tools need, sight unseen, years early; phase 2 was pure state-machine transcription with message fidelity. When migrating an app family, porting the MATH LIBRARY completely -- even unused parts -- is cheap insurance that pays off the day the tools follow.
+
+## Session 63 (cont'd): the Pyurcad way, round 2 -- direction picks and construction rubber
+
+Doug's angular-bisector walkthrough exposed two gaps in the phase-2 ports, both now fixed:
+
+1. **'Click on the base line' was impossible** -- those picks were ported as CATCHES, and mid-line has no catch (on-curve was removed from the default deliberately). Their true input class is the DIRECTION PICK: gesture uv PROJECTED onto the nearest straight element -- clicking anywhere along the line yields an exact on-line point (more precise than Pyurcad's raw click, same feel); no element nearby falls back to raw uv. New helper _direction_pt; abcl's base-line and second-line picks use it (the vertex stays a catch -- it is a precision point). The input taxonomy gains its third named class: CATCH (defines coordinates), GESTURE (chooses alternatives), DIRECTION (indicates an element/heading, projected).
+2. **Construction rubber is NOT yellow** (Doug's design rule, now on record): the proposed cline is DASHED MAGENTA, indistinguishable from the final cline -- it previews exactly what will exist. Yellow is geometry rubber ONLY. The generic preview mechanism gains a style ('geom' yellow solid / 'constr' dashed magenta via the cline aspect), and four tools gain live construction rubber: abcl (the hypothetical bisector chasing the cursor after the 2nd point, honoring the factor), parcl through-point mode (proposed parallel), perpcl (proposed perpendicular), cccirc (proposed concentric circle) -- each clipped to the border like every real cline, each restarting for seamless chaining. (Upgrading the OLDER cline tools -- 2pts, angled, bisector-linear -- to constr rubber is a noted polish item.)
+
+Doug also confirmed arc3p still works and the yellow geometry rubber is liked.
+
+### Lesson for future development
+
+**A user walkthrough of ONE tool can recalibrate a whole port** -- the abcl narration surfaced a missing input class and an unwritten color rule that apply to every construction tool at once; porting messages verbatim was necessary but not sufficient, because the INTERACTION conventions (what a click means, what rubber looks like) were the deeper spec living only in Doug's hands.
+
+## Session 63 (cont'd): FULL RIGOR -- the base cline family rebuilt to Pyurcad flows; clrefang found and built; every toolbar button lit
+
+Doug confirmed the angular bisector and mandated the same rigor everywhere; pyurcad.py delivered. clrefang EXISTED at line 568 -- the earlier grep was too literal ('refangcl' vs 'clrefang'); Doug's insistence found it.
+
+Rebuilt to verbatim Pyurcad flows (messages, typed-value modes, factor prompts) with construction rubber where Pyurcad had it:
+- **hcl/vcl**: 'Pick a pt or enter a value' -- typed value = y (H) or x (V); magenta rubber cline follows the cursor.
+- **hvcl**: 'Pick a pt or enter coords x,y' (two typed floats accepted).
+- **cl2p**: coords-entry mode on both points; rubber cline through the first point toward the cursor.
+- **acl**: point then '2nd point or enter angle in degrees'; both modes; rubber.
+- **clrefang** (NEW): point for the new line (catch) -> offset angle -> two DIRECTION picks on the reference line -> angled_cline at baseangle+offset. Verbatim prompts.
+- **lbcl**: gains the bisector FACTOR ('Enter bisector factor (Default=.5) or specify first point'), Doug's request, plus rubber (factor-weighted perpendicular bisector chasing the cursor).
+- **cc3p** messages verbatim ('Pick first/second/third point on circle').
+- Pyurcad's shift_key_advice rendered as Kodacad's own: ' (Use Ctrl+Shift to select center of element)', appended exactly where Pyurcad appended its version.
+Helpers angled_cline / p2p_angle / midpoint: already in workplane.py, as ever.
+
+**Every toolbar button is now LIT.** The 2D toolset is Pyurcad-complete minus Doug's deliberate exclusions (split/join/move family).
+
+### Lesson for future development
+
+**'You should find what you need in the file' outranks a failed grep** -- the tool existed under a name the search didn't guess; when the user asserts the source contains something, the correct response is a broader search, not a conclusion. One listing of method names settled everything a targeted grep had gotten wrong.
+
+## Session 63 (cont'd): typed values and the preview crash -- focus and idempotence
+
+Doug's report (H/V typed values dead; abcl misbehaving with '[preview] disabled after error: NoneType object is not callable') diagnosed to two independent mechanism bugs:
+
+1. **Keyboard focus**: tool ENTRIES never set lineEdit focus (only per-pick collectors did, a habit from the click-first old flows) -- so clicking a toolbar button left focus on the canvas and typed values never reached the lineEdit at all; Enter with nothing registered quietly popped the stack back. Pyurcad's tkinter bound keys globally; Qt needs the handoff. Fix: every tool entry (all of them, swept mechanically) hands focus to the lineEdit on start.
+2. **Preview duplication + None passthrough**: starting tool B while tool A's preview awaited its LAZY self-cleanup left _preview_move registered twice sharing one state; after End Operation the first copy's cleanup set owner/builder to None mid-sweep and the second copy then passed the owner check as None==None and called the None builder. Fixes: _preview_start begins with _preview_stop (single registration, idempotent); _preview_move hard-guards builder-None and registeredCallback-None before the owner check; the viewport iterates a COPY of the move-callback list (callbacks unregister themselves mid-sweep).
+
+### Lesson for future development
+
+**Lazy cleanup plus eager restart equals duplication** -- the preview's self-clean-on-next-move was elegant for ONE consumer and a race for two; the moment a second start could precede the first's lazy stop, idempotent start became mandatory. And the focus bug: input plumbing inherited from a click-first era fails silently exactly when a NEW input mode (typed-first) arrives -- silent keystroke loss deserves the same suspicion as a silent except.
+
+## Session 63 (cont'd): typed coords unified with catches; construction AIS becomes scenery
+
+Doug's second toolbar pass found two RECURRING mechanisms, both fixed:
+
+1. **Typed 'x,y' went to xyPtStack and was ignored** -- processLineEdit parses comma text into a POINT, but the collectors only checked floatStack (the H+V cross by typed coords failed outright). New _take_pt intake unifies them: typed coords ARE a clicked catch. Repaired H+V and quietly delivered the coords-entry modes Pyurcad's own messages promise ('or enter coords') on 2-points, angled, and both bisectors -- plus single-value entry still routing to floatStack for H/V values, angles, and factors.
+2. **The clicked line 'disappearing' until operation end was OCCT SELECTION HIGHLIGHT** -- clines remained selectable AIS; clicking one during a direction pick selected it, and the selected-state presentation of a dashed magenta edge effectively blanks it until the selection clears ('comes back at the end'). Since delCl went engine-side, NOTHING needs construction AIS selectable -- so clines, ccircs, carcs, and csegs now join the never-pick registry at display (geometry edges stay pickable for delEl). No selection, no highlight, no vanish; gesture clicks still arrive as coordinates.
+
+Confirmed working meanwhile: H/V typed values, angular bisector end-to-end, linear bisector ('works great'), angled cline, parallel line-first mode.
+
+### Lesson for future development
+
+**When a display object no longer has a selection consumer, deactivate it -- leftover selectability is not neutral** -- the construction lines' pickability was harmless while delCl needed it and became a visual saboteur the day it didn't; the vanishing-line mystery was selection feedback with nobody listening. Input unification's lesson is older still: two entry paths for 'a point' (typed vs clicked) must converge into ONE intake or every collector re-implements half of it wrong.

@@ -311,6 +311,7 @@ class M2D:
                 "No active workplane -- activate one first.", 4000)
             return
         self.win.registerCallback(self.projectFaceEdgesC)
+        self.win.lineEdit.setFocus()
         self.display.SetSelectionModeFace()
         self.win.statusBar().showMessage(
             "Pick a face to project its edges onto the active "
@@ -343,6 +344,7 @@ class M2D:
                 "No active workplane -- activate one first.", 4000)
             return
         self.win.registerCallback(self.projectEdgeC)
+        self.win.lineEdit.setFocus()
         self.display.SetSelectionModeEdge()
         self.win.statusBar().showMessage(
             "Pick an edge to project onto the active workplane "
@@ -439,186 +441,928 @@ class M2D:
             except ValueError as e:
                 print(f"{e}")
 
+    # Kodacad's rendering of Pyurcad's shift_key_advice -- appended
+    # exactly where Pyurcad appended its version
+    _ADVICE = " (Use Ctrl+Shift to select center of element)"
+
+    # ---- H / V / H+V construction lines (pyurcad hcl/vcl/hvcl) ----
+
     def clineH(self):
-        """Horizontal construction line"""
-        if self.win.xyPtStack:
-            wp = self.win.activeWp
-            p = self.win.xyPtStack.pop()
-            self.win.xyPtStack = []
-            wp.hcl(p)
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.clineHC)
-            self.display.SetSelectionModeVertex()
-            self.win.xyPtStack = []
-            self.win.clearLEStack()
-            self.win.lineEdit.setFocus()
-            statusText = "Select point or enter Y-value for horizontal cline."
-            self.win.statusBar().showMessage(statusText)
+        self.win.registerCallback(self.clineHC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.clineHC, self._hcl_preview_builder,
+                            style="constr")
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter a value" + self._ADVICE)
+
+    def _hcl_preview_builder(self, wp, uv):
+        import workplane as wpm
+        return self._cline_edge(wp, wpm.angled_cline(uv, 0))
 
     def clineHC(self, shapeList, *args):
-        """Callback (collector) for clineH"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        if self.win.lineEditStack:
-            self.processLineEdit()
-        if self.win.floatStack:
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        p = self._take_pt(args)
+        if p is None and self.win.floatStack:
             y = self.win.floatStack.pop() * self.win.unitscale
-            pnt = (0, y)
-            self.win.xyPtStack.append(pnt)
-        if self.win.xyPtStack:
-            self.clineH()
+            p = (0.0, y)
+        if p is None:
+            return
+        wp.cline_gen(wpm.angled_cline(p, 0))
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter a value" + self._ADVICE)
 
     def clineV(self):
-        """Vertical construction line"""
-        if self.win.xyPtStack:
-            wp = self.win.activeWp
-            p = self.win.xyPtStack.pop()
-            self.win.xyPtStack = []
-            wp.vcl(p)
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.clineVC)
-            self.display.SetSelectionModeVertex()
-            self.win.xyPtStack = []
-            self.win.clearLEStack()
-            self.win.lineEdit.setFocus()
-            statusText = "Select point or enter X-value for vertcal cline."
-            self.win.statusBar().showMessage(statusText)
+        self.win.registerCallback(self.clineVC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.clineVC, self._vcl_preview_builder,
+                            style="constr")
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter a value" + self._ADVICE)
+
+    def _vcl_preview_builder(self, wp, uv):
+        import workplane as wpm
+        return self._cline_edge(wp, wpm.angled_cline(uv, 90))
 
     def clineVC(self, shapeList, *args):
-        """Callback (collector) for clineV"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        if self.win.lineEditStack:
-            self.processLineEdit()
-        if self.win.floatStack:
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        p = self._take_pt(args)
+        if p is None and self.win.floatStack:
             x = self.win.floatStack.pop() * self.win.unitscale
-            pnt = (x, 0)
-            self.win.xyPtStack.append(pnt)
-        if self.win.xyPtStack:
-            self.clineV()
+            p = (x, 0.0)
+        if p is None:
+            return
+        wp.cline_gen(wpm.angled_cline(p, 90))
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter a value" + self._ADVICE)
 
     def clineHV(self):
-        """Horizontal + Vertical construction lines"""
-        if self.win.xyPtStack:
-            wp = self.win.activeWp
-            p = self.win.xyPtStack.pop()
-            self.win.xyPtStack = []
-            wp.hvcl(p)
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.clineHVC)
-            self.display.SetSelectionModeVertex()
-            self.win.xyPtStack = []
-            self.win.clearLEStack()
-            self.win.lineEdit.setFocus()
-            statusText = "Select point or enter x,y coords for H+V cline."
-            self.win.statusBar().showMessage(statusText)
+        self.win.registerCallback(self.clineHVC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter coords x,y" + self._ADVICE)
 
     def clineHVC(self, shapeList, *args):
-        """Callback (collector) for clineHV"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        if self.win.lineEditStack:
-            self.processLineEdit()
-        if self.win.xyPtStack:
-            self.clineHV()
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        # typed 'x,y' arrives as a point via _take_pt (Doug's
+        # report: the coords went to xyPtStack and were ignored)
+        p = self._take_pt(args)
+        if p is None:
+            return
+        wp.cline_gen(wpm.angled_cline(p, 0))
+        wp.cline_gen(wpm.angled_cline(p, 90))
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Pick a pt or enter coords x,y" + self._ADVICE)
+
+    # ---- Construction line by 2 points (pyurcad cl2p) ----
 
     def cline2Pts(self):
-        """Construction line through two points"""
-        if len(self.win.xyPtStack) == 2:
-            wp = self.win.activeWp
-            p2 = self.win.xyPtStack.pop()
-            p1 = self.win.xyPtStack.pop()
-            wp.acl(p1, p2)
-            self.win.xyPtStack = []
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.cline2PtsC)
-            self.display.SetSelectionModeVertex()
-            self.win.xyPtStack = []
-            self.win.clearLEStack()
-            self.win.lineEdit.setFocus()
-            statusText = "Select 2 points for Construction Line."
-            self.win.statusBar().showMessage(statusText)
+        self.win.registerCallback(self.cline2PtsC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.cline2PtsC,
+                            self._cl2p_preview_builder, style="constr")
+        self.win.statusBar().showMessage(
+            "Pick 1st point or enter coords" + self._ADVICE)
+
+    def _cl2p_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 1:
+            return None
+        import workplane as wpm
+        p0 = self.win.xyPtStack[0]
+        try:
+            return self._cline_edge(
+                wp, wpm.angled_cline(p0, wpm.p2p_angle(p0, uv)))
+        except Exception:
+            return None
 
     def cline2PtsC(self, shapeList, *args):
-        """Callback (collector) for cline2Pts"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        if self.win.lineEditStack:
-            self.processLineEdit()
-        if len(self.win.xyPtStack) == 2:
-            self.cline2Pts()
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        p = self._take_pt(args)
+        if p is None:
+            return
+        self.win.xyPtStack.append(p)
+        if len(self.win.xyPtStack) == 1:
+            self.win.statusBar().showMessage(
+                "Pick 2nd point or enter coords" + self._ADVICE)
+            return
+        p1 = self.win.xyPtStack.pop()
+        p0 = self.win.xyPtStack.pop()
+        wp.cline_gen(wpm.cnvrt_2pts_to_coef(p0, p1))
+        self._preview_stop()
+        self._preview_start(self.cline2PtsC,
+                            self._cl2p_preview_builder, style="constr")
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Pick 1st point or enter coords" + self._ADVICE)
+
+    # ---- Angled construction line (pyurcad acl) ----
 
     def clineAng(self):
-        """Construction line through a point and at an angle"""
-        if self.win.xyPtStack and self.win.floatStack:
-            wp = self.win.activeWp
-            text = self.win.floatStack.pop()
-            angle = float(text)
-            pnt = self.win.xyPtStack.pop()
-            wp.acl(pnt, ang=angle)
-            self.win.xyPtStack = []
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.clineAngC)
-            self.display.SetSelectionModeVertex()
-            self.win.xyPtStack = []
-            self.win.floatStack = []
-            self.win.lineEditStack = []
-            self.win.lineEdit.setFocus()
-            statusText = "Select point on WP (or enter x,y coords) then enter angle."
-            self.win.statusBar().showMessage(statusText)
+        self.win.registerCallback(self.clineAngC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.clineAngC,
+                            self._cl2p_preview_builder, style="constr")
+        self.win.statusBar().showMessage(
+            "Pick a pt for angled construction line or enter coords"
+            + self._ADVICE)
 
     def clineAngC(self, shapeList, *args):
-        """Callback (collector) for clineAng"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        self.win.lineEdit.setFocus()
-        if self.win.lineEditStack:
-            self.processLineEdit()
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        p = self._take_pt(args)
+        if p is not None:
+            self.win.xyPtStack.append(p)
+            if len(self.win.xyPtStack) == 1:
+                self.win.statusBar().showMessage(
+                    "Specify 2nd point or enter angle in degrees"
+                    + self._ADVICE)
+                return
+            p1 = self.win.xyPtStack.pop()
+            p0 = self.win.xyPtStack.pop()
+            wp.cline_gen(wpm.cnvrt_2pts_to_coef(p0, p1))
+            self._preview_stop()
+            self._preview_start(self.clineAngC,
+                                self._cl2p_preview_builder,
+                                style="constr")
+            self.win.draw_wp(self.win.activeWpUID)
+            self.win.statusBar().showMessage(
+                "Pick a pt for angled construction line or enter "
+                "coords" + self._ADVICE)
+            return
         if self.win.xyPtStack and self.win.floatStack:
-            self.clineAng()
+            p0 = self.win.xyPtStack.pop()
+            self.win.xyPtStack = []
+            ang = self.win.floatStack.pop()
+            wp.cline_gen(wpm.angled_cline(p0, ang))
+            self._preview_stop()
+            self._preview_start(self.clineAngC,
+                                self._cl2p_preview_builder,
+                                style="constr")
+            self.win.draw_wp(self.win.activeWpUID)
+            self.win.statusBar().showMessage(
+                "Pick a pt for angled construction line or enter "
+                "coords" + self._ADVICE)
+            return
+
+    # ---- Construction line by REF ANGLE (pyurcad clrefang --
+    #      previously believed absent; Doug pointed the way) ----
 
     def clineRefAng(self):
-        pass
+        self.win.registerCallback(self.clineRefAngC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self.win.statusBar().showMessage(
+            "Specify a pt for new construction line" + self._ADVICE)
 
-    def clineAngBisec(self):
-        pass
+    def clineRefAngC(self, shapeList, *args):
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if self.win.lineEditStack:
+            self.processLineEdit()
+            if (self.win.floatStack
+                    and len(self.win.xyPtStack) == 1):
+                self.win.statusBar().showMessage(
+                    "Pick first point on reference line"
+                    + self._ADVICE)
+                return
+        n = len(self.win.xyPtStack)
+        if n == 0:
+            p = self._catch_pt(args)
+            if p is None:
+                return
+            self.win.xyPtStack.append(p)
+            self.win.statusBar().showMessage(
+                "Enter offset angle in degrees")
+            return
+        if not self.win.floatStack:
+            self.win.statusBar().showMessage(
+                "Enter offset angle in degrees")
+            return
+        # reference-line points are DIRECTION picks
+        p = self._direction_pt(args, wp)
+        if p is None:
+            return
+        self.win.xyPtStack.append(p)
+        n = len(self.win.xyPtStack)
+        if n == 2:
+            self.win.statusBar().showMessage(
+                "Pick second point on reference line" + self._ADVICE)
+            return
+        p3 = self.win.xyPtStack.pop()
+        p2 = self.win.xyPtStack.pop()
+        p1 = self.win.xyPtStack.pop()
+        baseangle = wpm.p2p_angle(p2, p3)
+        angoffset = self.win.floatStack.pop()
+        wp.cline_gen(wpm.angled_cline(p1, baseangle + angoffset))
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Specify a pt for new construction line" + self._ADVICE)
+
+    # ---- Linear bisector (pyurcad lbcl) -- factor + rubber ----
 
     def clineLinBisec(self):
-        """Linear bisector between two points"""
-        if len(self.win.xyPtStack) == 2:
-            wp = self.win.activeWp
-            pnt2 = self.win.xyPtStack.pop()
-            pnt1 = self.win.xyPtStack.pop()
-            wp.lbcl(pnt1, pnt2)
-            self.win.xyPtStack = []
-            self.win.draw_wp(self.win.activeWpUID)
-        else:
-            self.win.registerCallback(self.clineLinBisecC)
-            self.display.SetSelectionModeVertex()
+        self.win.registerCallback(self.clineLinBisecC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.clineLinBisecC,
+                            self._lbcl_preview_builder, style="constr")
+        self.win.statusBar().showMessage(
+            "Enter bisector factor (Default=.5) or specify first "
+            "point" + self._ADVICE)
+
+    def _lbcl_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 1:
+            return None
+        import workplane as wpm
+        try:
+            f = (self.win.floatStack[-1]
+                 if self.win.floatStack else 0.5)
+            p1 = self.win.xyPtStack[0]
+            p0 = wpm.midpoint(p1, uv, f)
+            baseline = wpm.cnvrt_2pts_to_coef(p1, uv)
+            return self._cline_edge(wp, wpm.perp_line(baseline, p0))
+        except Exception:
+            return None
 
     def clineLinBisecC(self, shapeList, *args):
-        """Callback (collector) for clineLinBisec"""
-        if not self.add_snap_pt_to_xyPtStack(args):
-            self.add_vertex_to_xyPtStack(shapeList)
-        if len(self.win.xyPtStack) == 2:
-            self.clineLinBisec()
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        p = self._take_pt(args)
+        if p is None and self.win.floatStack \
+                and not self.win.xyPtStack:
+            self.win.statusBar().showMessage(
+                "Specify first point" + self._ADVICE)
+            return
+        if p is None:
+            return
+        self.win.xyPtStack.append(p)
+        if len(self.win.xyPtStack) == 1:
+            self.win.statusBar().showMessage(
+                "Specify second point" + self._ADVICE)
+            return
+        f = self.win.floatStack[-1] if self.win.floatStack else 0.5
+        p2 = self.win.xyPtStack.pop()
+        p1 = self.win.xyPtStack.pop()
+        p0 = wpm.midpoint(p1, p2, f)
+        baseline = wpm.cnvrt_2pts_to_coef(p1, p2)
+        wp.cline_gen(wpm.perp_line(baseline, p0))
+        self._preview_stop()
+        self._preview_start(self.clineLinBisecC,
+                            self._lbcl_preview_builder, style="constr")
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Enter bisector factor (Default=.5) or specify first "
+            "point" + self._ADVICE)
+
+    # ================= PHASE-2 TOOLS (Session 63) =================
+    # Ported from pyurcad.py with VERBATIM status messages (Doug's
+    # requirement). Input classes per the design doc: entity picks
+    # and side picks are GESTURES (raw uv resolves the entity/side);
+    # points that define geometry are CATCHES (no catch, no point).
+    # clineRefAng is RETIRED: no such tool exists in Pyurcad either
+    # (icon only) -- pending Doug's verdict.
+
+    def _nearest_straight(self, wp, uv, tol):
+        """Nearest STRAIGHT element (cline, cseg, or geometry line)
+        as (a, b, c) coefficients, or None."""
+        import math as _m
+        import workplane as wpm
+        best = [None, None]
+
+        def consider(coef, d):
+            if d <= tol and (best[1] is None or d < best[1]):
+                best[0] = coef
+                best[1] = d
+
+        for cl in wp.clines:
+            a, b, c = cl
+            den = _m.hypot(a, b)
+            if den > 1.0e-12:
+                consider(cl, abs(a * uv[0] + b * uv[1] + c) / den)
+        segs = [(s[0], s[1]) for s in wp.csegs]
+        try:
+            from snap_engine import _geom_segments_uv
+            segs += _geom_segments_uv(wp)
+        except Exception:
+            pass
+        for (p1, p2) in segs:
+            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+            l2 = dx * dx + dy * dy
+            if l2 < 1.0e-18:
+                continue
+            t = ((uv[0] - p1[0]) * dx + (uv[1] - p1[1]) * dy) / l2
+            t = max(0.0, min(1.0, t))
+            d = _m.hypot(uv[0] - (p1[0] + t * dx),
+                         uv[1] - (p1[1] + t * dy))
+            try:
+                consider(wpm.cnvrt_2pts_to_coef(p1, p2), d)
+            except Exception:
+                pass
+        return best[0]
+
+    def _nearest_circle_ent(self, wp, uv, tol):
+        """Nearest CIRCLE element (ccirc, carc, geometry circle) as
+        ((pc, r)), or None. Rim distance; carcs range-checked."""
+        import math as _m
+        best = [None, None]
+
+        def consider(circ, d):
+            if d <= tol and (best[1] is None or d < best[1]):
+                best[0] = circ
+                best[1] = d
+
+        for (pc, r) in wp.ccircs:
+            consider((pc, r),
+                     abs(_m.hypot(uv[0] - pc[0], uv[1] - pc[1]) - r))
+        try:
+            from snap_engine import _on_arc
+            for (pc, r, a0, a1) in wp.carcs:
+                dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+                if dc < 1.0e-9:
+                    continue
+                onp = (pc[0] + (uv[0] - pc[0]) * r / dc,
+                       pc[1] + (uv[1] - pc[1]) * r / dc)
+                if _on_arc(onp, pc, a0, a1):
+                    consider((pc, r), abs(dc - r))
+        except Exception:
+            pass
+        try:
+            from snap_engine import _geom_circles_uv
+            for (pc, r) in _geom_circles_uv(wp):
+                consider((pc, r),
+                         abs(_m.hypot(uv[0] - pc[0],
+                                      uv[1] - pc[1]) - r))
+        except Exception:
+            pass
+        return best[0]
+
+    def _take_pt(self, args):
+        """Uniform point intake (Session 63, Doug's H+V report):
+        typed 'x,y' coords land in xyPtStack via processLineEdit and
+        are the SAME as a clicked catch. Also fills floatStack for
+        single typed values -- callers check it when this returns
+        None."""
+        n0 = len(self.win.xyPtStack)
+        if self.win.lineEditStack:
+            self.processLineEdit()
+        if len(self.win.xyPtStack) > n0:
+            return self.win.xyPtStack.pop()
+        return self._catch_pt(args)
+
+    def _catch_pt(self, args):
+        """A CATCH-class point from a click, or None (the no-catch
+        hint is shown by the shared engine path)."""
+        n0 = len(self.win.xyPtStack)
+        self.add_snap_pt_to_xyPtStack(args)
+        if len(self.win.xyPtStack) > n0:
+            return self.win.xyPtStack.pop()
+        return None
+
+    def _direction_pt(self, args, wp):
+        """A DIRECTION pick (Session 63, Doug's abcl walkthrough:
+        'click on the base line'): raw gesture uv PROJECTED onto the
+        nearest straight element -- clicking anywhere along a line
+        yields an exact on-line point. No element nearby -> the raw
+        uv (Pyurcad's free-direction behavior)."""
+        import workplane as wpm
+        uv = self.gesture_uv_from_args(args)
+        if uv is None:
+            return None
+        hit = self._nearest_straight(wp, uv, self._snap_tol())
+        if hit is not None:
+            try:
+                return wpm.proj_pt_on_line(hit, uv)
+            except Exception:
+                pass
+        return uv
+
+    def _cline_edge(self, wp, cline):
+        """A displayable edge for a PROPOSED cline: clipped to the
+        border like every real cline."""
+        try:
+            from mainwindow import _clip_line_to_rect
+            bounds = getattr(wp, 'border_bounds', None)
+            if bounds is None:
+                return None
+            seg = _clip_line_to_rect(cline, bounds)
+            if seg is None:
+                return None
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            g1 = self._uvpnt(wp, seg[0][0], seg[0][1])
+            g2 = self._uvpnt(wp, seg[1][0], seg[1][1])
+            if g1.Distance(g2) < 1.0e-9:
+                return None
+            return BRepBuilderAPI_MakeEdge(g1, g2).Edge()
+        except Exception:
+            return None
+
+    def _snap_tol(self):
+        try:
+            from snap_engine import SNAP_PIXELS
+            return abs(self.win.canvas.view.Convert(SNAP_PIXELS))
+        except Exception:
+            return 1.0
+
+    # ---- Parallel construction line (pyurcad parcl) ----
 
     def clinePara(self):
-        pass
+        self.win.registerCallback(self.clineParaC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._parcl_baseline = None
+        self._preview_start(self.clineParaC,
+                            self._parcl_preview_builder,
+                            style="constr")
+        self.win.statusBar().showMessage(
+            "Pick a straight element or enter an offset distance")
+
+    def _parcl_preview_builder(self, wp, uv):
+        if self._parcl_baseline is None or self.win.floatStack:
+            return None  # rubber only in through-point mode
+        import workplane as wpm
+        try:
+            return self._cline_edge(
+                wp, wpm.para_line(self._parcl_baseline, uv))
+        except Exception:
+            return None
+
+    def clineParaC(self, shapeList, *args):
+        import workplane as wpm
+        if self.win.lineEditStack:
+            self.processLineEdit()
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if self._parcl_baseline is None:
+            uv = self.gesture_uv_from_args(args)
+            if uv is not None:
+                hit = self._nearest_straight(wp, uv, self._snap_tol())
+                if hit is not None:
+                    self._parcl_baseline = hit
+                    if self.win.floatStack:
+                        self.win.statusBar().showMessage(
+                            "Pick on (+) side of line")
+                    else:
+                        self.win.statusBar().showMessage(
+                            "Select point for new parallel line")
+                    return
+            if self.win.floatStack:
+                self.win.statusBar().showMessage(
+                    "Pick a straight element to be parallel to")
+            return
+        baseline = self._parcl_baseline
+        if self.win.floatStack:  # mode 1: offset + SIDE GESTURE
+            uv = self.gesture_uv_from_args(args)
+            if uv is None:
+                return
+            d = self.win.floatStack[-1] * self.win.unitscale
+            c1, c2 = wpm.para_lines(baseline, d)
+            p1 = wpm.proj_pt_on_line(c1, uv)
+            p2 = wpm.proj_pt_on_line(c2, uv)
+            chosen = c1 if wpm.p2p_dist(p1, uv) < wpm.p2p_dist(p2, uv) \
+                else c2
+            wp.cline_gen(chosen)
+            self._parcl_baseline = None
+            self._preview_stop()
+            self._preview_start(self.clineParaC,
+                                self._parcl_preview_builder,
+                                style="constr")
+            self.win.draw_wp(self.win.activeWpUID)
+            self.win.statusBar().showMessage(
+                "Parallel cline created. Pick a straight element "
+                "(same offset) or enter a new offset distance")
+        else:  # mode 2: through a CATCH point
+            p = self._catch_pt(args)
+            if p is None:
+                return
+            wp.cline_gen(wpm.para_line(baseline, p))
+            self._parcl_baseline = None
+            self._preview_stop()
+            self._preview_start(self.clineParaC,
+                                self._parcl_preview_builder,
+                                style="constr")
+            self.win.draw_wp(self.win.activeWpUID)
+            self.win.statusBar().showMessage(
+                "Pick a straight element or enter an offset distance")
+
+    # ---- Perpendicular construction line (pyurcad perpcl) ----
 
     def clinePerp(self):
-        pass
+        self.win.registerCallback(self.clinePerpC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._perp_baseline = None
+        self._preview_start(self.clinePerpC,
+                            self._perp_preview_builder,
+                            style="constr")
+        self.win.statusBar().showMessage(
+            "Pick line to be perpendicular to")
+
+    def _perp_preview_builder(self, wp, uv):
+        if self._perp_baseline is None:
+            return None
+        import workplane as wpm
+        try:
+            return self._cline_edge(
+                wp, wpm.perp_line(self._perp_baseline, uv))
+        except Exception:
+            return None
+
+    def clinePerpC(self, shapeList, *args):
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if self._perp_baseline is None:
+            uv = self.gesture_uv_from_args(args)
+            if uv is None:
+                return
+            hit = self._nearest_straight(wp, uv, self._snap_tol())
+            if hit is not None:
+                self._perp_baseline = hit
+                self.win.statusBar().showMessage(
+                    "Select point for perpendicular construction")
+            return
+        p = self._catch_pt(args)
+        if p is None:
+            return
+        wp.cline_gen(wpm.perp_line(self._perp_baseline, p))
+        self._perp_baseline = None
+        self._preview_stop()
+        self._preview_start(self.clinePerpC,
+                            self._perp_preview_builder,
+                            style="constr")
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Pick line to be perpendicular to")
+
+    # ---- Angular bisector (pyurcad abcl) ----
+
+    def clineAngBisec(self):
+        self.win.registerCallback(self.clineAngBisecC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._preview_start(self.clineAngBisecC,
+                            self._abcl_preview_builder, style="constr")
+        self.win.statusBar().showMessage(
+            "Enter bisector factor (Default=.5) or specify vertex")
+
+    def _abcl_preview_builder(self, wp, uv):
+        if len(self.win.xyPtStack) != 2:
+            return None
+        import workplane as wpm
+        try:
+            f = (self.win.floatStack[-1]
+                 if self.win.floatStack else 0.5)
+            p0, p1 = self.win.xyPtStack[0], self.win.xyPtStack[1]
+            return self._cline_edge(
+                wp, wpm.ang_bisector(p0, p1, uv, f))
+        except Exception:
+            return None
+
+    def clineAngBisecC(self, shapeList, *args):
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        n = len(self.win.xyPtStack)
+        if n == 0:
+            # the VERTEX is a precision point -> CATCH (typed
+            # coords accepted too)
+            p = self._take_pt(args)
+            if p is None:
+                if (self.win.floatStack
+                        and not self.win.xyPtStack):
+                    self.win.statusBar().showMessage(
+                        "Specify vertex point" + self._ADVICE)
+                return
+            self.win.xyPtStack.append(p)
+            self.win.statusBar().showMessage(
+                "Specify point on base line")
+            return
+        # base line and second line are DIRECTION picks (Doug's
+        # walkthrough: 'click on the base line') -- projected onto
+        # the nearest straight element
+        p = self._direction_pt(args, wp)
+        if p is None:
+            return
+        self.win.xyPtStack.append(p)
+        if len(self.win.xyPtStack) == 2:
+            self.win.statusBar().showMessage("Specify second point")
+            return
+        f = self.win.floatStack[-1] if self.win.floatStack else 0.5
+        p2 = self.win.xyPtStack.pop()
+        p1 = self.win.xyPtStack.pop()
+        p0 = self.win.xyPtStack.pop()
+        wp.cline_gen(wpm.ang_bisector(p0, p1, p2, f))
+        self._preview_stop()
+        self._preview_start(self.clineAngBisecC,
+                            self._abcl_preview_builder, style="constr")
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Enter bisector factor (Default=.5) or specify vertex")
+
+    # ---- Tangent to circle (pyurcad cltan1) ----
 
     def clineTan1(self):
-        pass
+        self.win.registerCallback(self.clineTan1C)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._tan1_circ = None
+        self.win.statusBar().showMessage("Pick circle")
+
+    def clineTan1C(self, shapeList, *args):
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if self._tan1_circ is None:
+            uv = self.gesture_uv_from_args(args)
+            if uv is None:
+                return
+            circ = self._nearest_circle_ent(wp, uv, self._snap_tol())
+            if circ is not None:
+                self._tan1_circ = circ
+                self.win.statusBar().showMessage("specify point")
+            return
+        p = self._catch_pt(args)
+        if p is None:
+            return
+        try:
+            p1, p2 = wpm.line_tan_to_circ(self._tan1_circ, p)
+            wp.cline_gen(wpm.cnvrt_2pts_to_coef(p1, p))
+            wp.cline_gen(wpm.cnvrt_2pts_to_coef(p2, p))
+        except Exception:
+            self.win.statusBar().showMessage(
+                "Point is inside the circle -- pick outside.", 4000)
+            return
+        self._tan1_circ = None
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage("Pick circle")
+
+    # ---- Tangent to 2 circles (pyurcad cltan2) ----
 
     def clineTan2(self):
-        pass
+        self.win.registerCallback(self.clineTan2C)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._tan2_circs = []
+        self.win.statusBar().showMessage("Pick first circle")
+
+    def clineTan2C(self, shapeList, *args):
+        import workplane as wpm
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        uv = self.gesture_uv_from_args(args)
+        if uv is None:
+            return
+        circ = self._nearest_circle_ent(wp, uv, self._snap_tol())
+        if circ is None:
+            return
+        self._tan2_circs.append(circ)
+        if len(self._tan2_circs) == 1:
+            self.win.statusBar().showMessage("Pick 2nd circle")
+            return
+        c2 = self._tan2_circs.pop()
+        c1 = self._tan2_circs.pop()
+        try:
+            p1, p2 = wpm.line_tan_to_2circs(c1, c2)
+            wp.cline_gen(wpm.cnvrt_2pts_to_coef(p1, p2))
+        except Exception:
+            self.win.statusBar().showMessage(
+                "Tangent construction failed for those circles.",
+                4000)
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage("Pick first circle")
+
+    # ---- Concentric construction circle (pyurcad cccirc) ----
+
+    def cccirc(self):
+        self.win.registerCallback(self.cccircC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self._ccc_circ = None
+        self._preview_start(self.cccircC,
+                            self._ccc_preview_builder,
+                            style="constr")
+        self.win.statusBar().showMessage("Select existing circle")
+
+    def _ccc_preview_builder(self, wp, uv):
+        if self._ccc_circ is None:
+            return None
+        import workplane as wpm
+        pc, _r0 = self._ccc_circ
+        r = wpm.p2p_dist(pc, uv)
+        if r < 1.0e-6:
+            return None
+        from OCP.gp import gp_Circ, gp_Ax2
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        center = self._uvpnt(wp, pc[0], pc[1])
+        return BRepBuilderAPI_MakeEdge(
+            gp_Circ(gp_Ax2(center, wp.wDir), r)).Edge()
+
+    def cccircC(self, shapeList, *args):
+        import workplane as wpm
+        if self.win.lineEditStack:
+            self.processLineEdit()
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if self._ccc_circ is None:
+            uv = self.gesture_uv_from_args(args)
+            if uv is not None:
+                circ = self._nearest_circle_ent(wp, uv,
+                                                self._snap_tol())
+                if circ is not None:
+                    self._ccc_circ = circ
+                    self.win.statusBar().showMessage(
+                        "Enter relative radius or specify point on "
+                        "new circle")
+            return
+        pc, r0 = self._ccc_circ
+        r = None
+        if self.win.floatStack:
+            r = r0 + self.win.floatStack.pop() * self.win.unitscale
+        else:
+            p = self._catch_pt(args)
+            if p is not None:
+                r = wpm.p2p_dist(pc, p)
+        if r is None:
+            return
+        if r <= 1.0e-6:
+            self.win.statusBar().showMessage(
+                "Resulting radius is not positive.", 4000)
+            return
+        wp.circle((pc[0], pc[1]), r, constr=True)
+        self._ccc_circ = None
+        self._preview_stop()
+        self._preview_start(self.cccircC,
+                            self._ccc_preview_builder,
+                            style="constr")
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage("Select existing circle")
+
+    # ---- Slot (pyurcad slot) ----
+
+    def slot(self):
+        self.win.registerCallback(self.slotC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self.win.statusBar().showMessage(
+            "Specify first point for slot")
+
+    def slotC(self, shapeList, *args):
+        import workplane as wpm
+        if self.win.lineEditStack:
+            self.processLineEdit()
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        if len(self.win.xyPtStack) < 2:
+            p = self._catch_pt(args)
+            if p is None:
+                return
+            self.win.xyPtStack.append(p)
+            if len(self.win.xyPtStack) == 1:
+                self.win.statusBar().showMessage(
+                    "Specify second point for slot")
+            else:
+                self.win.statusBar().showMessage("Enter slot width")
+            return
+        if not self.win.floatStack:
+            self.win.statusBar().showMessage("Enter slot width")
+            return
+        p2 = self.win.xyPtStack.pop()
+        p1 = self.win.xyPtStack.pop()
+        w = self.win.floatStack.pop() * self.win.unitscale
+        baseline = wpm.cnvrt_2pts_to_coef(p1, p2)
+        crossline1 = wpm.perp_line(baseline, p1)
+        crossline2 = wpm.perp_line(baseline, p2)
+        paraline1, paraline2 = wpm.para_lines(baseline, w / 2.0)
+        p1a = wpm.intersection(paraline1, crossline1)
+        p1b = wpm.intersection(paraline2, crossline1)
+        p1e = wpm.extendline(p2, p1, w / 2.0)
+        p2a = wpm.intersection(paraline1, crossline2)
+        p2b = wpm.intersection(paraline2, crossline2)
+        p2e = wpm.extendline(p1, p2, w / 2.0)
+        wp.arc3p(p1a, p1e, p1b)
+        wp.arc3p(p2a, p2e, p2b)
+        wp.line(p1a, p2a)
+        wp.line(p1b, p2b)
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Specify first point for slot")
+
+    # ---- 2D Fillet (pyurcad fillet) ----
+
+    def fillet2d(self):
+        self.win.registerCallback(self.fillet2dC)
+        self.win.lineEdit.setFocus()
+        self.win.xyPtStack = []
+        self.win.statusBar().showMessage("Enter radius for fillet")
+
+    def fillet2dC(self, shapeList, *args):
+        import math as _m
+        import workplane as wpm
+        if self.win.lineEditStack:
+            self.processLineEdit()
+            if self.win.floatStack:
+                self.win.statusBar().showMessage(
+                    "Pick corner to apply fillet")
+            return
+        if not self.win.floatStack:
+            self.win.statusBar().showMessage(
+                "Enter radius for fillet")
+            return
+        wp = self.win.activeWp
+        if wp is None:
+            return
+        # The corner is a CATCH on the shared endpoint of 2 lines
+        p = self._catch_pt(args)
+        if p is None:
+            return
+        # find the two geometry LINE edges meeting at that point
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_CurveType
+        from snap_engine import _elslib
+        hits = []
+        for edge in list(wp.edgeList):
+            try:
+                crv = BRepAdaptor_Curve(edge)
+                if crv.GetType() != GeomAbs_CurveType.GeomAbs_Line:
+                    continue
+                q1 = _elslib("Parameters")(
+                    wp.gpPlane, crv.Value(crv.FirstParameter()))
+                q2 = _elslib("Parameters")(
+                    wp.gpPlane, crv.Value(crv.LastParameter()))
+                for qa, qb in ((q1, q2), (q2, q1)):
+                    if (abs(qa[0] - p[0]) < 1.0e-4
+                            and abs(qa[1] - p[1]) < 1.0e-4):
+                        hits.append((edge, qb))
+                        break
+            except Exception:
+                continue
+        if len(hits) != 2:
+            self.win.statusBar().showMessage(
+                "Pick the corner point where exactly 2 lines meet.",
+                4000)
+            return
+        rw = self.win.floatStack[-1] * self.win.unitscale
+        cp = p
+        ep1 = hits[0][1]
+        ep2 = hits[1][1]
+        try:
+            ctr, tp1, tp2 = wpm.find_fillet_pts(rw, cp, ep1, ep2)
+        except Exception:
+            self.win.statusBar().showMessage(
+                "Fillet radius too large for that corner.", 4000)
+            return
+        for edge, _q in hits:
+            matching = next(
+                (e for e in wp.edgeList if e.IsSame(edge)), None)
+            if matching is not None:
+                wp.edgeList.remove(matching)
+        wp.line(ep1, tp1)
+        wp.line(ep2, tp2)
+        a1 = _m.atan2(tp1[1] - ctr[1], tp1[0] - ctr[0])
+        a2 = _m.atan2(tp2[1] - ctr[1], tp2[0] - ctr[0])
+        if (a2 - a1) > _m.pi or -_m.pi < (a2 - a1) < 0:
+            tp1, tp2 = tp2, tp1
+            a1, a2 = a2, a1
+        amid = a1 + ((a2 - a1) % (2.0 * _m.pi)) / 2.0
+        rad = wpm.p2p_dist(ctr, tp1)
+        pm = (ctr[0] + rad * _m.cos(amid), ctr[1] + rad * _m.sin(amid))
+        wp.arc3p(tp1, pm, tp2)
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            "Fillet applied. Pick another corner (same radius) or "
+            "End Operation.")
 
     def ccirc(self):
         """Create a c-circle from center & radius or center & Pnt on circle"""
@@ -672,11 +1416,12 @@ class M2D:
         preview shows the circle through the first two picks and the
         live cursor."""
         self.win.registerCallback(self.cc3pC)
+        self.win.lineEdit.setFocus()
         self.display.SetSelectionModeVertex()
         self.win.xyPtStack = []
         self._preview_start(self.cc3pC, self._cc3p_preview_builder)
         self.win.statusBar().showMessage(
-            "Pick 3 points on the construction circle.")
+            "Pick first point on circle")
 
     def cc3pC(self, shapeList, *args):
         n_before = len(self.win.xyPtStack)
@@ -686,9 +1431,13 @@ class M2D:
         n = len(self.win.xyPtStack)
         if n == n_before:
             return
-        if n < 3:
+        if n == 1:
             self.win.statusBar().showMessage(
-                f"Point {n} set. Pick point {n + 1}.")
+                "Pick second point on circle")
+            return
+        if n == 2:
+            self.win.statusBar().showMessage(
+                "Pick third point on circle")
             return
         p3 = self.win.xyPtStack.pop()
         p2 = self.win.xyPtStack.pop()
@@ -734,6 +1483,7 @@ class M2D:
         segments -- each pick continues from the previous point;
         middle-click ends the chain."""
         self.win.registerCallback(self.polyC)
+        self.win.lineEdit.setFocus()
         self.display.SetSelectionModeVertex()
         self.win.xyPtStack = []
         self._poly_prev = None
@@ -978,9 +1728,19 @@ class M2D:
     # generalized when Doug asked for rectangle rubber lines -- now
     # arc, line, rect, and circle all ride the same few lines.
 
-    def _preview_start(self, owner_cb, builder):
+    def _preview_start(self, owner_cb, builder, style="geom"):
+        self._preview_stop()  # single registration, always (Session
+        # 63: starting tool B while tool A's preview awaited its lazy
+        # cleanup left DUPLICATE move callbacks -- the root of the
+        # 'NoneType is not callable' crash)
+        # style 'geom': BRIGHT YELLOW solid (geometry rubber).
+        # style 'constr': DASHED MAGENTA, indistinguishable from a
+        # final cline (Session 63, Doug: construction rubber
+        # previews exactly what will exist -- yellow is for
+        # geometry rubber ONLY).
         self._prev_owner = owner_cb
         self._prev_builder = builder
+        self._prev_style = style
         self._prev_ais = None
         try:
             self.win.canvas.register_move_callback(self._preview_move)
@@ -1008,6 +1768,10 @@ class M2D:
 
     def _preview_move(self, x, y):
         try:
+            if (getattr(self, "_prev_builder", None) is None
+                    or self.win.registeredCallback is None):
+                self._preview_stop()
+                return
             if self.win.registeredCallback != getattr(self, "_prev_owner",
                                                       None):
                 self._preview_stop()
@@ -1026,8 +1790,22 @@ class M2D:
             if self._prev_ais is None:
                 from OCP.AIS import AIS_Shape
                 from OCP.Quantity import (Quantity_Color,
-                                          Quantity_TypeOfColor)
+                                          Quantity_TypeOfColor,
+                                          Quantity_NOC_MAGENTA1)
                 self._prev_ais = AIS_Shape(shape)
+                if getattr(self, "_prev_style", "geom") == "constr":
+                    try:
+                        from OCP.Prs3d import Prs3d_LineAspect
+                        from OCP.Aspect import Aspect_TypeOfLine
+                        drw = self._prev_ais.Attributes()
+                        asp = Prs3d_LineAspect(
+                            Quantity_Color(Quantity_NOC_MAGENTA1),
+                            Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
+                        drw.SetLineAspect(asp)
+                        drw.SetWireAspect(asp)
+                        self._prev_ais.SetAttributes(drw)
+                    except Exception:
+                        pass
                 context.Display(self._prev_ais, False)
                 try:
                     self.win.canvas._display.add_never_pick(
@@ -1035,11 +1813,19 @@ class M2D:
                 except Exception:
                     pass
                 try:
-                    context.SetColor(
-                        self._prev_ais,
-                        Quantity_Color(1.0, 0.55, 0.0,
-                                       Quantity_TypeOfColor.Quantity_TOC_RGB),
-                        False)
+                    if getattr(self, "_prev_style", "geom") == "constr":
+                        context.SetColor(
+                            self._prev_ais,
+                            Quantity_Color(Quantity_NOC_MAGENTA1),
+                            False)
+                    else:
+                        # BRIGHT YELLOW geometry rubber
+                        context.SetColor(
+                            self._prev_ais,
+                            Quantity_Color(
+                                1.0, 1.0, 0.0,
+                                Quantity_TypeOfColor.Quantity_TOC_RGB),
+                            False)
                     context.Deactivate(self._prev_ais)  # never pickable
                 except Exception:
                     pass
@@ -1130,27 +1916,103 @@ class M2D:
     #############################################
 
     def delCl(self):
-        """Delete selected 2d construction element.
-
-        Todo: Get this working. Able to pre-select lines from the display
-        as type <AIS_InteractiveObject> but haven't figured out how to get
-        the type <AIS_Line> (or the cline or Geom_Line that was used to make
-        it)."""
+        """Delete a 2D CONSTRUCTION element -- engine ENTITY PICK
+        (Session 63). The click resolves to the nearest construction
+        entity by CURVE distance (the same ranking Ctrl+Shift center
+        mode uses); no OCCT selection is involved, so this tool
+        structurally CANNOT delete geometry -- and delEl structurally
+        cannot delete construction -- which closes both c/g filter
+        items from the to-do list. (Historical note: this tool was a
+        known TODO since the original port -- AIS_Line identification
+        never worked; the engine dissolved the problem rather than
+        solving it.)"""
         self.win.registerCallback(self.delClC)
-        statusText = "Select a construction element to delete."
-        self.win.statusBar().showMessage(statusText)
-        self.display = self.win.canvas._self.display.Context
-        print(self.display.NbSelected())  # Use shift-select for multiple lines
-        selected_line = self.display.SelectedInteractive()
-        if selected_line:
-            print(type(selected_line))  # <AIS_InteractiveObject>
-            print(selected_line.GetOwner())  # <Standard_Transient>
+        self.win.lineEdit.setFocus()
+        self.win.statusBar().showMessage(
+            "Pick a construction element to delete "
+            "(middle-click to end).")
 
     def delClC(self, shapeList, *args):
-        """Callback (collector) for delCl"""
-        print(shapeList)
-        print(args)
-        self.delCl()
+        """Callback (collector) for delCl -- entity pick by click."""
+        uv = self.gesture_uv_from_args(args)
+        wp = self.win.activeWp
+        if uv is None or wp is None:
+            return
+        try:
+            from snap_engine import SNAP_PIXELS
+            tol = abs(self.win.canvas.view.Convert(SNAP_PIXELS))
+        except Exception:
+            tol = 1.0
+        hit = self._nearest_constr_entity(wp, uv, tol)
+        if hit is None:
+            self.win.statusBar().showMessage(
+                "No construction element there -- pick closer "
+                "(middle-click to end).", 3000)
+            return
+        kind, key = hit
+        try:
+            if kind == "cline":
+                wp.clines.discard(key)
+            elif kind == "ccirc":
+                wp.ccircs.discard(key)
+            elif kind == "carc":
+                wp.carcs.remove(key)
+            elif kind == "cseg":
+                wp.csegs.remove(key)
+        except (KeyError, ValueError):
+            pass
+        self.win.draw_wp(self.win.activeWpUID)
+        self.win.statusBar().showMessage(
+            f"Construction {kind} deleted. Pick another "
+            "(middle-click to end).")
+
+    def _nearest_constr_entity(self, wp, uv, tol):
+        """Nearest construction entity to uv by curve distance.
+        Returns (kind, key) or None."""
+        import math as _m
+        best = [None, None]
+
+        def consider(kind, key, d):
+            if d <= tol and (best[1] is None or d < best[1]):
+                best[0] = (kind, key)
+                best[1] = d
+
+        for cl in wp.clines:
+            a, b, c = cl
+            den = _m.hypot(a, b)
+            if den < 1.0e-12:
+                continue
+            consider("cline", cl,
+                     abs(a * uv[0] + b * uv[1] + c) / den)
+        for cs in wp.csegs:
+            (x1, y1), (x2, y2) = cs
+            dx, dy = x2 - x1, y2 - y1
+            l2 = dx * dx + dy * dy
+            if l2 < 1.0e-18:
+                continue
+            t = ((uv[0] - x1) * dx + (uv[1] - y1) * dy) / l2
+            t = max(0.0, min(1.0, t))
+            consider("cseg", cs,
+                     _m.hypot(uv[0] - (x1 + t * dx),
+                              uv[1] - (y1 + t * dy)))
+        for cc in wp.ccircs:
+            pc, r = cc
+            consider("ccirc", cc,
+                     abs(_m.hypot(uv[0] - pc[0], uv[1] - pc[1]) - r))
+        try:
+            from snap_engine import _on_arc
+        except Exception:
+            _on_arc = None
+        for ca in wp.carcs:
+            pc, r, a0, a1 = ca
+            dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+            if dc < 1.0e-9:
+                continue
+            onp = (pc[0] + (uv[0] - pc[0]) * r / dc,
+                   pc[1] + (uv[1] - pc[1]) * r / dc)
+            if _on_arc is None or _on_arc(onp, pc, a0, a1):
+                consider("carc", ca, abs(dc - r))
+        return best[0]
 
     def delEl(self):
         """Delete selected geometry profile element."""
