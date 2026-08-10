@@ -4488,3 +4488,23 @@ Confirmed working meanwhile: H/V typed values, angular bisector end-to-end, line
 ### Lesson for future development
 
 **When a display object no longer has a selection consumer, deactivate it -- leftover selectability is not neutral** -- the construction lines' pickability was harmless while delCl needed it and became a visual saboteur the day it didn't; the vanishing-line mystery was selection feedback with nobody listening. Input unification's lesson is older still: two entry paths for 'a point' (typed vs clicked) must converge into ONE intake or every collector re-implements half of it wrong.
+
+## Session 63 (cont'd): the two niggles -- focus follows every pick; the pick-marker answers 'will this click work?'
+
+1. **Focus**: subsequent-step typed values required 'waking' the lineEdit by clicking it (Doug's Angled-cline example: point first, then the angle). Fix at the shared intake: every successful catch hands focus to the lineEdit -- one line, every tool inherits.
+2. **Pre-click affordance for entity/direction picks** (Doug's design question, answered with the app's own vocabulary): the CATCH SQUARE now appears ON the candidate entity while awaiting an entity/direction pick, at the exact point the click would resolve to -- sliding along the line, riding the circle rim -- and VALIDITY-FILTERED: in the angular bisector, only lines passing through the chosen vertex earn a square; clutter lines earn nothing. The complete interaction grammar is two symbols: SQUARE = a point will be taken here; MAGENTA RUBBER = the result will look like this. Wired everywhere the pattern applies: abcl (with through-vertex validation), parcl (baseline await -- and a bonus: in offset mode the SIDE-RESOLVED proposal shows as rubber, answering the '(+) side' question before the click), perpcl, cltan1/cltan2 (rim markers), cccirc, clrefang (both reference picks), and delCl (the square marks the doomed entity). Mechanism: preview builders may return (shape, style) -- the marker rides the existing preview machinery with a style switch, no new display plumbing.
+
+### Lesson for future development
+
+**The best affordance is the one the user already knows** -- the catch square's meaning ('your click lands here') needed zero explanation when extended to entity picks; a new glyph or highlight scheme would have needed teaching AND theming. Doug's instinct to fear complexity was the right instinct pointed at the right risk -- the answer was spending existing vocabulary, not minting more.
+
+## Session 63 (cont'd): the glyph goes away, and line 2 gets marker + EXACT rubber together
+
+Doug's precision review of the marker behavior, both points landed:
+
+1. **Stale glyph**: the preview mechanism was built for rubber (which always has a shape once armed) and simply returned on builder-None, leaving the last marker frozen when the cursor left catch distance. The mechanism now ERASES on empty results -- the glyph vanishes the moment no valid candidate is under the cursor.
+2. **The 2nd bisector line shows the marker AND the proposal snaps exact**: the preview mechanism now accepts a LIST of (shape, style) pairs -- multiple shapes in multiple styles at once, reusing AIS objects when the shape count and styles are stable (no flicker) and rebuilding on transitions. The abcl builder's 2nd-line step resolves the candidate under the cursor with the SAME through-vertex validator as step 1; when valid, it returns the yellow marker at the projected point PLUS the magenta proposal computed FROM that projected point -- the rubber snaps from 'approximately right' to exactly the bisector that will be created. The commit path uses the identical validator and projection (_direction_pt gained a validator parameter), so reassurance and result cannot disagree.
+
+### Lesson for future development
+
+**A preview must be computed from the same inputs as the commit, or it is a rumor** -- the 'approximately right' rubber used raw cursor uv while the commit would project; unifying candidate resolution, validation, and projection between glyph, rubber, and commit is what turns reassurance into a guarantee. And display mechanisms sized for their first customer (single always-present rubber) need revisiting when the second customer (intermittent markers) has a different lifecycle -- erase-on-absent was not optional.

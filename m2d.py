@@ -632,8 +632,16 @@ class M2D:
         self.win.registerCallback(self.clineRefAngC)
         self.win.lineEdit.setFocus()
         self.win.xyPtStack = []
+        self._preview_start(self.clineRefAngC,
+                            self._refang_preview_builder)
         self.win.statusBar().showMessage(
             "Specify a pt for new construction line" + self._ADVICE)
+
+    def _refang_preview_builder(self, wp, uv):
+        if (len(self.win.xyPtStack) >= 1
+                and self.win.floatStack):
+            return self._marker_straight(wp, uv)
+        return None
 
     def clineRefAngC(self, shapeList, *args):
         import workplane as wpm
@@ -821,6 +829,67 @@ class M2D:
             pass
         return best[0]
 
+    def _pick_marker(self, wp, pt):
+        """The catch-square glyph at an arbitrary wp point -- shown
+        while awaiting an ENTITY/DIRECTION pick, ON the candidate,
+        at the exact point the click would resolve to (Session 63,
+        Doug's 'reassurance in advance' question). Square = a point
+        will be taken; magenta rubber = the result will look like
+        this."""
+        try:
+            from snap_engine import SNAP_PIXELS
+            half = abs(self.win.canvas.view.Convert(
+                SNAP_PIXELS)) * 0.5
+            from OCP.BRep import BRep_Builder
+            from OCP.TopoDS import TopoDS_Compound
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            builder = BRep_Builder()
+            comp = TopoDS_Compound()
+            builder.MakeCompound(comp)
+            u, v = pt
+            corners = [(u - half, v - half), (u + half, v - half),
+                       (u + half, v + half), (u - half, v + half)]
+            for i in range(4):
+                g1 = self._uvpnt(wp, *corners[i])
+                g2 = self._uvpnt(wp, *corners[(i + 1) % 4])
+                builder.Add(comp,
+                            BRepBuilderAPI_MakeEdge(g1, g2).Edge())
+            return comp
+        except Exception:
+            return None
+
+    def _marker_straight(self, wp, uv, validator=None):
+        """Marker on the nearest valid STRAIGHT element, at the
+        projected pick point; None if no valid candidate."""
+        import workplane as wpm
+        hit = self._nearest_straight(wp, uv, self._snap_tol())
+        if hit is None:
+            return None
+        if validator is not None and not validator(hit):
+            return None
+        try:
+            p = wpm.proj_pt_on_line(hit, uv)
+        except Exception:
+            return None
+        mk = self._pick_marker(wp, p)
+        return (mk, "geom") if mk is not None else None
+
+    def _marker_circle(self, wp, uv):
+        """Marker on the nearest circle element, at the rim point
+        nearest the cursor."""
+        import math as _m
+        circ = self._nearest_circle_ent(wp, uv, self._snap_tol())
+        if circ is None:
+            return None
+        pc, r = circ
+        dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+        if dc < 1.0e-9:
+            return None
+        p = (pc[0] + (uv[0] - pc[0]) * r / dc,
+             pc[1] + (uv[1] - pc[1]) * r / dc)
+        mk = self._pick_marker(wp, p)
+        return (mk, "geom") if mk is not None else None
+
     def _take_pt(self, args):
         """Uniform point intake (Session 63, Doug's H+V report):
         typed 'x,y' coords land in xyPtStack via processLineEdit and
@@ -840,20 +909,29 @@ class M2D:
         n0 = len(self.win.xyPtStack)
         self.add_snap_pt_to_xyPtStack(args)
         if len(self.win.xyPtStack) > n0:
+            # a pick succeeded -- hand focus to the lineEdit so a
+            # typed value can follow immediately (Session 63, Doug:
+            # subsequent-step values required waking the widget)
+            self.win.lineEdit.setFocus()
             return self.win.xyPtStack.pop()
         return None
 
-    def _direction_pt(self, args, wp):
+    def _direction_pt(self, args, wp, validator=None):
         """A DIRECTION pick (Session 63, Doug's abcl walkthrough:
         'click on the base line'): raw gesture uv PROJECTED onto the
         nearest straight element -- clicking anywhere along a line
         yields an exact on-line point. No element nearby -> the raw
-        uv (Pyurcad's free-direction behavior)."""
+        uv (Pyurcad's free-direction behavior). The validator (when
+        given) must match the glyph's: commit and reassurance are
+        computed from the SAME rules."""
         import workplane as wpm
         uv = self.gesture_uv_from_args(args)
         if uv is None:
             return None
         hit = self._nearest_straight(wp, uv, self._snap_tol())
+        if hit is not None and validator is not None \
+                and not validator(hit):
+            hit = None
         if hit is not None:
             try:
                 return wpm.proj_pt_on_line(hit, uv)
@@ -902,10 +980,20 @@ class M2D:
             "Pick a straight element or enter an offset distance")
 
     def _parcl_preview_builder(self, wp, uv):
-        if self._parcl_baseline is None or self.win.floatStack:
-            return None  # rubber only in through-point mode
         import workplane as wpm
+        if self._parcl_baseline is None:
+            return self._marker_straight(wp, uv)
         try:
+            if self.win.floatStack:
+                # offset mode: show the SIDE-RESOLVED proposal --
+                # the '(+) side' question answered before the click
+                d = self.win.floatStack[-1] * self.win.unitscale
+                c1, c2 = wpm.para_lines(self._parcl_baseline, d)
+                p1 = wpm.proj_pt_on_line(c1, uv)
+                p2 = wpm.proj_pt_on_line(c2, uv)
+                chosen = c1 if (wpm.p2p_dist(p1, uv)
+                                < wpm.p2p_dist(p2, uv)) else c2
+                return self._cline_edge(wp, chosen)
             return self._cline_edge(
                 wp, wpm.para_line(self._parcl_baseline, uv))
         except Exception:
@@ -985,7 +1073,7 @@ class M2D:
 
     def _perp_preview_builder(self, wp, uv):
         if self._perp_baseline is None:
-            return None
+            return self._marker_straight(wp, uv)
         import workplane as wpm
         try:
             return self._cline_edge(
@@ -1032,14 +1120,54 @@ class M2D:
         self.win.statusBar().showMessage(
             "Enter bisector factor (Default=.5) or specify vertex")
 
-    def _abcl_preview_builder(self, wp, uv):
-        if len(self.win.xyPtStack) != 2:
+    def _abcl_through_vertex(self):
+        """Validator: line passes through the chosen vertex."""
+        import math as _m
+        if not self.win.xyPtStack:
             return None
+        vx, vy = self.win.xyPtStack[0]
+        tol = self._snap_tol()
+
+        def _ok(coef):
+            a, b, c = coef
+            den = _m.hypot(a, b)
+            return (den > 1.0e-12
+                    and abs(a * vx + b * vy + c) / den < tol)
+        return _ok
+
+    def _abcl_preview_builder(self, wp, uv):
         import workplane as wpm
+        n = len(self.win.xyPtStack)
+        if n == 1:
+            # awaiting the base line: marker ONLY on lines passing
+            # through the chosen vertex (clutter lines earn no
+            # square)
+            return self._marker_straight(
+                wp, uv, self._abcl_through_vertex())
+        if n != 2:
+            return None
         try:
             f = (self.win.floatStack[-1]
                  if self.win.floatStack else 0.5)
             p0, p1 = self.win.xyPtStack[0], self.win.xyPtStack[1]
+            # 2nd line: when a VALID candidate is under the cursor,
+            # the proposal is computed from the PROJECTED point --
+            # marker + EXACT rubber together (Doug: without the
+            # glyph, the rubber was 'only approximately' right)
+            validator = self._abcl_through_vertex()
+            hit = self._nearest_straight(wp, uv, self._snap_tol())
+            if (hit is not None and validator is not None
+                    and validator(hit)):
+                p2 = wpm.proj_pt_on_line(hit, uv)
+                mk = self._pick_marker(wp, p2)
+                rubber = self._cline_edge(
+                    wp, wpm.ang_bisector(p0, p1, p2, f))
+                pairs = []
+                if mk is not None:
+                    pairs.append((mk, "geom"))
+                if rubber is not None:
+                    pairs.append((rubber, "constr"))
+                return pairs
             return self._cline_edge(
                 wp, wpm.ang_bisector(p0, p1, uv, f))
         except Exception:
@@ -1067,8 +1195,10 @@ class M2D:
             return
         # base line and second line are DIRECTION picks (Doug's
         # walkthrough: 'click on the base line') -- projected onto
-        # the nearest straight element
-        p = self._direction_pt(args, wp)
+        # the nearest straight element, with the SAME through-vertex
+        # validation the glyph shows
+        p = self._direction_pt(args, wp,
+                               validator=self._abcl_through_vertex())
         if p is None:
             return
         self.win.xyPtStack.append(p)
@@ -1094,7 +1224,14 @@ class M2D:
         self.win.lineEdit.setFocus()
         self.win.xyPtStack = []
         self._tan1_circ = None
+        self._preview_start(self.clineTan1C,
+                            self._tan1_preview_builder)
         self.win.statusBar().showMessage("Pick circle")
+
+    def _tan1_preview_builder(self, wp, uv):
+        if self._tan1_circ is None:
+            return self._marker_circle(wp, uv)
+        return None
 
     def clineTan1C(self, shapeList, *args):
         import workplane as wpm
@@ -1132,7 +1269,14 @@ class M2D:
         self.win.lineEdit.setFocus()
         self.win.xyPtStack = []
         self._tan2_circs = []
+        self._preview_start(self.clineTan2C,
+                            self._tan2_preview_builder)
         self.win.statusBar().showMessage("Pick first circle")
+
+    def _tan2_preview_builder(self, wp, uv):
+        if len(self._tan2_circs) < 2:
+            return self._marker_circle(wp, uv)
+        return None
 
     def clineTan2C(self, shapeList, *args):
         import workplane as wpm
@@ -1175,7 +1319,7 @@ class M2D:
 
     def _ccc_preview_builder(self, wp, uv):
         if self._ccc_circ is None:
-            return None
+            return self._marker_circle(wp, uv)
         import workplane as wpm
         pc, _r0 = self._ccc_circ
         r = wpm.p2p_dist(pc, uv)
@@ -1752,17 +1896,12 @@ class M2D:
             self.win.canvas.unregister_move_callback(self._preview_move)
         except Exception:
             pass
-        ais = getattr(self, "_prev_ais", None)
-        if ais is not None:
-            try:
-                self.display.Context.Erase(ais, True)
-            except Exception:
-                pass
-            try:
-                self.win.canvas._display.remove_never_pick(ais)
-            except Exception:
-                pass
-        self._prev_ais = None
+        try:
+            self._preview_erase_shapes()
+            self.display.Context.UpdateCurrentViewer()
+        except Exception:
+            pass
+        self._prev_ais = None  # legacy field, kept harmless
         self._prev_owner = None
         self._prev_builder = None
 
@@ -1783,61 +1922,104 @@ class M2D:
             uv = screen_to_uv(self.win.canvas.view, x, y, wp.gpPlane)
             if uv is None:
                 return
-            shape = self._prev_builder(wp, uv)
-            if shape is None:
-                return
+            result = self._prev_builder(wp, uv)
+            # Normalize: None -> [], shape -> [(shape, default)],
+            # (shape, style) -> [pair], list -> as-is. A builder may
+            # now show SEVERAL shapes in SEVERAL styles at once
+            # (Session 63, Doug: the 2nd-line pick wants BOTH the
+            # yellow marker AND the magenta proposal).
+            default_style = getattr(self, "_prev_style", "geom")
+            if result is None:
+                pairs = []
+            elif isinstance(result, list):
+                pairs = [p for p in result if p and p[0] is not None]
+            elif isinstance(result, tuple):
+                pairs = [] if result[0] is None else [result]
+            else:
+                pairs = [(result, default_style)]
             context = self.display.Context
-            if self._prev_ais is None:
+            cur = getattr(self, "_prev_ais_list", [])
+            cur_styles = [s for (_a, s) in cur]
+            new_styles = [s for (_s, s) in pairs]
+            if not pairs:
+                # cursor left every candidate: the glyph must go
+                # (Doug: 'the glyph should go away when the cursor
+                # is no longer within catch distance')
+                if cur:
+                    self._preview_erase_shapes()
+                    context.UpdateCurrentViewer()
+                return
+            if cur_styles == new_styles:
+                # same shape count & styles: reuse via SetShape
+                for (ais, _s), (shape, _s2) in zip(cur, pairs):
+                    ais.SetShape(shape)
+                    context.Redisplay(ais, False)
+            else:
+                self._preview_erase_shapes()
                 from OCP.AIS import AIS_Shape
                 from OCP.Quantity import (Quantity_Color,
                                           Quantity_TypeOfColor,
                                           Quantity_NOC_MAGENTA1)
-                self._prev_ais = AIS_Shape(shape)
-                if getattr(self, "_prev_style", "geom") == "constr":
+                new_list = []
+                for shape, style in pairs:
+                    ais = AIS_Shape(shape)
+                    if style == "constr":
+                        try:
+                            from OCP.Prs3d import Prs3d_LineAspect
+                            from OCP.Aspect import Aspect_TypeOfLine
+                            drw = ais.Attributes()
+                            asp = Prs3d_LineAspect(
+                                Quantity_Color(Quantity_NOC_MAGENTA1),
+                                Aspect_TypeOfLine.Aspect_TOL_DASH,
+                                1.0)
+                            drw.SetLineAspect(asp)
+                            drw.SetWireAspect(asp)
+                            ais.SetAttributes(drw)
+                        except Exception:
+                            pass
+                    context.Display(ais, False)
                     try:
-                        from OCP.Prs3d import Prs3d_LineAspect
-                        from OCP.Aspect import Aspect_TypeOfLine
-                        drw = self._prev_ais.Attributes()
-                        asp = Prs3d_LineAspect(
-                            Quantity_Color(Quantity_NOC_MAGENTA1),
-                            Aspect_TypeOfLine.Aspect_TOL_DASH, 1.0)
-                        drw.SetLineAspect(asp)
-                        drw.SetWireAspect(asp)
-                        self._prev_ais.SetAttributes(drw)
+                        self.win.canvas._display.add_never_pick(ais)
                     except Exception:
                         pass
-                context.Display(self._prev_ais, False)
-                try:
-                    self.win.canvas._display.add_never_pick(
-                        self._prev_ais)
-                except Exception:
-                    pass
-                try:
-                    if getattr(self, "_prev_style", "geom") == "constr":
-                        context.SetColor(
-                            self._prev_ais,
-                            Quantity_Color(Quantity_NOC_MAGENTA1),
-                            False)
-                    else:
-                        # BRIGHT YELLOW geometry rubber
-                        context.SetColor(
-                            self._prev_ais,
-                            Quantity_Color(
-                                1.0, 1.0, 0.0,
-                                Quantity_TypeOfColor.Quantity_TOC_RGB),
-                            False)
-                    context.Deactivate(self._prev_ais)  # never pickable
-                except Exception:
-                    pass
-            else:
-                self._prev_ais.SetShape(shape)
-                context.Redisplay(self._prev_ais, False)
+                    try:
+                        if style == "constr":
+                            context.SetColor(
+                                ais,
+                                Quantity_Color(Quantity_NOC_MAGENTA1),
+                                False)
+                        else:
+                            context.SetColor(
+                                ais,
+                                Quantity_Color(
+                                    1.0, 1.0, 0.0,
+                                    Quantity_TypeOfColor
+                                    .Quantity_TOC_RGB),
+                                False)
+                        context.Deactivate(ais)
+                    except Exception:
+                        pass
+                    new_list.append((ais, style))
+                self._prev_ais_list = new_list
             context.UpdateCurrentViewer()
         except Exception as e:
             if not getattr(self, "_prev_warned", False):
                 print(f"[preview] disabled after error: {e}")
                 self._prev_warned = True
             self._preview_stop()
+
+    def _preview_erase_shapes(self):
+        context = self.display.Context
+        for ais, _style in getattr(self, "_prev_ais_list", []):
+            try:
+                context.Erase(ais, False)
+            except Exception:
+                pass
+            try:
+                self.win.canvas._display.remove_never_pick(ais)
+            except Exception:
+                pass
+        self._prev_ais_list = []
 
     # --- per-tool preview builders ---
 
@@ -1928,9 +2110,39 @@ class M2D:
         solving it.)"""
         self.win.registerCallback(self.delClC)
         self.win.lineEdit.setFocus()
+        self._preview_start(self.delClC,
+                            self._delcl_preview_builder)
         self.win.statusBar().showMessage(
             "Pick a construction element to delete "
             "(middle-click to end).")
+
+    def _delcl_preview_builder(self, wp, uv):
+        import math as _m
+        hit = self._nearest_constr_entity(wp, uv, self._snap_tol())
+        if hit is None:
+            return None
+        kind, key = hit
+        if kind == "cline":
+            import workplane as wpm
+            p = wpm.proj_pt_on_line(key, uv)
+        elif kind == "cseg":
+            (x1, y1), (x2, y2) = key
+            dx, dy = x2 - x1, y2 - y1
+            l2 = dx * dx + dy * dy
+            t = 0.0 if l2 < 1.0e-18 else max(
+                0.0, min(1.0, ((uv[0] - x1) * dx
+                               + (uv[1] - y1) * dy) / l2))
+            p = (x1 + t * dx, y1 + t * dy)
+        else:  # ccirc / carc: rim point
+            pc = key[0]
+            r = key[1]
+            dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+            if dc < 1.0e-9:
+                return None
+            p = (pc[0] + (uv[0] - pc[0]) * r / dc,
+                 pc[1] + (uv[1] - pc[1]) * r / dc)
+        mk = self._pick_marker(wp, p)
+        return (mk, "geom") if mk is not None else None
 
     def delClC(self, shapeList, *args):
         """Callback (collector) for delCl -- entity pick by click."""
