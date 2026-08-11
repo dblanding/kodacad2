@@ -203,3 +203,10 @@ two dicts.
 **OCP vs PythonOCC:** Static methods get `_s` suffix in OCP.
 `GetApplication()` → `GetApplication_s()`. See `docs/DEVELOPMENT_LOG.md`
 for the complete list of API changes.
+
+**Mouse picking has two separate pipelines** -- native OCCT 3D
+selection and the 2D sketch engine's own pixel-to-workplane math --
+that converge on one callback dispatcher. See
+[`docs/PICKING_ARCHITECTURE.md`](docs/PICKING_ARCHITECTURE.md) for
+the full picture, including a trap worth knowing about before editing
+selection-mode code.
