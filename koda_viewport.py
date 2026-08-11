@@ -117,11 +117,42 @@ class DisplayShim:
             except Exception:
                 pass
 
-    def SetSelectionModeVertex(self):   self._set_selection_mode(TopAbs_VERTEX)
-    def SetSelectionModeEdge(self):     self._set_selection_mode(TopAbs_EDGE)
-    def SetSelectionModeFace(self):     self._set_selection_mode(TopAbs_FACE)
-    def SetSelectionModeShape(self):    self._set_selection_mode(TopAbs_SHAPE)
-    def SetSelectionModeNeutral(self):  self._set_selection_mode(None)
+    def SetSelectionModeVertex(self):
+        self._set_selection_mode(TopAbs_VERTEX)
+        # ALSO activate edge selection concurrently (Session 63,
+        # Doug: Ctrl+Shift should catch the center of a circular 3D
+        # edge, same as the 2D engine's center mode). Vertex-mode
+        # tools now receive circular-edge picks too; _on_click
+        # converts them to a center vertex ONLY while Ctrl+Shift is
+        # held, and otherwise discards them so plain vertex-mode
+        # behavior is unchanged.
+        try:
+            self.Context.Activate(
+                AIS_Shape.SelectionMode_s(TopAbs_EDGE))
+        except Exception:
+            pass
+        # BUG (Doug's traceback): this flag belongs on the VIEWPORT
+        # (_on_click's own 'self') -- DisplayShim and KodaViewport
+        # are DIFFERENT objects; setting it on DisplayShim's self
+        # left _on_click blind to it and every edge pick sailed
+        # through unfiltered.
+        self._viewport._vertex_center_pick_active = True
+
+    def SetSelectionModeEdge(self):
+        self._viewport._vertex_center_pick_active = False
+        self._set_selection_mode(TopAbs_EDGE)
+
+    def SetSelectionModeFace(self):
+        self._viewport._vertex_center_pick_active = False
+        self._set_selection_mode(TopAbs_FACE)
+
+    def SetSelectionModeShape(self):
+        self._viewport._vertex_center_pick_active = False
+        self._set_selection_mode(TopAbs_SHAPE)
+
+    def SetSelectionModeNeutral(self):
+        self._viewport._vertex_center_pick_active = False
+        self._set_selection_mode(None)
 
     def register_select_callback(self, callback):
         self._select_callbacks.append(callback)
@@ -238,6 +269,9 @@ class KodaViewport(QWidget):
         context.SetDisplayMode(1, False)
         self.context = context
         self._display = DisplayShim(context, view, self)
+        self._vertex_center_pick_active = False
+        self._center_marker = None
+        self.register_move_callback(self._center_pick_hover)
 
         self._add_view_cube()
 
@@ -644,6 +678,121 @@ class KodaViewport(QWidget):
         except ValueError:
             pass
 
+    def _edge_circle_center(self, shape):
+        """gp_Pnt center if shape is a circular edge, else None.
+        Shared by the hover marker and the click resolver so both
+        agree on what counts as a valid candidate."""
+        try:
+            from OCP.TopAbs import TopAbs_ShapeEnum
+            if shape.ShapeType() != TopAbs_ShapeEnum.TopAbs_EDGE:
+                return None
+            from OCP.TopoDS import TopoDS
+            from OCP.BRepAdaptor import BRepAdaptor_Curve
+            from OCP.GeomAbs import GeomAbs_CurveType
+            edge = TopoDS.Edge_s(shape)
+            crv = BRepAdaptor_Curve(edge)
+            if crv.GetType() != GeomAbs_CurveType.GeomAbs_Circle:
+                return None
+            return crv.Circle().Location()
+        except Exception:
+            return None
+
+    def _center_pick_hover(self, x, y):
+        """Move callback (Session 63, Doug's reassurance request):
+        while vertex-center-pick mode is active AND Ctrl+Shift is
+        held AND the cursor is over a circular edge, show a CYAN
+        marker at its center -- the 3D twin of the 2D engine's
+        center-mode square. Registered once, permanently; a no-op
+        the rest of the time."""
+        if not getattr(self, "_vertex_center_pick_active", False):
+            self._show_center_marker(None)
+            return
+        try:
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt as _Qt
+            mods = QApplication.keyboardModifiers()
+            center = None
+            if (mods & _Qt.KeyboardModifier.ControlModifier
+                    and mods & _Qt.KeyboardModifier.ShiftModifier):
+                self.context.MoveTo(int(x), int(y), self.view, False)
+                if self.context.HasDetected():
+                    center = self._edge_circle_center(
+                        self.context.DetectedShape())
+            self._show_center_marker(center)
+        except Exception:
+            self._show_center_marker(None)
+
+    def _show_center_marker(self, center_pnt):
+        context = self.context
+        if center_pnt is None:
+            marker = getattr(self, "_center_marker", None)
+            if marker is not None:
+                try:
+                    context.Erase(marker, False)
+                    self._display.remove_never_pick(marker)
+                except Exception:
+                    pass
+                self._center_marker = None
+                try:
+                    context.UpdateCurrentViewer()
+                except Exception:
+                    pass
+            return
+        try:
+            from OCP.AIS import AIS_Point
+            from OCP.Geom import Geom_CartesianPoint
+            from OCP.Quantity import (Quantity_Color,
+                                      Quantity_TypeOfColor)
+            from OCP.Prs3d import Prs3d_PointAspect
+            from OCP.Aspect import Aspect_TypeOfMarker
+            cyan = Quantity_Color(
+                0.0, 0.85, 0.9,
+                Quantity_TypeOfColor.Quantity_TOC_RGB)  # matches the
+            # 2D engine's center-mode cyan exactly
+            if getattr(self, "_center_marker", None) is None:
+                pnt_ais = AIS_Point(Geom_CartesianPoint(center_pnt))
+                drawer = pnt_ais.Attributes()
+                asp = Prs3d_PointAspect(
+                    Aspect_TypeOfMarker.Aspect_TOM_PLUS, cyan, 2.5)
+                drawer.SetPointAspect(asp)
+                pnt_ais.SetAttributes(drawer)
+                context.Display(pnt_ais, False)
+                self._display.add_never_pick(pnt_ais)
+                self._center_marker = pnt_ais
+            else:
+                self._center_marker.SetComponent(
+                    Geom_CartesianPoint(center_pnt))
+                context.Redisplay(self._center_marker, False)
+            context.UpdateCurrentViewer()
+        except Exception as e:
+            if not getattr(self, "_center_marker_warned", False):
+                print(f"[center-marker] failed: {e}")
+                self._center_marker_warned = True
+
+    def _resolve_vertex_or_center(self, shape):
+        """A vertex passes through unchanged. A circular edge becomes
+        a synthesized VERTEX at its center, but ONLY while Ctrl+Shift
+        is held (mirrors the 2D engine's center-catch modifier);
+        otherwise an edge hit is a non-pick. Any other shape (or a
+        non-circular edge) is also a non-pick in vertex mode."""
+        try:
+            from OCP.TopAbs import TopAbs_ShapeEnum
+            if shape.ShapeType() == TopAbs_ShapeEnum.TopAbs_VERTEX:
+                return shape
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt as _Qt
+            mods = QApplication.keyboardModifiers()
+            if not (mods & _Qt.KeyboardModifier.ControlModifier
+                    and mods & _Qt.KeyboardModifier.ShiftModifier):
+                return None
+            center = self._edge_circle_center(shape)
+            if center is None:
+                return None
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+            return BRepBuilderAPI_MakeVertex(center).Vertex()
+        except Exception:
+            return None
+
     def _on_click(self, x=None, y=None):
         if self.context is None or self._display is None:
             return
@@ -657,6 +806,19 @@ class KodaViewport(QWidget):
         self.context.InitSelected()
         if self.context.MoreSelected():
             shape = self.context.SelectedShape()
+            # Ctrl+Shift center-of-circular-edge (Session 63, Doug:
+            # extend the 2D center-catch convention to 3D vertex
+            # picks). Vertex mode concurrently activates edges; a
+            # circular edge hit is converted to a VERTEX at its
+            # center ONLY while Ctrl+Shift is held. Without the
+            # modifier, an edge hit in vertex mode is discarded --
+            # plain vertex-only behavior is unchanged.
+            if getattr(self, "_vertex_center_pick_active", False):
+                shape = self._resolve_vertex_or_center(shape)
+                if shape is None:
+                    self._display.call_select_callbacks(
+                        None, None, click_xy)
+                    return
             # Also pass the selected AIS InteractiveObject as an extra
             # arg (Session 60 fix): highlight sync matches on AIS
             # object identity, which is robust, rather than on located-

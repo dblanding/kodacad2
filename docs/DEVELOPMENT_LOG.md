@@ -4516,3 +4516,32 @@ Doug requested a 4th Workplane-menu entry: click a point (origin), click a face 
 ### Lesson for future development
 
 **A new creation mode is cheap when the constructor already accepts its natural inputs** -- WorkPlane's ax3= branch existed for wpBy3Pts and took origin/wDir/uDir directly; Point & Direction needed zero WorkPlane changes, just a different collector assembling the same three arguments from different picks.
+
+## Session 63 (cont'd): Ctrl+Shift extended to 3D -- center of a circular edge
+
+Doug's request: the 2D center-catch convention (Ctrl+Shift) should also work on 3D circular edges, motivated by the new Point & Direction workplane mode (but benefiting every vertex-mode tool: wpBy3Pts, wpByPtDir, and Create 3D's revolve axis picker).
+
+Mechanism, kept structurally close to the 2D convention (same modifier, same 'centers behind a held key' philosophy):
+
+- **SetSelectionModeVertex now ALSO activates edge selection concurrently** (OCCT supports multiple simultaneously-active modes) -- a new _vertex_center_pick_active flag distinguishes this from a tool that wants edges directly (SetSelectionModeEdge, unaffected).
+- **_on_click resolves the pick** via a new _resolve_vertex_or_center: a real vertex passes through unchanged; a circular edge becomes a SYNTHESIZED VERTEX at its center (BRepAdaptor_Curve -> GeomAbs_Circle -> Circle().Location(), wrapped as a real TopoDS_Vertex via BRepBuilderAPI_MakeVertex) -- but ONLY while Ctrl+Shift is held, mirroring the 2D modifier exactly. Without the modifier, an edge hit in vertex mode is a NON-PICK (matches plain vertex-only behavior, unchanged for anyone not using the new gesture). A non-circular edge is also a non-pick.
+- Because the result is a genuine TopoDS_Vertex, every existing vertex-mode CONSUMER (wpBy3PtsC, wpByPtDirC, revolveC) needs ZERO changes -- BRep_Tool.Pnt_s(vrtx) on a synthesized vertex returns the circle's center exactly as it would a real one.
+
+### Lesson for future development
+
+**A convention introduced for one domain (2D center-catch) is often the RIGHT convention for the sibling domain (3D edge picks) with no new design needed** -- the modifier, the philosophy ('precision points hide behind a deliberate key so casual clicks stay safe'), and even the visual vocabulary all transferred unchanged; only the OCCT plumbing (concurrent selection modes, a synthesized vertex) differed. Reusing a working interaction pattern beats inventing a parallel one.
+
+# Session 64: 3D Ctrl+Shift center-catch, and a logging correction
+
+**Numbering note**: everything since the transcript summary got stamped 'Session 63' because that label was inherited from the compacted-conversation summary and I kept defaulting to it rather than incrementing per work session -- accurate (it genuinely was one continuous session) but useless as a finding aid once a huge amount of work piled up under one tag. Numbering increments properly from here.
+
+## The 3D Ctrl+Shift extension -- two bugs, both found via Doug's reports
+
+The prior attempt (logged under 'Session 63') had two real bugs:
+
+1. **The flag lived on the wrong object.** SetSelectionModeVertex is a method of DisplayShim; _on_click is a method of the SEPARATE KodaViewport class. Setting `self._vertex_center_pick_active = True` inside the DisplayShim method set it on the DisplayShim instance -- _on_click's own `self` (KodaViewport) never saw it, so the resolve-or-discard logic never engaged and every edge hit (now reachable because vertex mode concurrently activates edges) sailed straight through to consumers as a raw Edge. Doug's traceback (TopoDS.Vertex_s on an Edge, inside wpBy3PtsC) was the exact fingerprint of this. FIX: DisplayShim's mode setters now reach through to `self._viewport._vertex_center_pick_active` -- the object _on_click actually reads.
+2. **No hover reassurance existed at all** -- the 2D engine's cyan center-mode square has no automatic 3D analog; OCCT's native prehighlight would show on the EDGE itself (if anything), not at its center. Built a genuine equivalent: _center_pick_hover, a permanently-registered move callback (self-gating on the mode flag and the Ctrl+Shift check, so it's a no-op the rest of the time) that hover-detects via context.MoveTo + DetectedShape, and _show_center_marker, an AIS_Point styled as a cyan plus-marker (Aspect_TOM_PLUS) at the circle's center, reusing the never_pick registry so it's never itself pickable. Same cyan (0.0, 0.85, 0.9) as the 2D convention. A shared _edge_circle_center helper keeps the hover marker and the click resolver agreeing on exactly what counts as a valid candidate (DRY -- also fixes a bug where the click resolver still checked shape type as Edge itself instead of delegating).
+
+### Lesson for future development
+
+**When two classes cooperate through a shared reference (DisplayShim holding `_viewport`), a bare `self` inside a method is a landmine** -- it silently binds to whichever class the method is DEFINED on, not the class the behavior is CONCEPTUALLY about. The fix pattern (reach through the held reference explicitly) is worth a standing habit: any time a shim/wrapper class sets state meant for its owner, name the owner explicitly rather than trusting self.
