@@ -10,14 +10,6 @@
 
 * RMB on part in tree to set/edit part color (color picker?)
 
-* Implement all the Pyurcad toolbar ops (in 2 columns), with delete tools in a separate section below a separator (at the bottom).
-
-* Add More workplane creation modes
-    * Point & Direction
-        * Click point (sets origin)
-        * Click face (sets +W direction)
-        * Click face (sets +U direction) -- In Creo, this is optional. A default direction is shown.
-
 * Box-select edges for filleting (eg.: OCC bottle)
     * Claude: box-select for fillet edges is real and feasible — OCCT has rubber-band selection machinery — moderate effort, worth banking near the top of Misc, because picking twelve bottle edges one at a time is exactly the kind of friction this project exists to remove.
 

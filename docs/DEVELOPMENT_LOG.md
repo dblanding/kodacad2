@@ -4508,3 +4508,11 @@ Doug's precision review of the marker behavior, both points landed:
 ### Lesson for future development
 
 **A preview must be computed from the same inputs as the commit, or it is a rumor** -- the 'approximately right' rubber used raw cursor uv while the commit would project; unifying candidate resolution, validation, and projection between glyph, rubber, and commit is what turns reassurance into a guarantee. And display mechanisms sized for their first customer (single always-present rubber) need revisiting when the second customer (intermittent markers) has a different lifecycle -- erase-on-absent was not optional.
+
+## Session 63 (cont'd): fourth workplane creation mode -- Point & Direction
+
+Doug requested a 4th Workplane-menu entry: click a point (origin), click a face (+W), click another face (+U). Built as wpByPtDir/wpByPtDirC alongside the existing three, on the SAME pattern as wpBy3Pts (finish-when-stacks-full / else-arm-and-return) and reusing WorkPlane's existing ax3= constructor path unchanged -- only the INPUTS differ (a picked point instead of point-to-point vectors; face normals via the existing face_normal() helper instead of point directions). The one novelty: MIXED selection modes across three sequential picks (vertex, then face, then face) -- the callback itself calls SetSelectionModeFace() after step 1, since Kodacad's selection mode is global-per-tool rather than per-step. clearAllStacks (already part of clearCallback) resets both ptStack and faceStack for the next use, unchanged.
+
+### Lesson for future development
+
+**A new creation mode is cheap when the constructor already accepts its natural inputs** -- WorkPlane's ax3= branch existed for wpBy3Pts and took origin/wDir/uDir directly; Point & Direction needed zero WorkPlane changes, just a different collector assembling the same three arguments from different picks.

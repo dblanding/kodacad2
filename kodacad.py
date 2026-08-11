@@ -33,6 +33,7 @@ import docmodel
 from mainwindow import MainWindow, dm
 from OCCUtils import Topology
 import workplane
+from workplane import face_normal
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # set to DEBUG | INFO | ERROR
@@ -96,6 +97,69 @@ def wpBy3PtsC(shapeList, *args):
         win.statusBar().showMessage(statusText)
     elif len(win.ptStack) == 3:
         wpBy3Pts()
+
+
+def wpByPtDir(*args):
+    """Point & Direction workplane (Session 63, Doug's 4th mode):
+    1. Click a point -> origin. 2. Click a face -> +W direction.
+    3. Click another face -> +U direction. Reuses the same ax3=
+    constructor path as wpBy3Pts -- only the inputs differ (a
+    picked point instead of derived-from-3-points, face normals
+    instead of point-to-point vectors)."""
+
+    prev_uid = win.activeWpUID
+    if win.faceStack and len(win.faceStack) >= 2 and win.ptStack:
+        # Finish
+        origin = win.ptStack.pop()
+        faceU = win.faceStack.pop()
+        faceW = win.faceStack.pop()
+        wDir = face_normal(faceW)
+        uDir = face_normal(faceU)
+        axis3 = gp_Ax3(origin, wDir, uDir)
+        wp = workplane.WorkPlane(100, ax3=axis3)
+        new_uid = win.get_wp_uid(wp)
+        display_new_active_wp(prev_uid, new_uid)
+        win.clearCallback()
+    else:
+        # Initial setup -- starts on a VERTEX pick; the callback
+        # itself switches to face-selection mode after step 1
+        win.registerCallback(wpByPtDirC)
+        display.selected_shape = None
+        display.SetSelectionModeVertex()
+        win.statusBar().showMessage(
+            "Click a point to specify the origin.")
+        return
+
+
+def wpByPtDirC(shapeList, *args):
+    """Callback (collector) for wpByPtDir -- mixed vertex/face pick,
+    switching selection mode itself between steps."""
+
+    if not shapeList:
+        return
+    if not win.ptStack:
+        # step 1: a vertex
+        try:
+            vrtx = TopoDS.Vertex_s(shapeList[0])
+        except Exception:
+            return
+        gpPt = BRep_Tool.Pnt_s(vrtx)
+        win.ptStack.append(gpPt)
+        display.SetSelectionModeFace()
+        win.statusBar().showMessage(
+            "Click a face to set the +W direction.")
+        return
+    # steps 2 and 3: faces
+    try:
+        face = TopoDS.Face_s(shapeList[0])
+    except Exception:
+        return
+    win.faceStack.append(face)
+    if len(win.faceStack) == 1:
+        win.statusBar().showMessage(
+            "Click another face to set the +U direction.")
+    elif len(win.faceStack) == 2:
+        wpByPtDir()
 
 
 def position_selected():
@@ -780,6 +844,8 @@ if __name__ == "__main__":
     win.add_function_to_menu("Workplane", "At Origin, XY Plane", makeWP)
     win.add_function_to_menu("Workplane", "On face", wpOnFace)
     win.add_function_to_menu("Workplane", "By 3 points", wpBy3Pts)
+    win.add_function_to_menu(
+        "Workplane", "Point && Direction", wpByPtDir)
     win.add_menu("Create 3D")
     win.add_function_to_menu("Create 3D", "Extrude", extrude)
     win.add_function_to_menu("Create 3D", "Revolve", revolve)
