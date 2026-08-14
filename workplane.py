@@ -136,11 +136,23 @@ def seg_circ_inters(x1, y1, x2, y2, xc, yc, r):
     b = 2*((x2-x1)*(x1-xc) + (y2-y1)*(y1-yc))
     c = xc**2+yc**2+x1**2+y1**2-2*(xc*x1+yc*y1)-r**2
     q = b**2 - 4*a*c
+    # THE BUG (Doug's catch-wiggle report, root-caused): 'elif q:'
+    # treated ANY nonzero q as real solutions, including NEGATIVE q
+    # -- where the line/segment doesn't reach the circle at all and
+    # no real intersection exists. math.sqrt(abs(q)) on a negative
+    # discriminant doesn't find real roots; it silently computes a
+    # numerically well-formed but mathematically meaningless pair of
+    # points (never NaN, never an exception -- just wrong), which
+    # then competed as phantom catch candidates near unrelated real
+    # intersections. Basic quadratic-formula correctness: check the
+    # sign of q BEFORE using it, not after forcing it positive.
+    if q < 0:
+        return intpnts  # no real intersection -- the fix
     if q == 0:
         intpnts.append((xp, yp))
-    elif q:
-        u1 = (-b+math.sqrt(abs(q)))/(2*a)
-        u2 = (-b-math.sqrt(abs(q)))/(2*a)
+    else:
+        u1 = (-b+math.sqrt(q))/(2*a)
+        u2 = (-b-math.sqrt(q))/(2*a)
         intpnts.append(((x1 + u1*(x2-x1)), (y1 + u1*(y2-y1))))
         intpnts.append(((x1 + u2*(x2-x1)), (y1 + u2*(y2-y1))))
     return intpnts
@@ -149,8 +161,11 @@ def seg_circ_inters(x1, y1, x2, y2, xc, yc, r):
 def line_circ_inters(line, circle):
     '''Return list of intersection pts of line and circle.
 
-    line defined by coeffs a, b, c, circle (cntr xc,yc and radius r)
-    Doesn't work right. It comes up with some extra points.'''
+    line defined by coeffs a, b, c, circle (cntr xc,yc and radius r).
+    (The "extra points" bug this docstring used to warn about was
+    root-caused and fixed in seg_circ_inters: a negative discriminant
+    -- no real intersection -- was being treated as if it were
+    positive.)'''
     a, b, c = line
     (xc, yc), r = circle
     # first find pt on line closest to circle center
