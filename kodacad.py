@@ -739,6 +739,18 @@ def import_step():
 #############################################
 
 
+def show_undo_redo_count():
+    """Utility menu item (Doug: the count flashes in the status bar
+    at the end of each undo/redo and vanishes before he can read it)
+    -- same GetAvailableUndos/Redos win.editUndo/editRedo already
+    use, just shown on demand instead of only for a moment."""
+    n_undo = dm.doc.GetAvailableUndos()
+    n_redo = dm.doc.GetAvailableRedos()
+    win.statusBar().showMessage(
+        f"Undo steps available: {n_undo}   |   "
+        f"Redo steps available: {n_redo}")
+
+
 def print_uid_dict():
     pprint.pprint(dm.label_dict)
 
@@ -863,6 +875,8 @@ if __name__ == "__main__":
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")
+    win.add_function_to_menu(
+        "Utility", "Undo/Redo count", show_undo_redo_count)
     win.add_function_to_menu("Utility", "print label_dict", print_uid_dict)
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
     win.add_function_to_menu("Utility", "dump doc", dumpDoc)
@@ -940,8 +954,8 @@ if __name__ == "__main__":
         ("ccirc.gif", "Construction Circle", a2d.ccirc),
         ("cc3p.gif", "Constr Circle by 3 Points", a2d.cc3p),
         ("cccirc.gif", "Concentric Constr Circle", a2d.cccirc),
-        ("proj_edge.png", "Project Edge", a2d.projectEdge),
-        ("proj_face.png", "Project Face Edges", a2d.projectFaceEdges),
+        ("proj_edge.gif", "Project Edge", a2d.projectEdge),
+        ("proj_face.gif", "Project Face Edges", a2d.projectFaceEdges),
         "SEP",
         ("line.gif", "Line", a2d.line),
         ("poly.gif", "Polyline", a2d.poly),

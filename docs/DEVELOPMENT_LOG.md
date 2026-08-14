@@ -4559,3 +4559,7 @@ Context: an attempt to make redraw-on-delete/undo/redo incremental (avoiding a f
 ### Lesson for future development
 
 **A rollback is sometimes the fastest path forward, not an admission of defeat** -- two features (redraw performance, selection sync) got tangled together purely by discovery order, and disentangling them by reverting to the last clean commit and re-applying only the isolated, well-understood fix was far more productive than continuing to debug two interacting unknowns at once. Doug's instinct to ask 'are we getting closer, or should we throw in the towel' was the right question at the right moment, and the right answer was neither -- it was to change the SHAPE of the effort, not abandon it.
+
+## Session 65 (cont'd): Undo/Redo count on demand
+
+Doug's small quality-of-life request: editUndo/editRedo's status-bar count flashes at the end of each step and vanishes before he can read it. Added 'Undo/Redo count' under Utility -- reads the same dm.doc.GetAvailableUndos()/Redos() editUndo/editRedo already use, shown via showMessage() with NO timeout (persists until something else replaces it, unlike the auto-clearing message that prompted the request).
