@@ -75,7 +75,21 @@ class DisplayShim:
         return color_map.get(name.upper(),
             Quantity_Color(1, 1, 1, Quantity_TypeOfColor.Quantity_TOC_RGB))
 
-    def _set_selection_mode(self, shape_type):
+    def _set_selection_mode(self, shape_type, extra_shape_type=None):
+        """extra_shape_type activates a SECOND concurrent selection
+        mode (Session 64's 3D Ctrl+Shift center-catch: vertex mode
+        also wants edges pickable). Session 66 fix: this used to be a
+        separate Context.Activate() call made by the CALLER, after
+        this method had already run _redeactivate_never_pick() --
+        Context.Activate(mode) with no object is the GLOBAL overload,
+        so that second, unguarded call silently re-armed every
+        never_pick scenery object (2D construction circles, clines,
+        csegs, carcs, workplane panes) for edge selection, with
+        nothing re-deactivating them afterward. Folding BOTH
+        activations in here, with _redeactivate_never_pick() always
+        LAST regardless of how many modes were activated, makes that
+        bug structurally impossible to reintroduce -- no caller can
+        add a second Activate() without going through this method."""
         if shape_type is None:
             self.Context.SetAutoActivateSelection(True)
             try: self.Context.Activate(0)
@@ -86,6 +100,12 @@ class DisplayShim:
         try: self.Context.Deactivate(0)
         except Exception: pass
         self.Context.Activate(mode)
+        if extra_shape_type is not None:
+            try:
+                self.Context.Activate(
+                    AIS_Shape.SelectionMode_s(extra_shape_type))
+            except Exception:
+                pass
         self._redeactivate_never_pick()
 
     # --- never-pick registry (Session 63, Doug's pick-barrier saga):
@@ -118,24 +138,15 @@ class DisplayShim:
                 pass
 
     def SetSelectionModeVertex(self):
-        self._set_selection_mode(TopAbs_VERTEX)
-        # ALSO activate edge selection concurrently (Session 63,
-        # Doug: Ctrl+Shift should catch the center of a circular 3D
-        # edge, same as the 2D engine's center mode). Vertex-mode
-        # tools now receive circular-edge picks too; _on_click
-        # converts them to a center vertex ONLY while Ctrl+Shift is
-        # held, and otherwise discards them so plain vertex-mode
-        # behavior is unchanged.
-        try:
-            self.Context.Activate(
-                AIS_Shape.SelectionMode_s(TopAbs_EDGE))
-        except Exception:
-            pass
-        # BUG (Doug's traceback): this flag belongs on the VIEWPORT
-        # (_on_click's own 'self') -- DisplayShim and KodaViewport
-        # are DIFFERENT objects; setting it on DisplayShim's self
-        # left _on_click blind to it and every edge pick sailed
-        # through unfiltered.
+        # Edge selection activated CONCURRENTLY (Doug: Ctrl+Shift
+        # should catch the center of a circular 3D edge, same as the
+        # 2D engine's center mode) -- via _set_selection_mode's
+        # extra_shape_type, so the never-pick safety net covers it.
+        # _on_click converts edge picks to a center vertex ONLY
+        # while Ctrl+Shift is held, and otherwise discards them so
+        # plain vertex-mode behavior is unchanged.
+        self._set_selection_mode(TopAbs_VERTEX,
+                                 extra_shape_type=TopAbs_EDGE)
         self._viewport._vertex_center_pick_active = True
 
     def SetSelectionModeEdge(self):
@@ -683,6 +694,16 @@ class KodaViewport(QWidget):
         Shared by the hover marker and the click resolver so both
         agree on what counts as a valid candidate."""
         try:
+            # Cheap, genuinely safe insurance (Session 66): IsNull()
+            # is guaranteed not to crash even on a degenerate/default
+            # -constructed shape, unlike everything downstream of it
+            # here -- a real safeguard against a segfault needs the
+            # malformed pick prevented upstream (the
+            # _set_selection_mode fix), since a Python try/except
+            # cannot catch a native crash; this is belt-and-suspenders
+            # only.
+            if shape is None or shape.IsNull():
+                return None
             from OCP.TopAbs import TopAbs_ShapeEnum
             if shape.ShapeType() != TopAbs_ShapeEnum.TopAbs_EDGE:
                 return None
