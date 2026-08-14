@@ -1190,12 +1190,36 @@ class MainWindow(QMainWindow):
 
     def _uid_for_ais(self, ais_obj):
         """Reverse-map a selected AIS InteractiveObject to its uid.
-        OCP AIS handle equality (== / IsEqual) is binding-fragile, so
-        match by the AIS objects' underlying Shape() via IsSame --
-        TopoDS identity is reliable in this binding, and each part's
-        AIS_Shape wraps a distinct base shape."""
+        PRIMARY: reads the owner tag SetOwner() attached at display
+        time (draw_shape) -- O(1), and correct even when two
+        occurrences share an underlying TopoDS_Shape (shared-instance
+        assemblies: the AIS OBJECT is unique per occurrence even when
+        the geometry isn't). FALLBACK: the original shape-identity
+        scan, kept for two reasons -- (1) if the OCP binding's
+        SetOwner doesn't accept a plain str the way hoped (unverified
+        -- OCP isn't installed in the dev sandbox), draw_shape's own
+        guard already degrades gracefully and prints once, and this
+        fallback keeps the app FUNCTIONAL (if ambiguous for shared
+        parts) rather than breaking selection entirely; (2) parts
+        drawn before this fix shipped (a long-running session that
+        hasn't reloaded) won't have the tag yet.
+
+        The old scan's own docstring assumption -- 'each part's
+        AIS_Shape wraps a distinct base shape' -- is exactly what
+        broke on Doug's large model: shared-instance assemblies
+        (mirrored/duplicated parts) violate it constantly, and the
+        fingerprint was one-way tree<->viewport highlighting (tree-
+        to-viewport uses an unrelated code path and kept working;
+        viewport-to-tree, this function, silently matched whichever
+        uid happened to iterate first)."""
         if ais_obj is None:
             return None
+        try:
+            owner = ais_obj.GetOwner()
+            if isinstance(owner, str) and owner in self.ais_shape_dict:
+                return owner
+        except Exception:
+            pass
         try:
             target = ais_obj.Shape()
         except Exception:
@@ -1659,6 +1683,33 @@ class MainWindow(QMainWindow):
                             self._mesh_warned = True
                     self._display_prep_cache[uid] = (src_shape, shape)
                 aisShape = AIS_Shape(shape)
+                # Tag the AIS object with its OWN uid directly
+                # (selection-sync fix). Reverse-lookup used to match
+                # by SHAPE IDENTITY (ais.Shape().IsSame(...)) -- an
+                # assumption that breaks the instant two parts share
+                # an underlying TopoDS_Shape, which shared-instance
+                # assemblies do routinely (Doug's large Diffy model:
+                # many mirrored/duplicated parts). A direct owner tag
+                # is unambiguous per AIS OBJECT (unique per
+                # occurrence, even when the geometry isn't).
+                # DEFENSIVE: SetOwner's C++ signature expects a
+                # Handle(Standard_Transient); whether the OCP binding
+                # accepts a plain Python str could not be verified in
+                # this sandbox (OCP isn't installed here). Guarded so
+                # a binding mismatch degrades to the OLD shape-scan
+                # lookup (still correct for non-shared parts) instead
+                # of crashing draw_shape for every part -- and prints
+                # once so a failure is immediately visible rather
+                # than silently falling back forever.
+                try:
+                    aisShape.SetOwner(uid)
+                except Exception as oe:
+                    if not getattr(self, "_setowner_warned", False):
+                        print(f"[draw_shape] SetOwner(uid) failed "
+                             f"({oe}) -- selection-sync falls back "
+                             f"to the shape-identity scan, which is "
+                             f"ambiguous for shared-instance parts")
+                        self._setowner_warned = True
                 self.ais_shape_dict[uid] = aisShape
                 context.Display(aisShape, False)
                 if color:
