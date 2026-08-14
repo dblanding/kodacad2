@@ -601,6 +601,14 @@ class MainWindow(QMainWindow):
         This method is called whenever dm.doc is modified in a way that would
         result in a change in the tree view. The tree view represents the
         hierarchical structure of the top assembly and its components."""
+        import time as _time
+        _t0 = _time.monotonic()
+        # Standard Qt practice for rebuilding a QTreeWidget from
+        # scratch: disable repaint/layout churn while many items are
+        # added one at a time, re-enable once. Without this, each
+        # QTreeWidgetItem construction and expandItem() call can
+        # trigger its own layout pass -- visible on large models.
+        self.treeView.setUpdatesEnabled(False)
         self.clearTree()
         self.assy_list = []
         parent_item_dict = {}  # {uid: tree view item}
@@ -627,7 +635,12 @@ class MainWindow(QMainWindow):
             # build assy_list
             if dic["is_assy"]:
                 self.assy_list.append(uid)
+        self.treeView.setUpdatesEnabled(True)
         self.sync_treeview_to_active()
+        _dt = _time.monotonic() - _t0
+        if _dt > 0.5:
+            print(f"[build_tree] {len(dm.label_dict)} items in "
+                 f"{_dt:.2f}s")
         # self.syncCheckedToDrawList()
 
     def clearTree(self):
@@ -917,10 +930,20 @@ class MainWindow(QMainWindow):
         uid = item.text(1)
         if uid in self.wp_dict:
             del self.wp_dict[uid]
-            if hasattr(self, "_wp_ais_reg"):
-                self._wp_ais_reg.pop(uid, None)
+            if uid in self.hide_list:
+                self.hide_list.remove(uid)
+            # Incremental: the AIS objects for THIS workplane are
+            # already tracked per-uid in _wp_ais_reg -- remove
+            # exactly those, nothing else in the viewer is touched.
+            context = self.canvas._display.Context
+            for ais in self._wp_ais_reg.pop(uid, []):
+                try:
+                    context.Remove(ais, False)
+                except Exception:
+                    pass
+            context.UpdateCurrentViewer()
+            self.canvas.update()
             self.build_tree()
-            self.redraw()
             print(f"Workplane {name} deleted.")
             if uid == self.activeWpUID:
                 self.activeWp = None
@@ -934,6 +957,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
+                # delete_component can cascade (orphaned nested-
+                # assembly children removed too) and calls
+                # parse_doc() internally -- snapshot the uid set now,
+                # reconcile the diff after.
+                old_uids = set(dm.part_dict.keys())
                 with undo_transaction(dm):
                     deleted = dm.delete_component(uid)
                 if deleted:
@@ -942,9 +970,8 @@ class MainWindow(QMainWindow):
                         self.activePart = None
                     if uid == self.activeAsyUID:
                         self.activeAsyUID = 0
-                    self.ais_shape_dict.clear()
                     self.build_tree()
-                    self.redraw()
+                    self._incremental_reconcile(old_uids)
                     print(f"{name} deleted.")
                 else:
                     print(f"Failed to delete {name}.")
@@ -1216,8 +1243,25 @@ class MainWindow(QMainWindow):
             return None
         try:
             owner = ais_obj.GetOwner()
-            if isinstance(owner, str) and owner in self.ais_shape_dict:
-                return owner
+            if owner is not None:
+                candidate = None
+                try:
+                    # Case 1: pybind11 auto-downcast the Transient
+                    # handle to its real runtime subtype already.
+                    candidate = owner.ToCString()
+                except AttributeError:
+                    try:
+                        # Case 2: it didn't -- explicit downcast,
+                        # same pattern as this project's TopoDS._s
+                        # downcasts elsewhere.
+                        from OCP.TCollection import (
+                            TCollection_HAsciiString)
+                        candidate = TCollection_HAsciiString.DownCast_s(
+                            owner).ToCString()
+                    except Exception:
+                        candidate = None
+                if candidate in self.ais_shape_dict:
+                    return candidate
         except Exception:
             pass
         try:
@@ -1315,10 +1359,13 @@ class MainWindow(QMainWindow):
         self.activePart = None
         self.activeAsyUID = 0
         self.itemClicked = None
+        # Snapshot BEFORE parse_doc() re-reads the document -- OCAF's
+        # undo can restructure the label tree, so before/after uid
+        # diffing is the only reliable signal for what changed.
+        old_uids = set(dm.part_dict.keys())
         dm.parse_doc()
-        self.ais_shape_dict.clear()
         self.build_tree()
-        self.redraw()
+        self._incremental_reconcile(old_uids)
         n_undo = dm.doc.GetAvailableUndos()
         n_redo = dm.doc.GetAvailableRedos()
         self.statusBar().showMessage(
@@ -1352,6 +1399,108 @@ class MainWindow(QMainWindow):
     def fitAll(self):
         """Fit all displayed parts and wp's to the screen"""
         self.canvas._display.FitAll()
+
+    def _incremental_reconcile(self, old_uids):
+        """Reconciles the viewer against dm.part_dict AFTER an
+        operation that already called dm.parse_doc() (delete and
+        undo/redo both do) -- diffing old_uids (captured by the
+        caller BEFORE the operation) against the current part_dict
+        keys. Neither delete nor undo/redo gives a clean 'only this
+        uid changed' signal on its own: delete can cascade through
+        orphaned nested assemblies, and OCAF undo can restructure
+        the label tree -- so before/after diffing is the reliable
+        technique. Only genuinely removed/new/changed parts touch
+        the viewer; everything else keeps its existing AIS object
+        untouched, avoiding the RemoveAll()+rebuild-everything cost
+        a full redraw() pays regardless of what actually changed.
+
+        SURVIVOR RULE (confirmed by Doug's own diagnostic data, not
+        guessed): a uid present in BOTH old_uids and new_uids is
+        assumed UNCHANGED and never touches the viewer. An earlier
+        version tried to verify this via cached[0].IsSame(current
+        shape) -- OCCT's XCAF/TNaming layer is documented to keep
+        shape identity stable for untouched labels, which is what
+        makes IsSame()-based caching sound in principle, but Doug's
+        measurement showed it failing 100% of the time in this
+        codebase's actual usage (55 redrawn, 0 skipped, on a delete
+        that only removed ONE part) -- so it was providing zero
+        signal while costing the FULL redraw cost anyway. Removed.
+
+        This rule is PROVABLY CORRECT for delete: delete_component
+        can only remove entries, never modify a surviving sibling's
+        geometry. It carries ONE KNOWN, ACCEPTED RISK for undo/redo:
+        if an operation replaces a part's shape IN PLACE while
+        keeping its uid (Mill/Pull's dm.replace_shape does exactly
+        this), undoing/redoing it will leave that part's OLD geometry
+        displayed until something else forces a redraw, because its
+        uid survives in both old_uids and new_uids and this rule
+        skips it. Accepted deliberately rather than silently: if this
+        bites in practice, the fix is a small, targeted one (Mill/
+        Pull-family operations could report their OWN touched uid
+        explicitly), not a reason to keep paying the full-model cost
+        for every ordinary delete.
+
+        (Session 65 postscript: this same uid space is also where
+        self.hide_list needs reconciling -- it held stale uids
+        across undo/redo with nothing ever pruning it, causing tree/
+        viewport checkbox desync. Folded in here since it's the same
+        underlying problem: state keyed by uid, unrefreshed when the
+        uid space changes.)"""
+        import time as _time
+        _t0 = _time.monotonic()
+        context = self.canvas._display.Context
+        if not self.registeredCallback:
+            self.canvas._display.SetSelectionModeNeutral()
+            context.SetAutoActivateSelection(True)
+        new_uids = set(dm.part_dict.keys())
+        valid_uids = new_uids | set(self.wp_dict.keys())
+        stale = [u for u in self.hide_list if u not in valid_uids]
+        for u in stale:
+            self.hide_list.remove(u)
+        _t_removed0 = _time.monotonic()
+        removed = old_uids - new_uids
+        for uid in removed:
+            ais = self.ais_shape_dict.pop(uid, None)
+            if ais is not None:
+                try:
+                    context.Remove(ais, False)
+                except Exception as re:
+                    print(f"[reconcile] Context.Remove failed for "
+                         f"{uid}: {re}")
+            self._display_prep_cache.pop(uid, None)
+        _dt_removed = _time.monotonic() - _t_removed0
+        _t_survivors0 = _time.monotonic()
+        _n_skipped = 0
+        _n_redrawn = 0
+        _redrawn_uids = []
+        genuinely_new = new_uids - old_uids
+        for uid in genuinely_new:
+            if uid in self.hide_list:
+                continue
+            self.draw_shape(uid)
+            _n_redrawn += 1
+            _redrawn_uids.append(uid)
+        _n_skipped = len(new_uids) - len(genuinely_new)
+        _dt_survivors = _time.monotonic() - _t_survivors0
+        _t1 = _time.monotonic()
+        context.UpdateCurrentViewer()
+        self.canvas.update()
+        _dt_total = _time.monotonic() - _t0
+        _dt_repaint = _time.monotonic() - _t1
+        if removed or stale:
+            print(f"[reconcile] {len(removed)} removed, "
+                 f"{len(stale)} stale hide_list entr"
+                 f"{'y' if len(stale) == 1 else 'ies'} pruned")
+        if _dt_total > 0.5:
+            print(f"[reconcile] TIMING: total {_dt_total:.2f}s -- "
+                 f"removed-loop {_dt_removed:.2f}s, "
+                 f"survivor-loop {_dt_survivors:.2f}s "
+                 f"({_n_redrawn} redrawn, {_n_skipped} skipped as "
+                 f"unchanged), repaint {_dt_repaint:.2f}s")
+            if _n_redrawn > 1:
+                print(f"[reconcile]   redrawn (not just the deleted "
+                     f"uid's siblings -- these should have been "
+                     f"SKIPPED if truly unchanged): {_redrawn_uids}")
 
     def redraw(self):
         """Erase & redraw all parts & workplanes except those in hide_list."""
@@ -1702,7 +1851,12 @@ class MainWindow(QMainWindow):
                 # once so a failure is immediately visible rather
                 # than silently falling back forever.
                 try:
-                    aisShape.SetOwner(uid)
+                    # Doug's terminal gave the exact answer: OCP's
+                    # SetOwner wants a Standard_Transient handle, not
+                    # a bare str. TCollection_HAsciiString is a real
+                    # Transient subclass built for exactly this.
+                    from OCP.TCollection import TCollection_HAsciiString
+                    aisShape.SetOwner(TCollection_HAsciiString(uid))
                 except Exception as oe:
                     if not getattr(self, "_setowner_warned", False):
                         print(f"[draw_shape] SetOwner(uid) failed "
