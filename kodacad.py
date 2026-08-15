@@ -877,6 +877,10 @@ if __name__ == "__main__":
     win.add_menu("Utility")
     win.add_function_to_menu(
         "Utility", "Undo/Redo count", show_undo_redo_count)
+    from xde_tree_dialog import show_xde_tree_dialog
+    win.add_function_to_menu(
+        "Utility", "XDE Label Hierarchy...",
+        lambda: show_xde_tree_dialog(win))
     win.add_function_to_menu("Utility", "print label_dict", print_uid_dict)
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
     win.add_function_to_menu("Utility", "dump doc", dumpDoc)

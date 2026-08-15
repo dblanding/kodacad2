@@ -4650,3 +4650,15 @@ Hand-computed for Doug's exact setup (H+V clines at origin, H+V clines at (50,50
 ### Lesson for future development
 
 **A docstring that says 'doesn't work right' is a live bug report, not historical color** -- it survived the ENTIRE original port, the sketch-engine rewrite, and the toolbar-parity pass, because nothing forced anyone to look at it closely until a user's specific geometry made its symptom visible rather than silently absorbed. When inheriting code with a self-documented known issue, treat the docstring as a TODO with the fix already half-diagnosed, not as accepted lore -- and when a user's bug report seems to defy geometry ('this distant circle affects that distant intersection'), the right instinct is exactly what happened here: suspect the MATH, not the geometry, and verify a hypothesis with actual numbers before writing a single line of fix code.
+
+## Session 66 (cont'd): XDE Label Hierarchy viewer -- Doug's shared-instance blind spot, made visible
+
+Doug's Diffy-assembly experience (discovering the two 'Bearing Block' parts were NOT actually shared, via a delete's orphan-check output) motivated a standing tool: Utility -> 'XDE Label Hierarchy...' opens a modeless window showing dm.label_dict as an indented tree, matching the README's own static XDE example format, but live and always in sync with the current document (built from the exact same label_dict build_tree() uses -- no separate document walk).
+
+**The actual value-add over a plain dump**: prototype entries referenced by MORE than one component are tallied (Counter over every label's ref_entry) and tagged '[SHARED xN]' inline -- the direct, at-a-glance answer to 'is this really a shared instance or just a similarly-named part', answering exactly the question Doug had to discover the hard way via a delete's terminal output. Natural entry sorting (splitting on ':' and comparing as integers) so '0:1:1:10' sorts after '0:1:1:2', not before it lexically. Refresh and Copy-to-Clipboard buttons; single-instance launcher (raises and refreshes if already open).
+
+Caught before shipping: the dialog initially imported dm from docmodel (the class-defining module) instead of mainwindow (where the singleton instance actually lives) -- the EXACT bug already fixed once this session in mill_pull_dialog.py. Corrected immediately by checking against the known-correct pattern rather than trusting memory a second time.
+
+### Lesson for future development
+
+**A bug fixed once in one file is worth grep-checking for in every new file that touches the same pattern** -- dm's location is a standing trap in this codebase (defined in mainwindow, felt like it should live in docmodel), and 'I already fixed this exact mistake earlier today' should trigger an explicit verification, not just a habit that BECAME correct because it happened to occur to me this time.
