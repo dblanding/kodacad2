@@ -554,8 +554,20 @@ def fillet(event=None):
         # genuinely on the active part.
         edges = list(win.edgeStack)
         win.edgeStack = []
-        workPart = win.activePart
         uid = win.activePartUID
+        # workPart: use the shape the picked edges ACTUALLY belong
+        # to, not necessarily win.activePart itself (Doug: testing
+        # with a STEP-imported bottle, which is exactly the case
+        # Session 60/61's NurbsConvert display workaround targets --
+        # a converted part's picked edges live in the DISPLAYED copy,
+        # not the original win.activePart, and BRepFilletAPI_MakeFillet
+        # needs edges that genuinely belong to the shape it was built
+        # from). _display_prep_cache[uid] holds (src_shape,
+        # displayed_shape) -- prefer the displayed one since that's
+        # what was actually picked from; fall back to win.activePart
+        # if no cache entry exists (e.g. never NurbsConverted).
+        cached = win._display_prep_cache.get(uid)
+        workPart = cached[1] if cached is not None else win.activePart
         mkFillet = BRepFilletAPI_MakeFillet(workPart)
         for edge in edges:
             mkFillet.Add(fillet_r, edge)
@@ -590,21 +602,36 @@ def filletC(shapeList, *args):
     """Callback (collector) for fillet"""
 
     win.lineEdit.setFocus()
-    # OWNERSHIP CHECK via the AIS owner tag (Session 66), not
-    # shape-identity matching. The tag identifies which PART a pick
-    # belongs to directly -- durable regardless of whether the
-    # DISPLAYED shape differs from the model shape for any reason
-    # (today: the cylindrical-pick NurbsConvert workaround; whatever
-    # it is tomorrow, this check does not care).
-    ais_obj = args[0] if args else None
-    uid = win._uid_for_ais(ais_obj)
-    if uid != win.activePartUID:
-        win.statusBar().showMessage(
-            "Selected edge(s) must be in Active Part.")
-        return
+    # OWNERSHIP CHECK, take 3 (Session 69). Doug's diagnostic gave a
+    # definitive answer: BOTH SelectedInteractive() AND
+    # SelectedOwner().Selectable() return None for edge-mode picks in
+    # this environment -- ais_obj is simply not available here, so
+    # further chasing the AIS-tag path is the wrong use of time.
+    # SelectedShape() DOES reliably work (it's how `shape` always
+    # arrives) -- so check ownership by comparing the picked edge
+    # against the SAME reference shape fillet() itself now builds
+    # from: the DISPLAYED shape (which may be NurbsConverted --
+    # Session 60/61's cylindrical-pick fix), not win.activePart. This
+    # is the original bug's actual fix: shape-identity matching was
+    # never wrong in principle, only the REFERENCE it compared
+    # against was wrong.
+    uid = win.activePartUID
+    cached = win._display_prep_cache.get(uid)
+    ref_shape = cached[1] if cached is not None else win.activePart
+    ref_edges = list(Topology.Topo(ref_shape).edges()) \
+        if ref_shape is not None else []
     for shape in shapeList:
         try:
             edge = TopoDS.Edge_s(shape)
+        except Exception:
+            win.statusBar().showMessage(
+                "Pick an edge (not a face or vertex).")
+            return
+        if not any(edge.IsSame(e) for e in ref_edges):
+            win.statusBar().showMessage(
+                "Selected edge(s) must be in Active Part.")
+            return
+        try:
             win.edgeStack.append(edge)
         except Exception:
             win.statusBar().showMessage("Pick an edge (not a face or vertex).")

@@ -851,6 +851,23 @@ class KodaViewport(QWidget):
                 ais_obj = self.context.SelectedInteractive()
             except Exception:
                 pass
+            if ais_obj is None:
+                # Fallback via the entity-owner mechanism (Session
+                # 69, still open: fillet's edge-mode picks report
+                # ownership-check failures SelectedInteractive() was
+                # presumed to handle uniformly across selection
+                # modes -- unconfirmed for sub-shape modes in this
+                # OCP binding). SelectedOwner().Selectable() is
+                # OCCT's own lower-level, purpose-built path for
+                # exactly this: resolving the AIS object that owns a
+                # picked SUB-entity (edge/vertex/face), as opposed to
+                # SelectedInteractive()'s general case.
+                try:
+                    owner = self.context.SelectedOwner()
+                    if owner is not None:
+                        ais_obj = owner.Selectable()
+                except Exception:
+                    pass
             self._display.call_select_callbacks(shape, ais_obj, click_xy)
         else:
             self._display.call_select_callbacks(None, None, click_xy)

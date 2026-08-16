@@ -1462,11 +1462,46 @@ class DocModel:
         This updates ALL instances sharing the same referred shape."""
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
         color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
-        n = int(self.label_dict[uid]['ref_entry'].split(':')[-1])
+        ref_entry = self.label_dict[uid]['ref_entry']
         color = self.part_dict[uid]['color']
-        labels = TDF_LabelSequence()
-        shape_tool.GetShapes(labels)
-        label = labels.Value(n)
+        # Resolve the referred label DIRECTLY from its entry string
+        # (Doug: fillet on a natively-created bottle failed with
+        # NCollection_Sequence::Value). The OLD code took
+        # n = int(ref_entry.split(':')[-1]) and indexed POSITIONALLY
+        # into shape_tool.GetShapes() -- a heuristic that happens to
+        # hold for STEP-imported documents (the reader's internal
+        # ordering lines up with the entry's last tag) but has no
+        # reason to hold for a part registered via add_component's
+        # native-construction path, whose referred label can land
+        # anywhere in that sequence. TDF_Tool.Label_s is the correct,
+        # general OCCT idiom for resolving ANY entry string back to
+        # its real label, regardless of how/where it was created --
+        # the exact inverse of get_label_entry's own TDF_Tool.Entry_s
+        # (which wrote the entry using a TCollection_AsciiString, so
+        # the read-back is wrapped the same way defensively -- OCP's
+        # strict typing bit SetOwner earlier this session the same
+        # way a bare str could bite this).
+        label = None
+        try:
+            from OCP.TDF import TDF_Tool, TDF_Label
+            from OCP.TCollection import TCollection_AsciiString
+            candidate = TDF_Label()
+            found = TDF_Tool.Label_s(
+                self.doc.GetData(), TCollection_AsciiString(ref_entry),
+                candidate)
+            if found and not candidate.IsNull():
+                label = candidate
+        except Exception as le:
+            print(f"[replace_shape] TDF_Tool.Label_s lookup failed "
+                 f"({le}); falling back to the positional heuristic")
+        if label is None:
+            # Fallback: the old heuristic, kept so the confirmed-
+            # working STEP-import case can never regress even if the
+            # new path hits something unexpected.
+            n = int(ref_entry.split(':')[-1])
+            labels = TDF_LabelSequence()
+            shape_tool.GetShapes(labels)
+            label = labels.Value(n)
         if self.part_dict[uid]['loc']:
             modshape.Move(self.part_dict[uid]['loc'].Inverted())
         shape_tool.SetShape(label, modshape)
