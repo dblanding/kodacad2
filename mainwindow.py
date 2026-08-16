@@ -1365,7 +1365,15 @@ class MainWindow(QMainWindow):
         old_uids = set(dm.part_dict.keys())
         dm.parse_doc()
         self.build_tree()
-        self._incremental_reconcile(old_uids)
+        # redraw_all_survivors=True (Session 70, Doug's fillet/undo
+        # report): an operation being undone/redone can replace a
+        # SURVIVING uid's shape in place (fillet/shell's
+        # dm.replace_shape does exactly this) -- that uid exists in
+        # both old_uids and new_uids, so the default fast-path
+        # (delete's provably-safe 'survivor = untouched' rule) would
+        # skip it and leave stale geometry on screen. Undo/redo
+        # cannot assume survivors are unchanged the way delete can.
+        self._incremental_reconcile(old_uids, redraw_all_survivors=True)
         n_undo = dm.doc.GetAvailableUndos()
         n_redo = dm.doc.GetAvailableRedos()
         self.statusBar().showMessage(
@@ -1400,7 +1408,7 @@ class MainWindow(QMainWindow):
         """Fit all displayed parts and wp's to the screen"""
         self.canvas._display.FitAll()
 
-    def _incremental_reconcile(self, old_uids):
+    def _incremental_reconcile(self, old_uids, redraw_all_survivors=False):
         """Reconciles the viewer against dm.part_dict AFTER an
         operation that already called dm.parse_doc() (delete and
         undo/redo both do) -- diffing old_uids (captured by the
@@ -1440,6 +1448,23 @@ class MainWindow(QMainWindow):
         explicitly), not a reason to keep paying the full-model cost
         for every ordinary delete.
 
+        (Session 70: the accepted risk above was CONFIRMED, not
+        hypothetical -- Doug's own GetAvailableUndos() measurement
+        showed OCAF genuinely recording a delta for fillet's
+        replace_shape (1 -> 2), yet the bottle's geometry stayed
+        stale after Undo, because its uid survived in both sets and
+        the rule (correctly, by its own logic) skipped it. Rather
+        than try to detect 'did this survivor's shape actually
+        change' -- IsSame() is confirmed UNRELIABLE for this in this
+        codebase's own usage, so there is no cheap, trustworthy
+        per-uid signal available without deeper OCAF delta
+        introspection (a bigger, separate task, left for later if
+        undo/redo speed on large models becomes its own problem) --
+        redraw_all_survivors gives callers that know their operation
+        can replace a SURVIVING uid's shape in place (undo/redo, via
+        _refresh_after_history) an explicit way to say so. Delete
+        continues to use the fast, provably-safe default.)
+
         (Session 65 postscript: this same uid space is also where
         self.hide_list needs reconciling -- it held stale uids
         across undo/redo with nothing ever pruning it, causing tree/
@@ -1474,13 +1499,14 @@ class MainWindow(QMainWindow):
         _n_redrawn = 0
         _redrawn_uids = []
         genuinely_new = new_uids - old_uids
-        for uid in genuinely_new:
+        to_redraw = new_uids if redraw_all_survivors else genuinely_new
+        for uid in to_redraw:
             if uid in self.hide_list:
                 continue
             self.draw_shape(uid)
             _n_redrawn += 1
             _redrawn_uids.append(uid)
-        _n_skipped = len(new_uids) - len(genuinely_new)
+        _n_skipped = len(new_uids) - len(to_redraw)
         _dt_survivors = _time.monotonic() - _t_survivors0
         _t1 = _time.monotonic()
         context.UpdateCurrentViewer()
@@ -1771,6 +1797,31 @@ class MainWindow(QMainWindow):
         """Draw the part (shape) with uid."""
         context = self.canvas._display.Context
         if uid:
+            # ERASE-BEFORE-REDISPLAY (Session 70, Doug's fillet/undo
+            # scars report). draw_shape has ALWAYS only ever ADDED --
+            # it creates a fresh AIS_Shape and overwrites
+            # ais_shape_dict[uid] without first removing whatever
+            # was PREVIOUSLY displayed for this uid. Masked for the
+            # project's entire history because every prior call site
+            # either used a full redraw() (context.RemoveAll() first,
+            # wiping the slate before this ever mattered) or genuinely
+            # displayed a uid for the first time. Session 70's
+            # redraw_all_survivors fix is the first code path to call
+            # draw_shape() repeatedly for the SAME uid with no
+            # RemoveAll() in between (undo then redo, back to back) --
+            # exposing this for real: each call left the PRIOR AIS
+            # object orphaned and still displayed, invisible to
+            # ais_shape_dict and therefore to erase_shape/hide-show
+            # too. Overlapping near-identical surfaces (filleted vs.
+            # not) is exactly what produces 'scars at the tangencies'.
+            # Identical fix already proven for draw_wp earlier this
+            # session -- same disease, same cure, different function.
+            _prior_ais = self.ais_shape_dict.pop(uid, None)
+            if _prior_ais is not None:
+                try:
+                    context.Remove(_prior_ais, False)
+                except Exception:
+                    pass
             if uid in self.transparency_dict:
                 transp = self.transparency_dict[uid]
             else:
