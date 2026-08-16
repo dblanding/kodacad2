@@ -536,7 +536,6 @@ def fillet(event=None):
     """Fillet (blend) edges of active part"""
 
     if win.lineEditStack and win.edgeStack:
-        topo = Topology.Topo(win.activePart)
         text = win.lineEditStack.pop()
         try:
             fillet_r = float(text) * win.unitscale
@@ -544,19 +543,16 @@ def fillet(event=None):
             print(f"Expected a number. You entered '{text}'")
             win.clearCallback()
             return
-        edges = []
-        # Test if edge(s) selected are in active part
-        # Use IsSame() instead of Python 'in' -- TopoDS shapes may be
-        # different Python objects but the same underlying geometry
-        for edge in win.edgeStack:
-            part_edges = list(topo.edges())
-            found = any(edge.IsSame(e) for e in part_edges)
-            if found:
-                edges.append(edge)
-            else:
-                print("Selected edge(s) must be in Active Part.")
-                win.clearCallback()
-                return
+        # Ownership is verified at PICK TIME now (filletC, via the
+        # AIS owner tag) -- Session 66, Doug's regression report.
+        # The IsSame()-against-win.activePart.edges() check this
+        # used to do here broke for any part whose DISPLAYED shape
+        # legitimately differs from win.activePart itself (the
+        # Session 60/61 cylindrical-pick NurbsConvert workaround does
+        # exactly this for qualifying parts) -- picked edges then
+        # never matched by identity even though the pick was
+        # genuinely on the active part.
+        edges = list(win.edgeStack)
         win.edgeStack = []
         workPart = win.activePart
         uid = win.activePartUID
@@ -594,6 +590,18 @@ def filletC(shapeList, *args):
     """Callback (collector) for fillet"""
 
     win.lineEdit.setFocus()
+    # OWNERSHIP CHECK via the AIS owner tag (Session 66), not
+    # shape-identity matching. The tag identifies which PART a pick
+    # belongs to directly -- durable regardless of whether the
+    # DISPLAYED shape differs from the model shape for any reason
+    # (today: the cylindrical-pick NurbsConvert workaround; whatever
+    # it is tomorrow, this check does not care).
+    ais_obj = args[0] if args else None
+    uid = win._uid_for_ais(ais_obj)
+    if uid != win.activePartUID:
+        win.statusBar().showMessage(
+            "Selected edge(s) must be in Active Part.")
+        return
     for shape in shapeList:
         try:
             edge = TopoDS.Edge_s(shape)
