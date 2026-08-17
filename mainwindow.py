@@ -603,6 +603,25 @@ class MainWindow(QMainWindow):
         hierarchical structure of the top assembly and its components."""
         import time as _time
         _t0 = _time.monotonic()
+        # Capture expand/collapse state BEFORE clearTree() wipes the
+        # widget (Session 71, Doug: every refresh returned the whole
+        # tree to fully expanded, discarding the user's own collapse
+        # choices -- tedious on a large assembly). Keyed by uid (the
+        # QTreeWidgetItems themselves don't survive the rebuild, but
+        # uid does), restored below; brand-new uids default to
+        # expanded, matching the prior always-expanded behavior for
+        # content the user has never had a chance to collapse yet.
+        expand_state = {}
+
+        def _capture_expand(item):
+            uid = item.text(1)
+            if uid:
+                expand_state[uid] = item.isExpanded()
+            for i in range(item.childCount()):
+                _capture_expand(item.child(i))
+        for _root in (self.assy_root, self.wp_root):
+            if _root is not None:
+                _capture_expand(_root)
         # Standard Qt practice for rebuilding a QTreeWidget from
         # scratch: disable repaint/layout churn while many items are
         # added one at a time, re-enable once. Without this, each
@@ -630,11 +649,38 @@ class MainWindow(QMainWindow):
                 item.setCheckState(0, Qt.CheckState.Unchecked)
             else:
                 item.setCheckState(0, Qt.CheckState.Checked)
-            self.treeView.expandItem(item)
+            item.setExpanded(expand_state.get(uid, True))
             parent_item_dict[uid] = item
             # build assy_list
             if dic["is_assy"]:
                 self.assy_list.append(uid)
+        # Assembly checkbox state, DERIVED bottom-up (Session 71,
+        # Doug: an assembly sometimes showed CHECKED while every one
+        # of its children was unchecked, requiring an extra click to
+        # actually show anything). assy_list was appended in the same
+        # parent-before-child order dm.label_dict guarantees, so
+        # walking it IN REVERSE processes every assembly only after
+        # all of its descendants already have their final state --
+        # a valid post-order traversal without a second tree walk.
+        # An assembly with no children at all keeps its own
+        # hide_list-derived state; nothing to derive FROM otherwise.
+        for _auid in reversed(self.assy_list):
+            _aitem = parent_item_dict[_auid]
+            if _aitem.childCount() == 0:
+                continue
+            _any_checked = any(
+                _aitem.child(_i).checkState(0) == Qt.CheckState.Checked
+                for _i in range(_aitem.childCount()))
+            if not _any_checked:
+                # Display-only correction -- hide_list elsewhere in
+                # this codebase is reserved for actual drawable items
+                # (parts/workplanes; see uncheckedToList()), and this
+                # state is re-derived fresh from children every call
+                # anyway, so nothing is lost by not persisting an
+                # assembly uid into it (and doing so would make it a
+                # target for _incremental_reconcile's OWN hide_list
+                # pruning, which only considers part/wp uids valid).
+                _aitem.setCheckState(0, Qt.CheckState.Unchecked)
         self.treeView.setUpdatesEnabled(True)
         self.sync_treeview_to_active()
         _dt = _time.monotonic() - _t0
@@ -713,6 +759,17 @@ class MainWindow(QMainWindow):
         state = item.checkState(0)
         if state in (Qt.CheckState.Checked, Qt.CheckState.Unchecked):
             self._set_children_check_state(item, state)
+        # Correct ancestor checkboxes to match their children (Session
+        # 71, Doug: an assembly could stay CHECKED after its last
+        # child was unchecked, forcing a two-click workaround to show
+        # anything). Walks up from whichever item was just touched --
+        # cheap (ancestor chain only, not the whole tree) and applies
+        # in BOTH directions for consistency: an assembly with zero
+        # checked children becomes unchecked; one with at least one
+        # checked child (e.g. after re-checking one) becomes checked
+        # again. Only build_tree()'s own bottom-up pass needs to walk
+        # the FULL tree; live clicks only ever change one lineage.
+        self._correct_ancestor_checkboxes(item)
         if not self.inSync():  # click may have been on checkmark.
             self.adjust_draw_hide()
 
@@ -722,6 +779,21 @@ class MainWindow(QMainWindow):
             child = item.child(i)
             child.setCheckState(0, state)
             self._set_children_check_state(child, state)
+
+    def _correct_ancestor_checkboxes(self, item):
+        """Walk up from item's parent, deriving each ancestor's
+        checkbox from whether ANY of its own children are checked."""
+        parent = item.parent()
+        while parent is not None:
+            if not (parent.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                break
+            any_checked = any(
+                parent.child(i).checkState(0) == Qt.CheckState.Checked
+                for i in range(parent.childCount()))
+            parent.setCheckState(
+                0, Qt.CheckState.Checked if any_checked
+                else Qt.CheckState.Unchecked)
+            parent = parent.parent()
 
     def inSync(self):
         """Return True if unchecked items are in sync with hide_list."""
