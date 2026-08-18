@@ -4811,3 +4811,114 @@ Doug's two minor, well-scoped requests, both fixed:
 ### Lesson for future development
 
 **A checkbox tree with cascading state needs correction in BOTH directions to stay honest** -- this codebase already propagated parent-clicks DOWN to children (_set_children_check_state, pre-existing), but nothing propagated a child's change back UP to its ancestors. A one-directional cascade is only half of a consistent tri-state tree; the asymmetry is exactly what let a parent's displayed state drift away from what its children actually showed.
+
+## Session 71 (cont'd): CLOSED, confirmed by Doug -- one deferred issue noted for later
+
+Both fixes (expand/collapse persistence, assembly checkbox derivation) confirmed working by Doug's testing. Session 71 complete.
+
+**Deferred issue found during that testing, not a regression** (Doug's own read, agreed): 'Create new assembly' (introduced Session 54) places sequential new assemblies as children of the MOST RECENTLY created one, not as siblings under the assembly actually RMB-clicked each time. Reproduced by Doug creating two sub-assemblies (rotor-asy, stator-asy) under the same parent (manual-lathe-asy) in two separate RMB->'create new assembly' actions -- the second one nested under the first instead of becoming its sibling.
+
+Brief recon before pivoting to Doug's stated priority (below): createNewAssembly correctly reads `uid = item.text(1)` from `_get_clicked_or_current_item()`, which returns `self.itemClicked` if valid, else falls back to `self.treeView.currentItem()` -- and RMB context-menu invocation does NOT go through the itemClicked-setting handler (that's wired to LEFT clicks only), so a bare RMB-without-a-fresh-left-click relies entirely on currentItem(). createNewAssembly DOES call `self.treeView.clearSelection()` after creating -- but clearSelection() and Qt's separate 'current item' pointer are ORTHOGONAL concepts (a well-known Qt gotcha: clearing selection does not necessarily reset currentItem()), so if build_tree()'s own sync_treeview_to_active() (called just before clearSelection(), inside the redraw path) leaves currentItem() pointed at the newly created assembly for ANY reason, a second bare RMB click would inherit it. Checked one specific candidate mechanism (self.activeAsyUID being reassigned to the new assembly) and RULED IT OUT -- neither create_new_assembly nor its caller touch activeAsyUID at all. The actual mechanism remains unconfirmed; likely candidate is still somewhere in currentItem()'s Qt-level persistence across the rebuild, not in this codebase's own active-uid tracking. Left open for a future session.
+
+# Session 72: reparent_component already exists -- drag-and-drop, world-position-preserving, from Session 16
+
+Doug's stated goal ('understand how position is stored, get closer to CoCreate-style reparenting-without-moving') led to a major find on FIRST recon rather than needing to be built: docmodel.py already has `reparent_component(uid, new_parent_uid)`, and it does EXACTLY the computation CoCreate-style reparenting needs -- `new_local = parent_world_loc.Inverted().Multiplied(part_world_loc)`, explicitly composing the moved part's WORLD (absolute) transform against the NEW parent's world transform to derive a fresh LOCAL transform that keeps the part's absolute position in the viewport unchanged. It is WIRED UP -- mainwindow.py's tree widget has native Qt drag-and-drop reordering (takeChild/insertChild pattern) that, after the visual move, calls `dm.reparent_component(drag_uid, new_parent_uid)` inside an undo_transaction, then does a full display reset.
+
+The function's own comments reference 'Session 16' -- earlier than this transcript's direct visibility -- and end with an explicit, standing request: 'This function hadn't been reported broken, but it had the identical pattern [to a separately-fixed bug] -- fixed proactively... Please re-test drag/reparenting an ASSEMBLY (not just a leaf part) with save/reload before trusting this.' That test appears to never have been completed -- Doug's current exploration is precisely the overdue verification that comment was asking for.
+
+**Architecture, confirmed by reading parse_doc()/parse_components()**: each COMPONENT label carries its own local XCAFDoc_Location attribute (relative to its immediate parent assembly); parse_doc composes these down the assembly stack (assy_loc_stack, multiplied in order) to derive each part's WORLD location, stored in part_dict[uid]['loc'], and each assembly's world_loc similarly in label_dict. This is the standard XCAF pattern and it's exactly what reparent_component's math already assumes and correctly inverts.
+
+**Next step, handed back to Doug rather than guessed at further**: try the ALREADY-BUILT mechanism directly -- drag a part or assembly onto a different assembly in the tree -- before doing the planned Creo comparison or any further architecture work. Two outcomes: (1) it already delivers the CoCreate-recalled behavior, in which case the goal is done and only needs broader testing (leaf parts, assemblies, save/reload, per the standing Session 16 note); or (2) it reveals SPECIFIC bugs in an existing, well-reasoned implementation, which is a far more tractable target than designing a reparenting feature from scratch.
+
+## Session 72 (cont'd): Doug's Creo-vs-KodaCAD comparison -- real, reproducible divergences found; diagnostics added before guessing
+
+Doug's methodical side-by-side test (documented in a PDF, as1-oc-214.stp as the vehicle, matching Creo Elements/Direct step for step) found KodaCAD's reparent_component does NOT match Creo's baseline (Creo: zero position change across every drag, ever). Two distinct, concrete anomalies:
+
+1. **Position sometimes changes on reparent** -- Doug's own read: 'reparenting seems to transform the re-parented component back to the position it had prior to becoming a component of as1' -- i.e., the computed new_local appears to be missing as1's OWN local contribution somewhere, though the code's math (parent_world.Inverted() x part_world) looks structurally sound on inspection. Notably, 'plate' reparented with NO position change (explicitly remarked in the PDF) while other items apparently did move -- meaning this isn't a uniform failure, which rules out the simplest 'the formula is wrong' theory and points toward something conditional (STEP-import structure, shared-instance status, or nesting depth).
+
+2. **A target assembly ('assembly_1') spontaneously became a child of 'as1'** after the LAST of four drag operations -- a structural side effect with no position-math explanation at all. Doug's own test sequence dragged BOTH instances of a genuinely shared prototype (l-bracket-assembly_1 and l-bracket-assembly_2, sharing one referred label per the Creo screenshot's own 'l-bracket-assembly (2)' notation) -- a real, live hypothesis: reparent_component's own docstring already documents that adding to a shared prototype affects ALL its instances, and moving TWO instances of the SAME shared prototype in sequence, into the same new target, is exactly the kind of interaction that could produce a surprising structural result if label references become stale or ambiguous between the two operations.
+
+**Not guessed at further** -- diagnostics added directly to reparent_component: transforms (translation components, in readable form) for part_world_loc, parent_world_loc, and the computed new_local, printed at computation time; label-tree parent_uid for both the moved uid and the target BEFORE the operation; the SAME AFTER parse_doc() re-reads the document, plus the part's OWN freshly-reparsed loc for direct before/after comparison. Doug's next re-run of the same documented test sequence will show, for each of the four drags, exactly where the computed transform and the tree structure actually stand -- rather than guessing among several plausible-sounding theories (missing as1 contribution, shared-instance label staleness, something else in AddComponent/RemoveComponent ordering).
+
+### Lesson for future development
+
+**A rigorous cross-application comparison test is worth more than a page of code reading** -- Doug's PDF pinned down exactly what 'position math wrong' meant (reverts toward pre-nesting position, not random drift), which specific operation sequence triggers the structural anomaly, and one crucial non-uniform data point ('plate' unaffected) that a single bug-report sentence would have missed entirely. The diagnostic plan for this session exists BECAUSE that comparison was done first.
+
+## Session 72 (cont'd): the diagnostic itself had a flaw -- uids are NOT stable across parse_doc() calls
+
+Doug's first diagnostic run showed something stark and completely consistent: EVERY ONE of the four reparents reported `AFTER: uid's parent_uid = None` -- looking, at first glance, like every dragged item was becoming an orphaned free shape instead of a child of the target assembly. Caught before concluding that: this is almost certainly a flaw in the diagnostic itself, not evidence of true orphaning.
+
+**Root cause of the flawed reading**: `get_uid_from_entry` builds each uid as `entry + '.' + serial`, where serial is a counter incremented PER-PARSE, every time that entry string is encountered during ONE parse_doc() walk. This means the SAME physical XCAF label can receive a DIFFERENT uid string the next time the document is parsed, particularly right after a structural change (exactly what a reparent is). The original diagnostic captured a uid string BEFORE the operation and looked it up in `label_dict` AFTER a fresh parse_doc() -- if the serial shifted even slightly (near-certain after adding/removing components), that lookup silently returns nothing, and `.get('parent_uid')` on a missing dict key returns None by Python default. Every 'None' in Doug's output is very likely this artifact, not four consistent orphaning failures.
+
+This connects directly to a warning already written elsewhere in this codebase (_refresh_after_history's own comment: 'cached uids can dangle, labels may be re-created under new entries') -- the SAME instability, now caught manifesting concretely in a second, independent context.
+
+**Fixed**: the diagnostic now captures the STABLE OCAF entry string (not the per-parse uid) for both the dragged item and the target BEFORE the operation, then searches label_dict.values() for a matching entry AFTER parse_doc() -- the correct way to re-identify the same label across a parse boundary. This will show, honestly, whether the dragged items are actually landing under the target assembly (or genuinely missing, or landing somewhere else) rather than an artifact of comparing a uid string to itself across a boundary where it isn't guaranteed to mean the same thing.
+
+### Lesson for future development
+
+**A diagnostic is code, and code has bugs -- a suspiciously uniform result (all four operations producing the identical failure signature) is itself evidence worth doubting the MEASUREMENT before doubting the SYSTEM.** Four real, independent bugs producing the exact same symptom in the exact same way is a much less likely story than one measurement technique with one systematic flaw. This is the same discipline that caught the mid-transaction GetAvailableUndos() misread earlier this session, applied to a new, unrelated instrument.
+
+## Session 72 (cont'd): round 2 confirms the structural bug is real; round 3 diagnostics target the exact resolution point
+
+Doug's corrected-diagnostic run (entry-based, not uid-string-based) delivered TWO real findings, one confirmed-real and one that was actually a diagnostic-design gap of its own:
+
+1. **'Dragged item NOT FOUND by old entry' is EXPECTED, not a bug** -- caught immediately: RemoveComponent() deletes the OLD component label entirely, so of course its old entry string no longer exists afterward. The diagnostic was asking the wrong question (round 2's own flaw); redirected to search for the RELOCATED item by matching base name instead, so the next run shows where the item actually landed rather than confirming the unsurprising fact that it left its old spot.
+
+2. **assembly_1 becoming a child of as1 is CONFIRMED REAL, not an artifact** -- this time found via the stable entry, not a stale uid. Consistently correct ('0:1:1:1.1', i.e. top) for the first THREE reparents, then wrong ('0:1:1:1:2.0', i.e. as1) specifically after the FOURTH -- dragging the SECOND instance of the shared l-bracket-assembly prototype, immediately following the FIRST instance's move in the prior operation. Too specific to the shared-instance sequence to be coincidence.
+
+_find_label_by_entry itself was checked and ruled out as a suspect -- it's a genuine recursive entry-string comparison, not a positional-index heuristic (not the same bug class as the earlier replace_shape fix). But a real gap was found in the diagnostic itself: target_entry (the actual entry AddComponent operates on -- assembly_1's REFERRED/prototype label, not its component label) was never directly printed or verified against what _find_label_by_entry actually resolved. Round 3 diagnostics close that gap: printing new_parent_info's ref_entry/entry, the chosen target_entry, and the ACTUAL entry of whatever _find_label_by_entry resolves to (which must match target_entry -- if it doesn't, that's the smoking gun for a wrong-label resolution during the shared-instance sequence).
+
+### Lesson for future development
+
+**Each diagnostic round should be trusted only as far as it was actually designed to answer the question -- and re-examined for new gaps once it reveals something.** Round 2 fixed round 1's uid-instability flaw and, in doing so, surfaced a SEPARATE question (where did the relocated item actually go?) that round 2 itself wasn't built to answer. This is normal, expected iteration, not a sign of an unreliable process -- each round should narrow the search, and by round 3 the remaining unknown is a single, precisely-named value (does target_label's resolved entry match target_entry) rather than a broad 'something is wrong with reparenting'.
+
+## Session 72 (cont'd): target resolution confirmed CORRECT; the bug correlates precisely with as1 becoming empty
+
+Doug's round-3 data is decisive on one front: target_entry ('0:1:1:15') matches target_label's resolved entry EXACTLY on all four operations -- _find_label_by_entry and AddComponent's target resolution are NOT the bug. Better still, the AFTER-side relocated-item search now shows the reparent mechanism working CORRECTLY: after operation 4, BOTH l-bracket-assembly_1 AND l-bracket-assembly_2 (the two instances of the shared prototype) correctly show parent_uid = assembly_1. The actual document manipulation reparent_component performs is sound.
+
+What's actually wrong is narrower and stranger: assembly_1's OWN reported parent_uid flips to as1's uid, and ONLY after operation 4 -- which is also, by simple arithmetic, the exact operation that empties as1 completely (all four of its original children -- rod-assembly, plate, and both l-bracket-assembly instances -- have been moved out by that point). Nothing in reparent_component's code ever touches assembly_1's own component label or as1's, ruling out a direct manipulation bug; this points at parse_doc()'s own tree-walk or XCAF's UpdateAssemblies() behaving differently once an assembly transitions to zero children -- exactly the scenario this codebase's own create_new_assembly docstring already flagged as fragile ('an assembly with NO children may not survive a STEP save/reload').
+
+Diagnostic added: as1's own presence and remaining-child count, printed directly after each operation's parse_doc(), using data the EXISTING test sequence already produces -- no new test needed, just visibility into exactly when the empty-assembly transition occurs, to confirm or refute the correlation with certainty rather than inference from arithmetic.
+
+### Lesson for future development
+
+**A correlation this specific (fails on operation N, succeeds on operations 1 through N-1, where N happens to be exactly when a structural precondition changes) is worth testing directly rather than trusting as circumstantial** -- 'as1 becomes empty on op 4' was derivable from Doug's own data by counting, but counting is not confirming; the codebase already carries a WRITTEN warning about empty-assembly fragility, which is exactly the kind of documented risk that should be checked first when a symptom's timing lines up with it, rather than chased as a coincidence.
+
+## Session 72 (cont'd): RESOLVED -- a genuine stack-imbalance bug in parse_components, closing out BOTH the reparenting anomaly AND the Session 71 create-new-assembly deferred issue
+
+Doug's own insight -- connecting today's reparenting anomaly to yesterday's 'stator-asy nested under rotor-asy instead of becoming its sibling' report from Session 71 testing -- was the key that broke this open. Both trace to ONE confirmed bug in parse_components's tree walk, found by careful re-reading rather than guessed:
+
+```
+self.assy_loc_stack.append(a_loc)          # ALWAYS pushed, for every assembly component
+self.assy_entry_stack.append(ref_entry)
+self.parent_uid_stack.append(c_uid)
+...
+if r_comps.Length():
+    self.parse_components(r_comps, ...)    # the matching pops live at the END of THIS call
+```
+
+The three pops lived exclusively at the end of the recursive parse_components call -- which only runs `if r_comps.Length()`, i.e. only if the assembly has at least one child. For an EMPTY assembly, the push fires unconditionally but the recursive call (and therefore its pops) never happens at all. parent_uid_stack (and the loc/entry stacks) stayed one level too deep for the rest of that walk -- every sibling processed afterward read parent_uid_stack[-1] as the EMPTY assembly's own uid instead of its real parent, mis-parenting it as a CHILD of the empty assembly instead of a sibling.
+
+This single mechanism explains both reports precisely:
+- **Session 71's deferred issue** (create-new-assembly places sequential assemblies under the most recent one instead of as siblings): a freshly created assembly is EMPTY by construction (create_new_assembly's own docstring: 'an empty compound... populate it before saving'). The very next parse_doc() walk hits it, pushes, finds zero children, never pops -- and whatever sibling assembly gets created/discovered next inherits the empty assembly's uid as its parent.
+- **This session's reparenting anomaly**: as1 empties out after its fourth and final original child is dragged away; the same push-with-no-pop leaves assembly_1 (as1's next sibling under 'top') mis-parented under as1.
+
+Both symptoms were the SAME bug wearing two different costumes -- one triggered by intentionally creating an empty assembly, one by incidentally emptying an existing one through reparenting. Doug's cross-session pattern-matching found the connection before the code reading confirmed it.
+
+**Fix**: moved the three pops to be paired DIRECTLY with their push, inside the assembly branch itself, executing unconditionally regardless of whether the recursive call happens -- every push now has exactly one guaranteed pop. Added the same symmetry to parse_doc()'s own root-level push (not load-bearing, since these stacks reset at the top of every parse_doc() call regardless, but kept paired on principle -- a push without its own pop is exactly the bug pattern just fixed, even where it happens not to bite).
+
+All Session 72 diagnostic instrumentation (four rounds, across reparent_component) removed now that the actual root cause -- in an entirely different function, parse_components, never reparent_component's own logic -- is confirmed and fixed. reparent_component itself checked out clean in every round of testing; it was never the problem.
+
+**Session 71's deferred assembly-nesting issue is CLOSED by this same fix** -- no separate investigation needed.
+
+### Lesson for future development
+
+**The user's own memory of a DIFFERENT session's bug report can be the single most valuable diagnostic input available** -- four rounds of increasingly precise instrumentation in THIS session had narrowed the search to 'something about parse_doc's tree walk, correlated with an assembly becoming empty' -- genuinely useful progress, but Doug's recollection of an unrelated-seeming symptom from a PRIOR session ('the same thing happened when I created two sibling assemblies') supplied the missing piece: not just WHEN the bug fires, but that it fires on ANY empty assembly, confirming the mechanism was general rather than specific to reparenting. Cross-session pattern-matching by the person who has watched the system misbehave in multiple contexts is a search strategy no amount of single-session code reading reliably replicates.
+
+## Session 72 (cont'd): CONFIRMED FIXED by Doug -- both symptoms resolved, committing. One new finding noted for tomorrow.
+
+Doug confirmed: new assemblies no longer nest under an emptied assembly, and multiple sibling assemblies can now be created correctly. Committing this fix.
+
+**New finding, not yet investigated** (Doug, in passing, heading offline): after dragging all 4 of as1's original components out to the new assembly, then dragging them all BACK into as1, they did NOT return to their previous positions within as1. Given today's confirmed world-position-preserving math in reparent_component (new_local = parent_world.Inverted() x part_world), and given as1 itself was briefly EMPTY during this round-trip (exactly the condition the stack-imbalance bug also hinged on), this deserves a fresh look -- worth checking whether as1's OWN world_loc/inv_loc get computed differently once it has re-gained children after being empty, or whether something about re-populating a previously-emptied assembly's label structure behaves differently than populating one that was never emptied. Not diagnosed; flagged for the next session.
+
+**Doug's next stated direction**: explore whether Creo E/D-style reparenting (move a component in the tree with NO change to its position in the viewport, as opposed to the current world-position-preserving-via-recomputed-local-transform approach) is achievable while remaining fully XDE-compliant. To take up next session.

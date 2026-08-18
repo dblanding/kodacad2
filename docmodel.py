@@ -492,6 +492,14 @@ class DocModel:
         shape_tool.GetComponents_s(root_label, top_comps, subchilds)
         if top_comps.Length():
             self.parse_components(top_comps, shape_tool, color_tool)
+        # Pop the root-level push for symmetry with the fix above
+        # (not load-bearing -- these stacks reset at the top of
+        # every parse_doc() call regardless -- but kept paired for
+        # the same reason: a push without its own pop is exactly
+        # the bug pattern just fixed).
+        self.assy_entry_stack.pop()
+        self.assy_loc_stack.pop()
+        self.parent_uid_stack.pop()
         # If no components found, free shapes at root will be picked up below
 
         # Free shapes at root are now all assemblies (/, as1, etc.)
@@ -567,11 +575,27 @@ class DocModel:
                     shape_tool.GetComponents_s(ref_label, r_comps, subchilds)
                     if r_comps.Length():
                         self.parse_components(r_comps, shape_tool, color_tool)
+                    # STACK IMBALANCE FIX (Session 72, Doug's cross-
+                    # session insight connecting the create-new-
+                    # assembly nesting bug and the reparent-onto-
+                    # empty-as1 bug -- same root cause). The push
+                    # above was UNCONDITIONAL; the matching pop used
+                    # to live only inside the recursive call above,
+                    # which only ran if r_comps.Length() was nonzero.
+                    # An EMPTY assembly pushed with no recursive call
+                    # to ever pop it -- parent_uid_stack (and the loc/
+                    # entry stacks) stayed one level too deep for the
+                    # REST of the walk, mis-parenting every sibling
+                    # processed afterward as a child of the empty
+                    # assembly instead of ITS OWN parent. Popping here,
+                    # paired directly with the push, guarantees every
+                    # push has exactly one pop regardless of whether
+                    # the assembly had children to recurse into.
+                    self.assy_entry_stack.pop()
+                    self.assy_loc_stack.pop()
+                    self.parent_uid_stack.pop()
             else:
                 print(f"Oops! Component is not a reference: {c_uid}")
-        self.assy_entry_stack.pop()
-        self.assy_loc_stack.pop()
-        self.parent_uid_stack.pop()
 
 
     def reparent_component(self, uid, new_parent_uid):
@@ -607,13 +631,9 @@ class DocModel:
         # Deliberately reference the label itself, not shape_tool.
         # GetShape_s(ref_label) -- see set_component_location() for why
         # (that same GetShape_s + AddComponent(...,True) pattern was
-        # just confirmed, Session 16, to lose names/substructure on
+        # confirmed, Session 16, to lose names/substructure on
         # compounds/assemblies since raw geometry carries none of that
-        # XCAF metadata). This function hadn't been reported broken,
-        # but it had the identical pattern -- fixed proactively rather
-        # than leaving a known-bad pattern for it to be rediscovered
-        # independently. Please re-test drag/reparenting an assembly
-        # (not just a leaf part) with save/reload before trusting this.
+        # XCAF metadata).
         comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
         if comp_label is None:
             print(f"[reparent] Could not find component label for {uid}")
