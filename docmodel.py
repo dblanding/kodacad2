@@ -613,8 +613,22 @@ class DocModel:
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
         color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
 
-        # Get the part's world location and color
-        part_world_loc = self.part_dict.get(uid, {}).get('loc', TopLoc_Location())
+        # Get the dragged item's world location and color. part_dict
+        # is ONLY populated for simple parts (parse_components's own
+        # branching -- assemblies never get a part_dict entry, only
+        # label_dict[uid]['world_loc']). Reading uid's world location
+        # exclusively via part_dict silently defaulted to a FRESH
+        # IDENTITY transform for every assembly-type drag -- Doug's
+        # own readback diagnostic exposed this precisely: 3 of 4
+        # drags (all assemblies) showed identity going INTO
+        # AddComponent, while the one simple part (plate) showed its
+        # genuine value. AddComponent itself was never at fault.
+        if self.label_dict.get(uid, {}).get('is_assy'):
+            part_world_loc = self.label_dict.get(
+                uid, {}).get('world_loc', TopLoc_Location())
+        else:
+            part_world_loc = self.part_dict.get(
+                uid, {}).get('loc', TopLoc_Location())
         part_color = self.part_dict.get(uid, {}).get('color')
 
         # Get world location of target assembly from label_dict
