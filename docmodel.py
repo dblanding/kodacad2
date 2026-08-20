@@ -1311,6 +1311,33 @@ class DocModel:
         repair_unnamed_products(self.doc, context=" save")
 
         WS = XSControl_WorkSession()
+        # Disable PCURVE writing (Session 73, Doug's 2.5x STEP-save
+        # bloat report). OCCT's STEPCAFControl_Writer DEFAULTS to
+        # writing a redundant 2D parametric-curve representation
+        # (PCURVE) for every edge, alongside the 3D curve that's
+        # already being written -- geometrically REDUNDANT (fully
+        # reconstructable from the 3D curve + surface data present
+        # either way), but adds a large number of extra points. No
+        # Interface_Static configuration existed anywhere in this
+        # save path before -- meaning every save has always used
+        # OCCT's verbose default, independent of anything this
+        # document/pipeline does (confirmed: an explicit shape-copy
+        # fix that WOULD have mattered if the cause were display-
+        # prep mutation had ZERO effect on the bloat; the original
+        # file has no embedded tessellation to explain it either --
+        # both ruled out with real entity-count data before landing
+        # here). Setting this to 0 is a pure writer-verbosity knob,
+        # not a document-correctness change -- Onshape's and CAD
+        # Assistant's own writers most likely already default this
+        # off, which is the actual source of the size gap.
+        try:
+            from OCP.Interface import Interface_Static
+            Interface_Static.SetIVal_s("write.surfacecurve.mode", 0)
+        except Exception as pe:
+            print(f"[save_step_doc] could not disable PCURVE writing "
+                 f"({pe}) -- file will save with OCCT's default "
+                 f"(more verbose) geometry representation; harmless, "
+                 f"the file is still correct, just larger")
         step_writer = STEPCAFControl_Writer(WS, False)
 
         # Export-side unwrap (Session 56, Basicad item 30 ported):
@@ -1854,6 +1881,17 @@ def save_step_doc(doc):
         print("Save step cancelled.")
         return
     WS = XSControl_WorkSession()
+    # Same PCURVE-suppression fix as the method version above --
+    # this module-level save_step_doc is a second, separate writer
+    # construction site that needs the identical configuration.
+    try:
+        from OCP.Interface import Interface_Static
+        Interface_Static.SetIVal_s("write.surfacecurve.mode", 0)
+    except Exception as pe:
+        print(f"[save_step_doc] could not disable PCURVE writing "
+             f"({pe}) -- file will save with OCCT's default (more "
+             f"verbose) geometry representation; harmless, the file "
+             f"is still correct, just larger")
     step_writer = STEPCAFControl_Writer(WS, False)
     step_writer.Transfer(doc, STEPControl_AsIs)
     status = step_writer.Write(fname)

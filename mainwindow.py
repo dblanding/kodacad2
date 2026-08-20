@@ -1931,7 +1931,51 @@ class MainWindow(QMainWindow):
                 if cached is not None and cached[0].IsSame(shape):
                     shape = cached[1]
                 else:
+                    # COPY BEFORE ANY DISPLAY-PREP MUTATION (the
+                    # actual fix for Doug's 2.6x STEP-save point
+                    # bloat). shape here is part_data["shape"] --
+                    # the SAME object backing this label inside
+                    # dm.doc. BRepMesh_IncrementalMesh below does
+                    # NOT return a new shape; it attaches
+                    # triangulation directly to whatever shape it's
+                    # given, IN PLACE. For the common case (no
+                    # NurbsConvert -- 'fresh/canonical parts skip
+                    # conversion entirely' per the comment below),
+                    # shape was never reassigned, so meshing ran
+                    # directly on the document's own stored geometry
+                    # -- every part ever displayed before a save
+                    # picked up a permanent mesh, written out as
+                    # extra CARTESIAN_POINT entities identical
+                    # topology, 2.6x the points, confirmed by Doug's
+                    # entity-count diagnostic (solid/face/surface
+                    # counts exactly unchanged; point count alone
+                    # exploded). An explicit, independent copy here
+                    # -- unconditional, before EITHER branch below --
+                    # guarantees display prep can never mutate dm.doc
+                    # again, regardless of which branch runs or
+                    # whether some future OCCT algorithm shares
+                    # sub-shape identity with its input.
+                    # src_shape MUST stay the ORIGINAL part_data["shape"]
+                    # reference -- it's the cache-identity key compared
+                    # (via IsSame()) against a FRESH part_data["shape"]
+                    # read on every future call (line ~1931 above). If
+                    # this captured the COPY instead, no future read of
+                    # part_data["shape"] would ever IsSame()-match it
+                    # (a copy is never IsSame its source) -- the cache
+                    # would miss on every single redraw, silently
+                    # undoing Session 61's whole caching mechanism.
                     src_shape = shape
+                    try:
+                        from OCP.BRepBuilderAPI import \
+                            BRepBuilderAPI_Copy
+                        shape = BRepBuilderAPI_Copy(shape, True, True).Shape()
+                    except Exception as cpe:
+                        if not getattr(self, "_copy_warned", False):
+                            print(f"[draw_shape] display-prep copy "
+                                 f"failed ({cpe}) -- display-prep "
+                                 f"mutations may leak into the saved "
+                                 f"document")
+                            self._copy_warned = True
                     if _needs_analytic_workaround(shape):
                         try:
                             from OCP.BRepBuilderAPI import \
