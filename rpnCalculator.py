@@ -203,8 +203,8 @@ class Calculator(QDialog):
 
         self.butn("Dist", 11, 0, self.caller.distPtPt, clr=mygray, colspan=8)
         self.butn("Len", 11, 8, self.caller.edgeLen, clr=mygray, colspan=8)
-        self.butn("Rad", 11, 16, self.noop, clr=mygray, colspan=8)
-        self.butn("Ang", 11, 24, self.noop, clr=mygray)
+        self.butn("Rad", 11, 16, self.caller.radMeas, clr=mygray, colspan=8)
+        self.butn("Ang", 11, 24, self.caller.angMeas, clr=mygray)
         self.butn("", 11, 30, self.noop, clr=mygray)
 
         self.setLayout(self.mainLayout)

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from OCP.AIS import AIS_Shape, AIS_Line, AIS_Circle
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.GeomAbs import GeomAbs_CurveType
 from OCP.CPnts import CPnts_AbscissaPoint
 from OCP.gp import gp_Vec, gp_Pnt
 from OCP.Prs3d import Prs3d_LineAspect
@@ -504,6 +505,8 @@ class MainWindow(QMainWindow):
         self.xyPtStack = []  # storage stack for 2d points (x, y)
         self.ptStack = []  # storage stack for gp_Pnts
         self.edgeStack = []  # storage stack for edge picks
+        self.radStack = []  # Session 74: storage stack for Rad measurement
+        self.angStack = []  # Session 74: storage stack for Ang measurement
         self.faceStack = []  # storage stack for face picks
         self.shapeStack = []  # storage stack for shape picks
         self.lineEditStack = []  # list of user inputs
@@ -1233,6 +1236,8 @@ class MainWindow(QMainWindow):
         self.edgeStack = []
         self.faceStack = []
         self.ptStack = []
+        self.radStack = []
+        self.angStack = []
 
     def install_highlight_sync(self):
         """Register the always-on viewport->tree highlight callback.
@@ -2083,6 +2088,20 @@ class MainWindow(QMainWindow):
             self.unitscale = self._unitDict[self.units]
             self.unitsLabel.setText("Units: %s " % self.units)
 
+    def _clear_pick_highlight(self):
+        """Clear the OCCT selection highlight (Session 74, Doug's
+        report: a measured/rejected edge or geom line stayed visibly
+        highlighted until the NEXT click). Same pattern already used
+        by _highlight_viewport. Called when a measurement tool
+        restarts itself (chaining to the next pick) so the OLD
+        pick's highlight doesn't linger and read as ambiguous state."""
+        try:
+            context = self.canvas._display.Context
+            context.ClearSelected(False)
+            context.UpdateCurrentViewer()
+        except Exception:
+            pass
+
     def distPtPt(self):
         """Measure distance between 2 selectable points on model or workplane"""
         if len(self.ptStack) == 2:
@@ -2092,6 +2111,7 @@ class MainWindow(QMainWindow):
             dist = vec.Magnitude()
             dist = dist / self.unitscale
             self.calculator.putx(dist)
+            self._clear_pick_highlight()
             self.distPtPt()
         else:
             self.registerCallback(self.distPtPtC)
@@ -2166,6 +2186,7 @@ class MainWindow(QMainWindow):
             edgelen = CPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge))
             edgelen = edgelen / self.unitscale
             self.calculator.putx(edgelen)
+            self._clear_pick_highlight()
             self.edgeLen()
         else:
             self.registerCallback(self.edgeLenC)
@@ -2182,3 +2203,391 @@ class MainWindow(QMainWindow):
             self.edgeStack.append(edge)
         if self.edgeStack:
             self.edgeLen()
+
+    def radMeas(self):
+        """Session 74: measure radius of a 2D construction/geometry
+        circle or arc, or a 3D circular/arcuate edge."""
+        if self.radStack:
+            radius = self.radStack.pop()
+            self.calculator.putx(radius)
+            self._clear_pick_highlight()
+            self.radMeas()
+        else:
+            self.registerCallback(self.radMeasC)
+            self.canvas._display.SetSelectionModeEdge()
+            self.statusBar().showMessage(
+                "Pick a circle, arc, or circular edge to measure.")
+
+    def radMeasC(self, shapeList, *args):
+        """Callback (collector) for radMeas.
+
+        Engine path first (a 2D ccirc/carc/geometry circle on the
+        active workplane -- radius is stored directly in the
+        workplane's own data, no geometric computation needed); 3D
+        circular/arcuate edge as fallback, via BRepAdaptor_Curve
+        (GeomAbs_Circle covers both full circles and arcs -- an arc
+        is just a circle curve with FirstParameter/LastParameter
+        bounding the arc portion)."""
+        radius = None
+        # 1. Engine path: 2D circle/arc on the active workplane
+        try:
+            click_xy = args[1] if len(args) > 1 else None
+            wp = self.activeWp
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import screen_to_uv, SNAP_PIXELS
+                uv = screen_to_uv(self.canvas.view, click_xy[0],
+                                  click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    try:
+                        tol = abs(self.canvas.view.Convert(SNAP_PIXELS))
+                    except Exception:
+                        tol = 1.0
+                    circ = self._nearest_circle_ent(wp, uv, tol)
+                    if circ is not None:
+                        radius = circ[1] / self.unitscale
+        except Exception as se:
+            print(f"[radMeas] engine path failed: {se}")
+        # 2. Fallback: a genuine 3D circular/arcuate edge
+        if radius is None:
+            for shape in shapeList:
+                if shape is None:
+                    continue
+                try:
+                    edge = TopoDS.Edge_s(shape)
+                    curve = BRepAdaptor_Curve(edge)
+                    if curve.GetType() == GeomAbs_CurveType.GeomAbs_Circle:
+                        radius = curve.Circle().Radius() / self.unitscale
+                        break
+                    # Doug's report + this codebase's own comment
+                    # confirm rod-family (cylinder-dominant) parts
+                    # get NurbsConverted for DISPLAY (Session 60/61's
+                    # analytic-pick workaround) -- picked edges then
+                    # come from that converted copy, whose circular
+                    # edges are GeomAbs_BSplineCurve, not
+                    # GeomAbs_Circle, even though they're genuinely
+                    # circular. Rather than resolve back to the
+                    # original analytic shape (a real correspondence
+                    # problem, deliberately not attempted -- same
+                    # call made for fillet's ownership check earlier
+                    # this project), sample points along the curve
+                    # and verify circularity directly -- works
+                    # whether the cause is NurbsConvert OR a curve
+                    # that was natively B-spline-represented in the
+                    # source file to begin with, without needing to
+                    # know which.
+                    n_samples = 7
+                    f0, f1 = curve.FirstParameter(), curve.LastParameter()
+                    pts = [curve.Value(f0 + (f1 - f0) * i
+                                       / (n_samples - 1))
+                          for i in range(n_samples)]
+                    fit = self._circumcenter_3d(pts[0], pts[2], pts[4])
+                    if fit is not None:
+                        center_xyz, fit_r = fit
+                        import math as _m
+                        max_dev = 0.0
+                        for p in pts:
+                            d = _m.sqrt(
+                                (p.X() - center_xyz[0]) ** 2
+                                + (p.Y() - center_xyz[1]) ** 2
+                                + (p.Z() - center_xyz[2]) ** 2)
+                            max_dev = max(max_dev, abs(d - fit_r))
+                        if fit_r > 1.0e-9 and max_dev / fit_r < 1.0e-4:
+                            radius = fit_r / self.unitscale
+                            break
+                except Exception:
+                    continue
+        if radius is None:
+            self._clear_pick_highlight()
+            self.statusBar().showMessage(
+                "No circle/arc there -- click a workplane circle/arc "
+                "or a circular part edge.", 3000)
+            return
+        self.radStack.append(radius)
+        self.radMeas()
+
+    def _circumcenter_3d(self, p1, p2, p3):
+        """3D circumcenter/radius of the circle through 3 points, as
+        (center_xyz, radius) or None if collinear/degenerate.
+        Standard vector formula, computed with plain floats from
+        .X()/.Y()/.Z() extraction -- no gp_Vec/gp_Dir method calls,
+        same discipline as angMeas's cross-product fix (avoids
+        relying on an OCP constructor/method signature this sandbox
+        has no live install to verify)."""
+        ax, ay, az = p1.X(), p1.Y(), p1.Z()
+        bx, by, bz = p2.X(), p2.Y(), p2.Z()
+        cx, cy, cz = p3.X(), p3.Y(), p3.Z()
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = cx - ax, cy - ay, cz - az
+        # w = u x v (perpendicular to the triangle's plane)
+        wx = uy * vz - uz * vy
+        wy = uz * vx - ux * vz
+        wz = ux * vy - uy * vx
+        w2 = wx * wx + wy * wy + wz * wz
+        if w2 < 1.0e-20:
+            return None  # collinear -- no well-defined circle
+        u2 = ux * ux + uy * uy + uz * uz
+        v2 = vx * vx + vy * vy + vz * vz
+        # t = w x (v2*u - u2*v), scaled by 1/(2*w2) -- VERIFIED
+        # numerically (not just derived) against a hand test case
+        # before shipping: the OTHER cross-product order (X x w)
+        # gives a WRONG, non-equidistant result. Cross products
+        # anti-commute; getting the order backwards is an easy,
+        # silent way to be wrong by exactly a sign.
+        tx0 = v2 * ux - u2 * vx
+        ty0 = v2 * uy - u2 * vy
+        tz0 = v2 * uz - u2 * vz
+        tx = wy * tz0 - wz * ty0
+        ty = wz * tx0 - wx * tz0
+        tz = wx * ty0 - wy * tx0
+        scale = 1.0 / (2.0 * w2)
+        cxr = ax + tx * scale
+        cyr = ay + ty * scale
+        czr = az + tz * scale
+        import math as _m
+        radius = _m.sqrt((ax - cxr) ** 2 + (ay - cyr) ** 2
+                         + (az - czr) ** 2)
+        return ((cxr, cyr, czr), radius)
+
+    def _nearest_circle_ent(self, wp, uv, tol):
+        """Nearest CIRCLE element (ccirc, carc, geometry circle) as
+        (center, radius), or None. Ported from m2d.py's identically-
+        named method (Session 74) -- mainwindow has no live reference
+        to the a2d toolset instance, so this follows distPtPt's own
+        precedent of reimplementing what's needed locally rather
+        than reaching across modules."""
+        import math as _m
+        best = [None, None]
+
+        def consider(circ, d):
+            if d <= tol and (best[1] is None or d < best[1]):
+                best[0] = circ
+                best[1] = d
+
+        for (pc, r) in wp.ccircs:
+            consider((pc, r),
+                     abs(_m.hypot(uv[0] - pc[0], uv[1] - pc[1]) - r))
+        try:
+            from snap_engine import _on_arc
+            for (pc, r, a0, a1) in wp.carcs:
+                dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+                if dc < 1.0e-9:
+                    continue
+                onp = (pc[0] + (uv[0] - pc[0]) * r / dc,
+                       pc[1] + (uv[1] - pc[1]) * r / dc)
+                if _on_arc(onp, pc, a0, a1):
+                    consider((pc, r), abs(dc - r))
+        except Exception:
+            pass
+        try:
+            from snap_engine import _geom_circles_uv
+            for (pc, r) in _geom_circles_uv(wp):
+                consider((pc, r),
+                         abs(_m.hypot(uv[0] - pc[0],
+                                      uv[1] - pc[1]) - r))
+        except Exception:
+            pass
+        return best[0]
+
+    def _nearest_straight(self, wp, uv, tol):
+        """Nearest STRAIGHT element (cline, cseg, or geometry line)
+        as (a, b, c) coefficients, or None. Ported from m2d.py's
+        identically-named method (Session 74), same reasoning as
+        _nearest_circle_ent above."""
+        import math as _m
+        import workplane as wpm
+        best = [None, None]
+
+        def consider(coef, d):
+            if d <= tol and (best[1] is None or d < best[1]):
+                best[0] = coef
+                best[1] = d
+
+        for cl in wp.clines:
+            a, b, c = cl
+            den = _m.hypot(a, b)
+            if den > 1.0e-12:
+                consider(cl, abs(a * uv[0] + b * uv[1] + c) / den)
+        segs = [(s[0], s[1]) for s in wp.csegs]
+        try:
+            from snap_engine import _geom_segments_uv
+            segs += _geom_segments_uv(wp)
+        except Exception:
+            pass
+        for (p1, p2) in segs:
+            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+            l2 = dx * dx + dy * dy
+            if l2 < 1.0e-18:
+                continue
+            t = ((uv[0] - p1[0]) * dx + (uv[1] - p1[1]) * dy) / l2
+            t = max(0.0, min(1.0, t))
+            d = _m.hypot(uv[0] - (p1[0] + t * dx),
+                         uv[1] - (p1[1] + t * dy))
+            try:
+                consider(wpm.cnvrt_2pts_to_coef(p1, p2), d)
+            except Exception:
+                pass
+        return best[0]
+
+    def angMeas(self):
+        """Session 74: measure the angle between 2 coplanar
+        construction/geometry lines on a workplane, or between 2
+        coplanar straight 3D edges. Positive = CCW from the first
+        pick to the second (2D: viewed from the workplane's +W,
+        i.e. its 'front face', standard UV-space convention -- fully
+        signed. 3D: see angMeasC's docstring for a real, deliberate
+        scope limit on signing)."""
+        if len(self.angStack) == 2:
+            kind2, d2 = self.angStack.pop()
+            kind1, d1 = self.angStack.pop()
+            import math as _m
+            if kind1 == "2d":
+                cross = d1[0] * d2[1] - d1[1] * d2[0]
+                dot = d1[0] * d2[0] + d1[1] * d2[1]
+                ang_deg = _m.degrees(_m.atan2(cross, dot))
+            else:
+                # d1/d2 are gp_Dir. Computed via raw component
+                # extraction (.X()/.Y()/.Z(), unambiguous on any
+                # gp_Dir) rather than gp_Vec(gp_Dir)'s constructor
+                # overload, which this sandbox has no live OCP
+                # install to verify -- plain-float math sidesteps
+                # the uncertainty entirely, same approach the 2D
+                # branch above already uses. gp_Dir.Crossed() itself
+                # is avoided too: it returns ANOTHER gp_Dir, always
+                # re-normalized to unit length by OCCT, which would
+                # make the magnitude always exactly 1.0 regardless
+                # of the true angle (caught before shipping).
+                x1, y1, z1 = d1.X(), d1.Y(), d1.Z()
+                x2, y2, z2 = d2.X(), d2.Y(), d2.Z()
+                cx = y1 * z2 - z1 * y2
+                cy = z1 * x2 - x1 * z2
+                cz = x1 * y2 - y1 * x2
+                cross_mag = _m.sqrt(cx * cx + cy * cy + cz * cz)
+                dot = x1 * x2 + y1 * y2 + z1 * z2
+                ang_deg = _m.degrees(_m.atan2(cross_mag, dot))
+            self.calculator.putx(ang_deg)
+            self._clear_pick_highlight()
+            self.angMeas()
+        else:
+            self.registerCallback(self.angMeasC)
+            self.canvas._display.SetSelectionModeEdge()
+            n = len(self.angStack)
+            if n == 0:
+                self.statusBar().showMessage(
+                    "Pick the FIRST line/edge (angle measured from "
+                    "this one, CCW positive).")
+            else:
+                self.statusBar().showMessage(
+                    "Pick the SECOND line/edge, of the SAME kind "
+                    "as the first (both on a workplane, or both 3D "
+                    "part edges).")
+
+    def angMeasC(self, shapeList, *args):
+        """Callback (collector) for angMeas.
+
+        Engine path first: a 2D straight cline/cseg/geometry line on
+        the active workplane, via _nearest_straight -- direction
+        taken as the canonical (-b, a) from its (a, b, c)
+        coefficients (a pure infinite construction line has no
+        inherent 2-point direction to draw from; a cseg/geometry
+        line's direction would ideally follow its own start->end
+        order, but _nearest_straight only returns coefficients, so
+        the canonical convention applies uniformly for v1). 3D
+        fallback: a genuine straight edge (GeomAbs_Line only --
+        curved edges are declined with a clear message, since 'angle
+        between 2 lines' isn't well-defined for a curve).
+
+        SCOPE NOTE on 3D signing (deliberate, not an oversight): the
+        spec's 'w.r.t. the outward face of the part' sign reference
+        requires knowing which face the edges border and which way
+        THAT face points -- real topology-walking (TopExp ancestor
+        maps + surface normal evaluation) that Session 74 is NOT
+        attempting blind, matching Doug's own stated preference for
+        lean v1 scope (he deferred face-to-face angle measurement
+        for the identical reason). angMeas() above reports the
+        UNSIGNED magnitude (0-180 deg) for the 3D case as a result --
+        correct and meaningful, just not signed. Flagged here plainly
+        so it's a known, named scope line, not a silent gap."""
+        entity = None
+        kind = None
+        # 1. Engine path: 2D straight line on the active workplane
+        try:
+            click_xy = args[1] if len(args) > 1 else None
+            wp = self.activeWp
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import screen_to_uv, SNAP_PIXELS
+                uv = screen_to_uv(self.canvas.view, click_xy[0],
+                                  click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    try:
+                        tol = abs(self.canvas.view.Convert(SNAP_PIXELS))
+                    except Exception:
+                        tol = 1.0
+                    coef = self._nearest_straight(wp, uv, tol)
+                    if coef is not None:
+                        a, b, c = coef
+                        import math as _m
+                        mag = _m.hypot(a, b)
+                        if mag > 1.0e-12:
+                            entity = (-b / mag, a / mag)
+                            kind = "2d"
+        except Exception as se:
+            print(f"[angMeas] engine path failed: {se}")
+        # 2. Fallback: a genuine straight 3D edge
+        if entity is None:
+            for shape in shapeList:
+                if shape is None:
+                    continue
+                try:
+                    edge = TopoDS.Edge_s(shape)
+                    curve = BRepAdaptor_Curve(edge)
+                    if curve.GetType() != GeomAbs_CurveType.GeomAbs_Line:
+                        self._clear_pick_highlight()
+                        self.statusBar().showMessage(
+                            "That edge is curved -- angle measurement "
+                            "needs a straight edge.", 3000)
+                        return
+                    entity = curve.Line().Direction()
+                    kind = "3d"
+                    break
+                except Exception:
+                    continue
+        if entity is None:
+            self._clear_pick_highlight()
+            self.statusBar().showMessage(
+                "No line there -- click a workplane construction/"
+                "geometry line or a straight part edge.", 3000)
+            return
+        # Reject mixing 2D workplane picks with 3D edge picks --
+        # Doug's spec is 'on a workplane OR 3D edges', not mixed.
+        if self.angStack and self.angStack[0][0] != kind:
+            self._clear_pick_highlight()
+            self.statusBar().showMessage(
+                "Both picks must be the same kind -- either two "
+                "workplane lines, or two 3D part edges, not a mix.",
+                4000)
+            return
+        self.angStack.append((kind, entity))
+        # CONFIRMED BUG (Session 74, decisive from Doug's diagnostic:
+        # angStack len=0 on every call, including back-to-back picks
+        # in one sequence). Calling angMeas() unconditionally here --
+        # even after just the FIRST pick, when the stack isn't yet
+        # complete -- re-enters angMeas()'s else-branch, which calls
+        # registerCallback() again; since a callback is already
+        # registered, THAT calls clearCallback(), which calls
+        # clearAllStacks(), wiping angStack right back to empty --
+        # undoing the .append() one line above, every single time.
+        # distPtPtC never hit this: it only calls distPtPt() again
+        # when the stack actually REACHES 2 (completion), showing a
+        # plain progress message in between instead. radMeasC never
+        # hit it either, structurally -- a single-pick tool's append
+        # and completion happen in the same instant, leaving no
+        # incomplete intermediate state for the bug to live in.
+        # Matching distPtPtC's proven structure exactly.
+        if len(self.angStack) == 1:
+            self.statusBar().showMessage(
+                "First line/edge set. Select the second (same kind "
+                "as the first).")
+        if len(self.angStack) == 2:
+            self.angMeas()
