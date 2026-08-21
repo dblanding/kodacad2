@@ -1474,6 +1474,12 @@ class MainWindow(QMainWindow):
             self.currOpLabel.setText("Current Operation: None ")
             self.statusBar().showMessage("")
             self.canvas._display.SetSelectionModeNeutral()
+            # Session 74: stop the ported hover-preview mechanism too
+            # (Rad/Ang's marker) -- general safety net so switching
+            # tools or ending the operation mid-sequence can never
+            # leave an orphaned marker or move callback behind,
+            # matching m2d.py's own '_preview_stop(), always' rule.
+            self._preview_stop_meas()
 
     #############################################
     #
@@ -2102,6 +2108,198 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    # ---- Hover-preview marker mechanism, ported from m2d.py's
+    # identically-behaving _preview_start/_preview_stop/_preview_move
+    # (Session 74, Doug: 'Ang' should give the same yellow-square
+    # anticipatory hover feedback the parallel-construction-line
+    # tool already gives while shopping for a straight element).
+    # mainwindow has no live reference to the a2d/M2D instance
+    # (confirmed earlier this session), so this is a genuine port,
+    # not a wrapper -- self.win.canvas -> self.canvas, self.display
+    # -> self.canvas._display (confirmed identical: kodacad.py
+    # constructs M2D(win, display) where display IS win.canvas._display).
+    # Deliberately a FAITHFUL, full port (multi-shape/style support
+    # included) rather than a stripped-down one-off, since Rad's
+    # circle marker (a separately flagged, still-open follow-up from
+    # earlier this session) needs the identical machinery -- both
+    # measurement tools are wired to it in this same pass.
+
+    def _uvpnt(self, wp, u, v):
+        return gp_Pnt(u, v, 0).Transformed(wp.Trsf)
+
+    def _pick_marker(self, wp, pt):
+        """The catch-square glyph at an arbitrary wp point -- shown
+        while awaiting an entity pick, on the candidate, at the
+        exact point the click would resolve to."""
+        try:
+            from snap_engine import SNAP_PIXELS
+            half = abs(self.canvas.view.Convert(SNAP_PIXELS)) * 0.5
+            from OCP.BRep import BRep_Builder
+            from OCP.TopoDS import TopoDS_Compound
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            builder = BRep_Builder()
+            comp = TopoDS_Compound()
+            builder.MakeCompound(comp)
+            u, v = pt
+            corners = [(u - half, v - half), (u + half, v - half),
+                       (u + half, v + half), (u - half, v + half)]
+            for i in range(4):
+                g1 = self._uvpnt(wp, *corners[i])
+                g2 = self._uvpnt(wp, *corners[(i + 1) % 4])
+                builder.Add(comp,
+                            BRepBuilderAPI_MakeEdge(g1, g2).Edge())
+            return comp
+        except Exception:
+            return None
+
+    def _marker_straight_meas(self, wp, uv):
+        """Marker on the nearest straight element (cline/cseg/geom
+        line), for Ang's hover feedback."""
+        coef = self._nearest_straight(wp, uv, self._snap_tol_meas())
+        if coef is None:
+            return None
+        try:
+            import workplane as wpm
+            p = wpm.proj_pt_on_line(coef, uv)
+        except Exception:
+            return None
+        mk = self._pick_marker(wp, p)
+        return (mk, "geom") if mk is not None else None
+
+    def _marker_circle_meas(self, wp, uv):
+        """Marker on the nearest circle/arc element, for Rad's hover
+        feedback (closes the follow-up flagged earlier this session:
+        ccirc/carc measurement was confirmed correct, only missing
+        this visual confirmation)."""
+        import math as _m
+        circ = self._nearest_circle_ent(wp, uv, self._snap_tol_meas())
+        if circ is None:
+            return None
+        pc, r = circ
+        dc = _m.hypot(uv[0] - pc[0], uv[1] - pc[1])
+        if dc < 1.0e-9:
+            return None
+        p = (pc[0] + (uv[0] - pc[0]) * r / dc,
+             pc[1] + (uv[1] - pc[1]) * r / dc)
+        mk = self._pick_marker(wp, p)
+        return (mk, "geom") if mk is not None else None
+
+    def _snap_tol_meas(self):
+        try:
+            from snap_engine import SNAP_PIXELS
+            return abs(self.canvas.view.Convert(SNAP_PIXELS))
+        except Exception:
+            return 1.0
+
+    def _preview_start_meas(self, owner_cb, builder, style="geom"):
+        self._preview_stop_meas()  # single registration, always
+        self._prevm_owner = owner_cb
+        self._prevm_builder = builder
+        self._prevm_style = style
+        self._prevm_ais_list = []
+        try:
+            self.canvas.register_move_callback(self._preview_move_meas)
+        except Exception:
+            pass
+
+    def _preview_stop_meas(self):
+        try:
+            self.canvas.unregister_move_callback(self._preview_move_meas)
+        except Exception:
+            pass
+        try:
+            self._preview_erase_shapes_meas()
+            self.canvas._display.Context.UpdateCurrentViewer()
+        except Exception:
+            pass
+        self._prevm_owner = None
+        self._prevm_builder = None
+
+    def _preview_erase_shapes_meas(self):
+        context = self.canvas._display.Context
+        for ais, _style in getattr(self, "_prevm_ais_list", []):
+            try:
+                context.Erase(ais, False)
+            except Exception:
+                pass
+            try:
+                self.canvas._display.remove_never_pick(ais)
+            except Exception:
+                pass
+        self._prevm_ais_list = []
+
+    def _preview_move_meas(self, x, y):
+        try:
+            if (getattr(self, "_prevm_builder", None) is None
+                    or self.registeredCallback is None):
+                self._preview_stop_meas()
+                return
+            if self.registeredCallback != getattr(
+                    self, "_prevm_owner", None):
+                self._preview_stop_meas()
+                return
+            wp = self.activeWp
+            if wp is None:
+                return
+            from snap_engine import screen_to_uv
+            uv = screen_to_uv(self.canvas.view, x, y, wp.gpPlane)
+            if uv is None:
+                return
+            result = self._prevm_builder(wp, uv)
+            default_style = getattr(self, "_prevm_style", "geom")
+            if result is None:
+                pairs = []
+            elif isinstance(result, list):
+                pairs = [p for p in result if p and p[0] is not None]
+            elif isinstance(result, tuple):
+                pairs = [] if result[0] is None else [result]
+            else:
+                pairs = [(result, default_style)]
+            context = self.canvas._display.Context
+            cur = getattr(self, "_prevm_ais_list", [])
+            cur_styles = [s for (_a, s) in cur]
+            new_styles = [s for (_s, s) in pairs]
+            if not pairs:
+                if cur:
+                    self._preview_erase_shapes_meas()
+                    context.UpdateCurrentViewer()
+                return
+            if cur_styles == new_styles:
+                for (ais, _s), (shape, _s2) in zip(cur, pairs):
+                    ais.SetShape(shape)
+                    context.Redisplay(ais, False)
+            else:
+                self._preview_erase_shapes_meas()
+                from OCP.AIS import AIS_Shape
+                from OCP.Quantity import (Quantity_Color,
+                                          Quantity_TypeOfColor)
+                new_list = []
+                for shape, style in pairs:
+                    ais = AIS_Shape(shape)
+                    context.Display(ais, False)
+                    try:
+                        self.canvas._display.add_never_pick(ais)
+                    except Exception:
+                        pass
+                    try:
+                        context.SetColor(
+                            ais,
+                            Quantity_Color(
+                                1.0, 1.0, 0.0,
+                                Quantity_TypeOfColor.Quantity_TOC_RGB),
+                            False)
+                        context.Deactivate(ais)
+                    except Exception:
+                        pass
+                    new_list.append((ais, style))
+                self._prevm_ais_list = new_list
+            context.UpdateCurrentViewer()
+        except Exception as e:
+            if not getattr(self, "_prevm_warned", False):
+                print(f"[preview] disabled after error: {e}")
+                self._prevm_warned = True
+            self._preview_stop_meas()
+
     def distPtPt(self):
         """Measure distance between 2 selectable points on model or workplane"""
         if len(self.ptStack) == 2:
@@ -2215,6 +2413,9 @@ class MainWindow(QMainWindow):
         else:
             self.registerCallback(self.radMeasC)
             self.canvas._display.SetSelectionModeEdge()
+            self._preview_start_meas(self.radMeasC,
+                                     self._marker_circle_meas,
+                                     style="geom")
             self.statusBar().showMessage(
                 "Pick a circle, arc, or circular edge to measure.")
 
@@ -2442,9 +2643,29 @@ class MainWindow(QMainWindow):
             kind1, d1 = self.angStack.pop()
             import math as _m
             if kind1 == "2d":
-                cross = d1[0] * d2[1] - d1[1] * d2[0]
-                dot = d1[0] * d2[0] + d1[1] * d2[1]
-                ang_deg = _m.degrees(_m.atan2(cross, dot))
+                coef1, uv1 = d1
+                coef2, uv2 = d2
+                import workplane as wpm
+                ipt = wpm.intersection(coef1, coef2)
+                if ipt is None:
+                    # Parallel lines -- no intersection, angle
+                    # undefined; report 0 rather than crash.
+                    ang_deg = 0.0
+                else:
+                    dx1, dy1 = uv1[0] - ipt[0], uv1[1] - ipt[1]
+                    dx2, dy2 = uv2[0] - ipt[0], uv2[1] - ipt[1]
+                    mag1 = _m.hypot(dx1, dy1)
+                    mag2 = _m.hypot(dx2, dy2)
+                    if mag1 > 1.0e-9 and mag2 > 1.0e-9:
+                        dx1, dy1 = dx1 / mag1, dy1 / mag1
+                        dx2, dy2 = dx2 / mag2, dy2 / mag2
+                        cross = dx1 * dy2 - dy1 * dx2
+                        dot = dx1 * dx2 + dy1 * dy2
+                        ang_deg = _m.degrees(_m.atan2(cross, dot))
+                    else:
+                        # Clicked essentially AT the intersection --
+                        # no meaningful direction to measure from.
+                        ang_deg = 0.0
             else:
                 # d1/d2 are gp_Dir. Computed via raw component
                 # extraction (.X()/.Y()/.Z(), unambiguous on any
@@ -2471,6 +2692,9 @@ class MainWindow(QMainWindow):
         else:
             self.registerCallback(self.angMeasC)
             self.canvas._display.SetSelectionModeEdge()
+            self._preview_start_meas(self.angMeasC,
+                                     self._marker_straight_meas,
+                                     style="geom")
             n = len(self.angStack)
             if n == 0:
                 self.statusBar().showMessage(
@@ -2526,12 +2750,35 @@ class MainWindow(QMainWindow):
                         tol = 1.0
                     coef = self._nearest_straight(wp, uv, tol)
                     if coef is not None:
-                        a, b, c = coef
-                        import math as _m
-                        mag = _m.hypot(a, b)
-                        if mag > 1.0e-12:
-                            entity = (-b / mag, a / mag)
-                            kind = "2d"
+                        # Store the coefficients AND the click PROJECTED
+                        # onto the true line -- not the raw click uv.
+                        # Doug's report ('measurement is based on
+                        # cursor position instead of the actual
+                        # lines'): a real click is essentially never
+                        # pixel-perfect ON the line -- it lands a few
+                        # pixels to one side. Using that raw, slightly
+                        # off-axis point as the direction reference
+                        # (relative to the intersection) rotates the
+                        # computed direction by a real, sometimes
+                        # significant amount -- worse the CLOSER the
+                        # click is to the intersection, since the same
+                        # perpendicular miss produces a larger angular
+                        # error at a shorter radius. Projecting onto
+                        # the line first (same proj_pt_on_line the
+                        # hover marker itself already uses) guarantees
+                        # the stored reference point is always exactly
+                        # ON the true line, while still preserving
+                        # which SIDE of the intersection was clicked
+                        # (needed for the sign) -- eliminating the
+                        # error at its source rather than living with
+                        # it.
+                        import workplane as wpm
+                        try:
+                            proj_uv = wpm.proj_pt_on_line(coef, uv)
+                        except Exception:
+                            proj_uv = uv
+                        entity = (coef, proj_uv)
+                        kind = "2d"
         except Exception as se:
             print(f"[angMeas] engine path failed: {se}")
         # 2. Fallback: a genuine straight 3D edge

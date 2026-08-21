@@ -5032,3 +5032,43 @@ distPtPtC never had this problem: it only re-invokes distPtPt() when the stack a
 ### Lesson for future development
 
 **When two structurally similar functions behave differently, diff them against each other, not just against your own memory of writing one of them** -- re-reading angMeasC in isolation, repeatedly, found nothing, because the bug wasn't a local error -- it was a missing structural distinction (unconditional vs. completion-gated re-invocation) that only became visible by holding it up against the sibling tool that got that distinction right. The decisive diagnostic data (angStack len=0, always) pointed at WHERE to look; the working tool's own code is what supplied the answer.
+
+## Session 74 (cont'd): 2D angle sign bug -- confirmed and fixed, verified numerically before shipping
+
+Doug confirmed ccirc/carc measurement works correctly (5mm), pending only the visual-feedback follow-up already logged. Also confirmed: 2D angle measurement (both clines and geom lines) computes a real angle, but with the wrong sign.
+
+**Root cause**: an infinite 2D line has no inherent direction. The original code derived a canonical direction (-b, a) from each line's (a,b,c) coefficients -- mathematically consistent, but arbitrary, with no reason to match what a user means by 'the direction of the line I clicked.' Doug's own spec implies the right disambiguation: 'positive values measured starting from the first clicked line' -- direction should be relative to where each line was actually clicked, not an arbitrary convention.
+
+**Fix**: angMeasC's 2D engine path now stores (coefficients, click_uv) instead of a pre-computed canonical direction. angMeas()'s computation step, once both picks are collected, finds the TRUE intersection of the two lines (workplane.py's own intersection()) and derives each line's direction as (click_point - intersection_point) -- unambiguous, and matches what was actually clicked rather than an arbitrary sign convention. Verified numerically before shipping (matching this session's own established discipline after the circumcenter sign-bug catch earlier): a horizontal line clicked toward +U and a vertical line clicked toward +V, crossing at the origin, correctly returns exactly +90.0 degrees going from the first to the second -- the expected CCW result.
+
+**Flagged, not yet fixed**: the identical direction-ambiguity concern likely applies to the 3D edge case too -- a straight edge's own parametric direction (First->LastParameter) is just as arbitrary relative to where it was clicked as a 2D line's canonical convention was, and getting it backwards would report the supplementary angle (180-true) rather than the true one. Doug hasn't been able to test 3D angle accuracy yet (the status-bar bug blocked all 3D testing until this session's earlier fix) -- worth watching for specifically on the next 3D test, though a clean fix isn't as straightforward as 2D's intersection-point approach, since two 3D edges don't always have as clean a common reference point (may share a vertex, may not exactly intersect as infinite lines would). Not guessed at blind; will investigate with real data if Doug's next test shows the same symptom in 3D.
+
+### Lesson for future development
+
+**"Compute an angle" quietly depends on "whose direction convention," and that dependency is easy to bury inside a seemingly self-contained formula.** The atan2(cross,dot) math itself was never wrong -- it was correctly computing the angle between WHATEVER two directions it was given. The bug was entirely upstream, in how those directions got chosen, and it took real user testing (not formula review) to surface it, because the formula "looked right" and even matched a hand-verified test case for the WRONG reason -- any two consistently-chosen directions produce a self-consistent, testable angle; consistency isn't the same as matching what the user meant.
+
+## Session 74 (cont'd): hover-preview marker ported for Rad and Ang, closing two flagged follow-ups at once
+
+Doug's request: give 'Ang' the same anticipatory yellow-square hover glyph the parallel-construction-line tool (parcl) already shows while shopping for a straight element -- 'this is the same situation.'
+
+Read m2d.py's full preview mechanism (_preview_start/_preview_stop/_preview_move/_preview_erase_shapes, plus _pick_marker and the _marker_straight/_marker_circle builders parcl and similar tools already use) to port it faithfully rather than build a stripped-down one-off. Confirmed the self.win./self.display mappings precisely before porting (self.display in m2d.py IS win.canvas._display, per kodacad.py's own M2D(win, display) construction) rather than assuming.
+
+Ported as new MainWindow methods (mainwindow has no live a2d/M2D reference, same reasoning as every other port this session): _uvpnt, _pick_marker, _preview_start_meas/_preview_stop_meas/_preview_move_meas/_preview_erase_shapes_meas, plus two new builder functions -- _marker_straight_meas (wired to Ang, using the already-ported _nearest_straight) and _marker_circle_meas (wired to Rad, using the already-ported _nearest_circle_ent). Building both in one pass closes TWO flagged items at once: Doug's current Ang request, and the ccirc/carc visual-feedback follow-up flagged earlier this session (measurement itself was already confirmed correct; only the hover confirmation was missing).
+
+Wired into radMeas/angMeas's arming (else) branches; a safety-net stop added to clearCallback() (the general 'any tool is done/cancelled' hook) so switching tools or ending the operation mid-sequence can never leave an orphaned marker or move callback behind -- matching m2d.py's own 'single registration, always' discipline for the identical reason.
+
+### Lesson for future development
+
+**A UX pattern the user already trusts elsewhere in the app is often the right answer to 'this feels unfinished,' not a new design question.** Doug didn't ask for a hover marker in the abstract -- he named the exact existing tool that already does the right thing and asked for parity. Reading that tool's real implementation precisely, rather than designing a fresh mechanism from the behavioral description alone, produced a port that's already proven correct in production use, and building it once, generally, closed a second open item for free.
+
+## Session 74 (cont'd): RESOLVED -- 2D angle used the raw, off-axis click position instead of the point's true projection onto the line
+
+Doug's report ('measurement is based on cursor positions instead of the angle between the actual lines selected') pointed precisely at a real flaw in the previous round's own fix: the direction-from-intersection approach used the RAW click uv as the far point, not a point actually on the line. A real click is essentially never pixel-perfect on the line -- it lands a few pixels to one side -- and that off-axis offset, measured relative to the intersection, rotates the computed direction by a real amount. Worse the closer the click is to the intersection, since the same small perpendicular miss produces a larger angular deviation at a shorter radius.
+
+Verified numerically before and after: a true 90 degree angle (horizontal/vertical lines through the origin), clicked realistically close to the intersection with a small 0.05-unit off-axis offset on each pick, computed as 71.08 degrees with the raw click position -- a real, meaningful error, not a rounding artifact. Projecting each click onto its own line first (workplane.py's proj_pt_on_line, the SAME function this session's hover-marker already uses to place its glyph) recovers exactly 90.0 degrees.
+
+**Fix**: angMeasC's 2D engine path now projects the click onto the matched line immediately, storing the projected point (guaranteed to sit exactly on the true line) rather than the raw click uv. angMeas()'s computation logic itself needed no changes -- it already correctly derived direction from (stored point - intersection); the stored point just needed to actually BE on the line.
+
+### Lesson for future development
+
+**A fix can be correct in its formula and still wrong in what it's fed.** Last round's intersection-relative direction approach was the right idea, verified against a hand-picked test case that happened to use an exact, on-line point -- which is exactly the case real clicks never produce. The bug wasn't in the math; it was in an implicit assumption (the click position IS a point on the line) that held in the test but not in practice, and only real usage against a real, imprecise human click was positioned to catch it.
