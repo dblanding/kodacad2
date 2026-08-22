@@ -192,10 +192,26 @@ class PositionDialog(QDialog):
             field.setMaximumWidth(80)
             trans_row.addWidget(field)
         nudge_layout.addLayout(trans_row)
-        # Rotation nudges (degrees, about world X/Y/Z) -- pivot about
-        # the part's CURRENT world position (see _apply_nudge), not
-        # the global origin, so a small angle can't swing a part that's
-        # far from (0,0,0) wildly across the scene.
+        # Session 76, Doug: rotate about a remote axis (e.g. the
+        # active workplane's own W, tilted relative to world) by
+        # first moving the gizmo's pivot AND orientation there, then
+        # nudging a rotation. Placed here, between translate and
+        # rotate fields, matching the natural workflow order: align
+        # the pivot/axes first, THEN type the rotation.
+        self._align_wp_btn = QPushButton("Align Gizmo to Active Workplane")
+        self._align_wp_btn.setToolTip(
+            "Move the manipulator's pivot to the active workplane's "
+            "origin, with its rotation axes matching the workplane's "
+            "own U/V/W -- so a Nudge rotation turns about the "
+            "workplane's axis, not always world X/Y/Z.")
+        nudge_layout.addWidget(self._align_wp_btn)
+        # Rotation nudges (degrees, about the manipulator's OWN
+        # current X/Y/Z -- world X/Y/Z by default, or the active
+        # workplane's U/V/W after using the button above; see
+        # _apply_nudge) -- pivot about the part's CURRENT world
+        # position (see _apply_nudge), not the global origin, so a
+        # small angle can't swing a part that's far from (0,0,0)
+        # wildly across the scene.
         rot_row = QHBoxLayout()
         self._nudge_rx = QLineEdit("0")
         self._nudge_ry = QLineEdit("0")
@@ -248,6 +264,7 @@ class PositionDialog(QDialog):
         self._two_points_btn.clicked.connect(self._start_two_points_picking)
         self._dynamic_btn.clicked.connect(self._start_dynamic_mode)
         self._nudge_apply_btn.clicked.connect(self._apply_nudge)
+        self._align_wp_btn.clicked.connect(self._align_manipulator_to_wp)
         self._mate_btn.clicked.connect(lambda: self._on_constraint_chosen("mate"))
         self._align_btn.clicked.connect(lambda: self._on_constraint_chosen("align"))
         self._align_axis_btn.clicked.connect(lambda: self._on_constraint_chosen("axis"))
@@ -662,6 +679,45 @@ class PositionDialog(QDialog):
             self.main_win.statusBar().showMessage(
                 "Could not attach manipulator -- see console.", 5000)
 
+    def _align_manipulator_to_wp(self):
+        """Move the attached manipulator's pivot and orientation to
+        the active workplane's own origin/U/V/W (Session 76, Doug:
+        rotate an assembly about a remote, possibly-tilted axis by
+        aligning the gizmo to a workplane first, then Nudging)."""
+        if self.main_win.canvas.manipulator_position() is None:
+            self.main_win.statusBar().showMessage(
+                "No manipulator attached -- start Dynamic mode "
+                "first (drag the gizmo once, or just select Dynamic).",
+                5000)
+            return
+        wp = self.main_win.activeWp
+        if wp is None:
+            self.main_win.statusBar().showMessage(
+                "No active workplane -- select or create one first.",
+                5000)
+            return
+        try:
+            ax3 = wp.gpPlane.Position()
+            loc = ax3.Location()
+            w_dir = ax3.Direction()
+            u_dir = ax3.XDirection()
+            origin_xyz = (loc.X(), loc.Y(), loc.Z())
+            w_xyz = (w_dir.X(), w_dir.Y(), w_dir.Z())
+            u_xyz = (u_dir.X(), u_dir.Y(), u_dir.Z())
+        except Exception as e:
+            self.main_win.statusBar().showMessage(
+                f"Could not read the workplane's frame ({e}).", 5000)
+            return
+        ok = self.main_win.canvas.reposition_manipulator(
+            origin_xyz, w_xyz, u_xyz)
+        if ok:
+            self.main_win.statusBar().showMessage(
+                "Gizmo aligned to the active workplane -- rZ now "
+                "rotates about the workplane's own normal (W).", 5000)
+        else:
+            self.main_win.statusBar().showMessage(
+                "Could not align the gizmo -- see console.", 5000)
+
     def _reattach_manipulator(self):
         """(Re)attach the manipulator to every leaf part under self.uid.
 
@@ -768,6 +824,26 @@ class PositionDialog(QDialog):
             pivot_pnt = gp_Pnt(pivot.X(), pivot.Y(), pivot.Z())
             pivot_src = "part world loc (no manipulator attached)"
 
+        # Rotation AXES: the manipulator's OWN current X/Y/Z when one
+        # is attached (Session 76, Doug: reposition the gizmo to a
+        # workplane's origin/U/V/W via the new 'Align to Workplane'
+        # button, then Nudge should genuinely rotate about THOSE
+        # axes -- not always world X/Y/Z, which is all the pivot-only
+        # fix above ever gave: correct PIVOT LOCATION, but rZ would
+        # still spin about world Z regardless of the gizmo's actual
+        # orientation, silently wrong for any tilted workplane).
+        # Falls back to world X/Y/Z when no manipulator is attached,
+        # matching this function's own prior, unchanged behavior for
+        # that case.
+        axes = self.main_win.canvas.manipulator_axes()
+        if axes is not None:
+            _origin, x_xyz, y_xyz, z_xyz = axes
+            axis_x, axis_y, axis_z = (gp_Dir(*x_xyz), gp_Dir(*y_xyz),
+                                      gp_Dir(*z_xyz))
+        else:
+            axis_x, axis_y, axis_z = (gp_Dir(1, 0, 0), gp_Dir(0, 1, 0),
+                                      gp_Dir(0, 0, 1))
+
         # Compose in a fixed order: rotate about X, then Y, then Z
         # (all at the pivot), then translate. Simultaneous multi-axis
         # rotation is inherently order-dependent (there's no single
@@ -778,9 +854,9 @@ class PositionDialog(QDialog):
         if rx or ry or rz:
             print(f"[nudge] rotation pivot: ({pivot_pnt.X():.3f}, "
                   f"{pivot_pnt.Y():.3f}, {pivot_pnt.Z():.3f}) via {pivot_src}")
-        for axis_dir, angle_deg in ((gp_Dir(1, 0, 0), rx),
-                                    (gp_Dir(0, 1, 0), ry),
-                                    (gp_Dir(0, 0, 1), rz)):
+        for axis_dir, angle_deg in ((axis_x, rx),
+                                    (axis_y, ry),
+                                    (axis_z, rz)):
             if angle_deg == 0:
                 continue
             t = gp_Trsf()

@@ -5084,3 +5084,23 @@ Confirmed by reading position_dialog.py's _point_pick_callback directly: it down
 ### Lesson for future development
 
 **A bug pattern found and fixed once is worth searching for elsewhere in the codebase, not just remembering as a one-off.** This is the THIRD point/edge-picking callback in this project found missing an engine path for workplane catches (distPtPtC, angMeasC, now _point_pick_callback) -- each one built independently, each one defaulting to 3D-only OCCT selection because that's the more obvious, more discoverable path, and each one silently failing on a workplane pick until real usage surfaced it. Worth a deliberate pass, sometime, checking every OTHER SetSelectionMode*-based picking callback in this codebase for the same gap, rather than waiting for each one to be reported individually.
+
+# Session 76: 'Align Gizmo to Active Workplane' -- rotate about a remote, tilted axis via Nudge
+
+Doug's request: a button on the Position dialog to place the AIS_Manipulator gizmo at the active workplane's origin, axes aligned to its U/V/W, so Nudge can rotate about a remote axis (his stated use case: rotating an assembly about a workplane's axis rather than its own center).
+
+**Confirmed Doug's guess**: attach_manipulator()'s own comment states plainly that AIS_Manipulator positions itself at the attached object's center by default -- exactly as suspected.
+
+**Important finding surfaced before building anything**, changing the actual scope of the fix needed: _apply_nudge's rotation axes were hardcoded to world X/Y/Z (gp_Dir(1,0,0) etc.), literally, per that code's own prior comment ('about world X/Y/Z'). The pivot POINT correctly already came from the manipulator's position -- but the rotation DIRECTION was always world-aligned regardless of where the gizmo sat. Repositioning the gizmo alone would have fixed the pivot location while silently leaving rZ still spinning about world Z, not the workplane's own W, for any workplane that isn't world-axis-aligned -- which would have delivered something that LOOKED like the requested feature but didn't actually solve Doug's stated problem for a tilted workplane. Built both pieces rather than the half that was explicitly asked for.
+
+**Added to koda_viewport.py**: manipulator_axes() (reads the gizmo's current full orientation as plain-float (origin, x_dir, y_dir, z_dir) tuples -- matching this project's own established preference for avoiding uncertain OCP object round-tripping where plain values suffice) and reposition_manipulator(origin, w_dir, u_dir) (explicitly relocates/reorients an attached manipulator via AIS_Manipulator.SetPosition(gp_Ax2(...)), guarded -- this exact constructor overload has no live OCP install in this sandbox to verify against, so a failure degrades to a clear status message rather than a crash).
+
+**Added to position_dialog.py**: an 'Align Gizmo to Active Workplane' button between the Nudge dialog's translate and rotate fields (matching the natural workflow order: align first, then type the rotation), wired to _align_manipulator_to_wp -- reads the active workplane's own gp_Pln.Position() (a gp_Ax3: origin, W as the main/normal direction, U as the X direction) and calls reposition_manipulator. Clear status messages for both failure cases (no manipulator currently attached; no active workplane).
+
+**_apply_nudge itself updated**: rotation axes now read from manipulator_axes() when a manipulator is attached (whatever its CURRENT orientation is -- default center-of-shape, or workplane-aligned after the new button), falling back to world X/Y/Z only when none is attached, preserving that case's existing behavior exactly.
+
+**Workflow note, worth Doug knowing rather than discovering by surprise**: _apply_nudge re-attaches the manipulator fresh (back to its DEFAULT center-of-shape orientation) after every applied nudge -- correct and expected, since the part has moved, but it means a second workplane-relative rotation needs the Align button clicked again first, not just typing a new rZ value.
+
+### Lesson for future development
+
+**A feature request phrased as a single UI addition can quietly depend on a second, unstated fix elsewhere -- worth checking the full data path before building only the requested piece.** Doug asked for a button; the button alone would have compiled, run, looked correct, and silently failed to solve his actual problem for any non-axis-aligned workplane, since the rotation-axis logic living three call-frames away had never been designed to look at the gizmo's orientation at all. Reading _apply_nudge's actual rotation-construction code -- not just the button's own logic -- is what surfaced this before it shipped as a half-fix.

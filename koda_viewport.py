@@ -458,6 +458,64 @@ class KodaViewport(QWidget):
             print(f"[manipulator] could not read position: {e}")
             return None
 
+    def manipulator_axes(self):
+        """The manipulator gizmo's current FULL orientation, as
+        (origin_xyz, x_dir_xyz, y_dir_xyz, z_dir_xyz) plain-float
+        tuples, or None if no manipulator is attached. Session 76:
+        added alongside reposition_manipulator() so Nudge's rotation
+        can pivot about the gizmo's OWN current axes (whatever they
+        currently are -- default center-of-shape orientation, or
+        explicitly repositioned e.g. to a workplane) instead of
+        always assuming world X/Y/Z. Returned as plain floats, not
+        raw gp_Dir/gp_Ax2 objects, matching this project's own
+        established discipline of avoiding uncertain OCP object
+        round-tripping where simple values suffice."""
+        if self._manipulator is None:
+            return None
+        try:
+            ax2 = self._manipulator.Position()
+            loc = ax2.Location()
+            xd = ax2.XDirection()
+            yd = ax2.YDirection()
+            zd = ax2.Direction()
+            return ((loc.X(), loc.Y(), loc.Z()),
+                    (xd.X(), xd.Y(), xd.Z()),
+                    (yd.X(), yd.Y(), yd.Z()),
+                    (zd.X(), zd.Y(), zd.Z()))
+        except Exception as e:
+            print(f"[manipulator] could not read axes: {e}")
+            return None
+
+    def reposition_manipulator(self, origin_xyz, w_dir_xyz, u_dir_xyz):
+        """Explicitly relocate/reorient the attached manipulator
+        gizmo -- e.g. to a workplane's own origin and U/V/W axes
+        (Session 76, Doug: rotate an assembly about a remote axis by
+        placing the gizmo on the workplane, then using Nudge).
+        origin_xyz: the new pivot point. w_dir_xyz: the gizmo's new
+        main/Z axis (the workplane's own W/normal, for this use case).
+        u_dir_xyz: the gizmo's new X axis (the workplane's own U) --
+        determines the gizmo's Y axis too (Y = W x X, per gp_Ax2's
+        own standard right-handed construction). Returns True on
+        success, False if no manipulator is attached or the
+        construction fails for any reason (guarded -- this exact
+        gp_Ax2 constructor overload has no live OCP install in this
+        sandbox to verify against)."""
+        if self._manipulator is None:
+            return False
+        try:
+            from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
+            origin = gp_Pnt(*origin_xyz)
+            w_dir = gp_Dir(*w_dir_xyz)
+            u_dir = gp_Dir(*u_dir_xyz)
+            ax2 = gp_Ax2(origin, w_dir, u_dir)
+            self._manipulator.SetPosition(ax2)
+            self.context.UpdateCurrentViewer()
+            self.update()
+            return True
+        except Exception as e:
+            print(f"[manipulator] reposition failed: {e}")
+            return False
+
     def detach_manipulator(self):
         """Remove the manipulator gizmo from the viewport."""
         if self._manipulator is None:
