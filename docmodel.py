@@ -1568,6 +1568,20 @@ class DocModel:
         shape_tool.SetShape(label, modshape)
         color_tool.SetColor(modshape, color, XCAFDoc_ColorGen)
         shape_tool.UpdateAssemblies()
+        # Session 78, Doug: undoing a fillet left the fillet visibly
+        # in place -- exactly the accepted-risk boundary named when
+        # _incremental_reconcile's fast undo/redo path (Session 77)
+        # was built: a shape-REPLACING operation on a surviving uid
+        # whose LOCATION doesn't change (fillet/shell always keep
+        # the part sitting where it was) is invisible to a location-
+        # only comparison. Recording the STABLE entry (not uid --
+        # uids are a per-parse serial, unstable across the parse_doc()
+        # a few lines below) lets a later undo/redo force-redraw
+        # whatever THIS SPECIFIC prototype resolves to at that time,
+        # regardless of whether its location also happened to change.
+        if not hasattr(self, '_shape_replaced_entries'):
+            self._shape_replaced_entries = []
+        self._shape_replaced_entries.append(ref_entry)
         self.parse_doc()
 
     def add_component(self, shape, name, color):

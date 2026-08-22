@@ -532,6 +532,36 @@ def pullC(shapeList, *args):
         pull()
 
 
+def _redraw_after_shape_replace(ref_entry, old_uids):
+    """After dm.replace_shape() has run (it calls parse_doc()
+    internally), redraw the modified part AND every OTHER instance
+    sharing the same prototype -- Session 78, Doug: filleted one of
+    two shared L-brackets, only that one instance's DISPLAY updated.
+    replace_shape's own docstring/code correctly targets the SHARED
+    prototype label (confirmed by reading it directly) -- the
+    document data is genuinely correct for every sharing instance
+    after the call. But fillet()/shell() only ever redrew the ONE
+    uid that was picked; nothing was redrawing the others' AIS
+    objects, even though their underlying shape data was already
+    right. A latent bug, not introduced this session -- newly
+    exposed because this is apparently the first test of filleting a
+    genuinely shared part.
+
+    ref_entry/old_uids MUST be captured by the caller BEFORE calling
+    replace_shape -- the picked uid itself can become stale/invalid
+    after replace_shape's internal parse_doc() re-parse (uids are
+    entry+serial, and serial is a per-parse counter -- see Session
+    72's reparenting investigation), so this takes the STABLE entry
+    string, resolved fresh against the just-updated label_dict."""
+    win.build_tree()
+    if ref_entry:
+        force = {u for u, info in dm.label_dict.items()
+                if info.get('ref_entry') == ref_entry and u in dm.part_dict}
+    else:
+        force = set()
+    win._incremental_reconcile(old_uids, force_redraw_uids=force)
+
+
 def fillet(event=None):
     """Fillet (blend) edges of active part"""
 
@@ -579,9 +609,11 @@ def fillet(event=None):
             return
         try:
             win.erase_shape(uid)
+            ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+            old_uids = set(dm.part_dict.keys())
             with docmodel.undo_transaction(dm):
                 dm.replace_shape(uid, newPart)
-            win.draw_shape(uid)
+            _redraw_after_shape_replace(ref_entry, old_uids)
             win.statusBar().showMessage("Fillet operation complete")
         except Exception as e:
             print(f"Unable to replace/draw shape. {e}")
@@ -690,9 +722,11 @@ def shell(event=None):
         mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
         newPart = mkShell.Shape()
         win.erase_shape(uid)
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+        old_uids = set(dm.part_dict.keys())
         with docmodel.undo_transaction(dm):
             dm.replace_shape(uid, newPart)
-        win.draw_shape(uid)
+        _redraw_after_shape_replace(ref_entry, old_uids)
         win.setActivePart(uid)
         win.statusBar().showMessage("Shell operation complete")
         win.clearCallback()

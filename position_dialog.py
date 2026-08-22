@@ -899,6 +899,7 @@ class PositionDialog(QDialog):
         new_world = world_move_loc.Multiplied(current_world)
         new_local = self.dm.world_to_local(self.uid, new_world)
 
+        old_uids = set(self.dm.part_dict.keys())
         new_uid = self.dm.set_component_location(self.uid, new_local)
         if new_uid is None:
             self.main_win.statusBar().showMessage(
@@ -907,14 +908,67 @@ class PositionDialog(QDialog):
 
         self._history.append(current_local)
         self.uid = new_uid
-        self._refresh_display()
+        self._refresh_display(old_uids)
         return True
 
-    def _refresh_display(self):
-        self.main_win.ais_shape_dict.clear()
-        self.main_win.canvas._display.Context.RemoveAll(False)
-        self.main_win.build_tree()
-        self.main_win.redraw()
+    def _refresh_display(self, old_uids=None):
+        """Session 77, Doug: full redraws (RemoveAll + redraw every
+        part in the document) were tedious on a large assembly, and
+        every Nudge/manipulator-release/Mate/Align went through this
+        exact path -- Doug specifically noticed 'Done' does NOT
+        redraw, which was the tell that each of these calls its own
+        refresh separately rather than something the dialog forces
+        generally.
+
+        set_component_location() (called by every path that reaches
+        here) always assigns the MOVED component a fresh uid on every
+        call -- confirmed via its own docstring -- so the moved item
+        itself is always genuinely new to _incremental_reconcile's
+        own old/new uid diff. BUT: if self.uid is an ASSEMBLY (Doug's
+        own stated use case last session -- 'I have an assembly which
+        I want to rotate'), only the assembly's OWN component label
+        gets replaced; its CHILDREN keep their original uids, since
+        their own labels were never touched -- only their ANCESTOR's
+        location changed. Their computed world position genuinely
+        changes (parse_doc() correctly recomputes it), but under the
+        default fast path a surviving uid is skipped, not redrawn --
+        every child of a moved assembly would go stale on screen.
+        Caught and fixed before shipping, not discovered as a bug
+        report: redraw_all_survivors=True is required whenever the
+        moved item is an assembly; the plain-leaf-part case (provably
+        safe per set_component_location's own docstring -- other
+        instances of a shared part are untouched) keeps the fast,
+        default path.
+
+        old_uids must be snapshotted by the CALLER, immediately
+        before its own set_component_location() call -- by the time
+        this method runs, dm.part_dict already reflects the NEW state
+        (set_component_location calls parse_doc() internally), so
+        snapshotting here would already be too late."""
+        if old_uids is not None:
+            self.main_win.build_tree()
+            # Session 77 (real regression, caught by Doug's own
+            # timing data, not guessed): redraw_all_survivors=True
+            # was the WRONG tool here -- it redraws the ENTIRE
+            # document (95 parts, 15-20+ seconds measured), not just
+            # the moved assembly's own descendants (4 parts). Only
+            # those descendants actually need it: their world
+            # position changed via their ancestor, but their own uid
+            # never did, so they're survivors the default rule would
+            # otherwise (correctly, for everything else) skip.
+            # get_descendant_part_uids is the same method
+            # _reattach_manipulator already uses to find exactly this
+            # set.
+            force = self.dm.get_descendant_part_uids(self.uid)
+            self.main_win._incremental_reconcile(
+                old_uids, force_redraw_uids=force)
+        else:
+            # Defensive fallback for any caller that doesn't (yet)
+            # pass a snapshot -- correct, just not the fast path.
+            self.main_win.ais_shape_dict.clear()
+            self.main_win.canvas._display.Context.RemoveAll(False)
+            self.main_win.build_tree()
+            self.main_win.redraw()
         self._name_label.setText(self.dm.get_full_path_name(self.uid))
 
     # -----------------------------------------------------------------
@@ -941,6 +995,7 @@ class PositionDialog(QDialog):
         # (Session 14), so self.uid must be updated here too, not
         # just after the re-apply below.
         prev_local = self._history.pop()
+        old_uids = set(self.dm.part_dict.keys())
         restored_uid = self.dm.set_component_location(self.uid, prev_local)
         if restored_uid is None:
             self.main_win.statusBar().showMessage(
@@ -959,7 +1014,7 @@ class PositionDialog(QDialog):
             self._step1_kind = None
         elif step == 1:
             self._step2_wall_normal = None
-        self._refresh_display()
+        self._refresh_display(old_uids)
 
         self._last_mode = "align" if self._last_mode == "mate" else "mate"
         pick1, pick2 = self._last_picks
@@ -1025,10 +1080,11 @@ class PositionDialog(QDialog):
         if was_dynamic:
             self.main_win.canvas.detach_manipulator()
         prev_local = self._history.pop()
+        old_uids = set(self.dm.part_dict.keys())
         new_uid = self.dm.set_component_location(self.uid, prev_local)
         if new_uid is not None:
             self.uid = new_uid
-            self._refresh_display()
+            self._refresh_display(old_uids)
             self.main_win.statusBar().showMessage("Step undone.", 5000)
             # Step the DOF tracker backward too, clearing whatever
             # that step had established for the NEXT step to use --

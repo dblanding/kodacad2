@@ -1126,12 +1126,20 @@ class MainWindow(QMainWindow):
             print(f"'{item.text(0)}' cannot be instanced.")
             self.itemClicked = None
             return
+        old_uids = set(dm.part_dict.keys())
         with undo_transaction(dm):
             instanced = dm.create_shared_instance(uid)
         if instanced:
-            self.ais_shape_dict.clear()
+            # Session 77, Doug: full redraws are tedious on a large
+            # assembly, and this one -- adding exactly one genuinely
+            # new component while everything else stays untouched --
+            # is precisely the case _incremental_reconcile's default,
+            # fast survivor-skip path (already proven for delete)
+            # handles correctly with no special flag needed: the new
+            # instance's uid is genuinely new, so it gets drawn;
+            # nothing else does.
             self.build_tree()
-            self.redraw()
+            self._incremental_reconcile(old_uids)
         self.treeView.clearSelection()
         self.itemClicked = None
 
@@ -1425,6 +1433,36 @@ class MainWindow(QMainWindow):
         dm.doc.Redo()
         self._refresh_after_history("Redo")
 
+    def _loc_differs(self, loc_a, loc_b):
+        """True if two TopLoc_Location objects represent a genuinely
+        different transform. Compared via PLAIN NUMERIC transform-
+        matrix components (translation + rotation, all 12 values of
+        the 3x4 matrix) -- NOT shape/object identity, the comparison
+        that made the earlier IsSame()-based caching attempt
+        unreliable (Session 65: 'failing 100% of the time in this
+        codebase's actual usage'). That failure was specific to
+        OCCT's shape-identity fragility across a re-parse; plain
+        floats have no equivalent ambiguity. Session 77: built to
+        make undo/redo's redraw targeted for the common case (a
+        series of position changes) without touching the separate,
+        still-accepted risk for shape-REPLACEMENT undos (fillet/
+        Mill/Pull) that don't necessarily change location -- see
+        _refresh_after_history's own comment for that boundary.
+        Any comparison failure (missing location, unexpected type,
+        anything) is treated as 'differs' -- the SAFE direction,
+        forcing a redraw rather than risking a wrongly-skipped stale
+        part."""
+        try:
+            ta = loc_a.Transformation()
+            tb = loc_b.Transformation()
+            for r in (1, 2, 3):
+                for c in (1, 2, 3, 4):
+                    if abs(ta.Value(r, c) - tb.Value(r, c)) > 1.0e-9:
+                        return True
+            return False
+        except Exception:
+            return True
+
     def _refresh_after_history(self, verb):
         """Full state refresh after Undo/Redo. Cached uids can dangle
         (labels may be re-created under new entries), so active-part
@@ -1438,19 +1476,69 @@ class MainWindow(QMainWindow):
         self.itemClicked = None
         # Snapshot BEFORE parse_doc() re-reads the document -- OCAF's
         # undo can restructure the label tree, so before/after uid
-        # diffing is the only reliable signal for what changed.
+        # diffing is the only reliable signal for what changed. Also
+        # snapshot each survivor's location (plain TopLoc_Location
+        # reference, cheap) so it can be compared after parse_doc()
+        # re-reads -- see _loc_differs and Session 77's log entry.
         old_uids = set(dm.part_dict.keys())
+        old_locs = {uid: dm.part_dict[uid].get('loc') for uid in old_uids}
         dm.parse_doc()
         self.build_tree()
-        # redraw_all_survivors=True (Session 70, Doug's fillet/undo
-        # report): an operation being undone/redone can replace a
-        # SURVIVING uid's shape in place (fillet/shell's
-        # dm.replace_shape does exactly this) -- that uid exists in
-        # both old_uids and new_uids, so the default fast-path
-        # (delete's provably-safe 'survivor = untouched' rule) would
-        # skip it and leave stale geometry on screen. Undo/redo
-        # cannot assume survivors are unchanged the way delete can.
-        self._incremental_reconcile(old_uids, redraw_all_survivors=True)
+        # Session 77, Doug: redraw_all_survivors=True (Session 70)
+        # was correct but blunt -- on a 99-part document, undoing a
+        # SERIES of position moves cost 20+ seconds, redrawing every
+        # part in the document to correctly update the handful that
+        # actually moved. Targeted alternative: compare each
+        # survivor's location before/after via _loc_differs (plain
+        # numeric comparison, not shape identity) and force-redraw
+        # only the ones that actually changed.
+        #
+        # KNOWN, ACCEPTED, UNCHANGED BOUNDARY (Session 70's original
+        # risk, NOT solved by this fix, NOT made worse by it either):
+        # an operation that replaces a surviving uid's SHAPE in place
+        # without necessarily changing its LOCATION (fillet/shell's
+        # dm.replace_shape) would show identical locations before and
+        # after -- _loc_differs correctly reports 'unchanged' for
+        # that uid, same outcome the old redraw_all_survivors=True
+        # path was specifically built to avoid. This fix targets the
+        # POSITION-change case (Doug's actual current scenario --
+        # undoing a series of moves) without attempting to also solve
+        # the separate shape-replacement case, which still needs the
+        # deeper OCAF delta introspection Session 70 deferred.
+        new_uids = set(dm.part_dict.keys())
+        survivors = old_uids & new_uids
+        changed_survivors = set()
+        for uid in survivors:
+            old_loc = old_locs.get(uid)
+            new_loc = dm.part_dict.get(uid, {}).get('loc')
+            if old_loc is None or new_loc is None:
+                changed_survivors.add(uid)  # can't prove unchanged
+            elif self._loc_differs(old_loc, new_loc):
+                changed_survivors.add(uid)
+        # Session 78, Doug: the KNOWN boundary above -- fillet/shell
+        # replacing a shape without moving it -- is now closed, not
+        # just documented. replace_shape (docmodel.py) records the
+        # STABLE entry of every prototype it touches into
+        # dm._shape_replaced_entries. Resolve each recorded entry
+        # against the JUST-REFRESHED label_dict (uids are per-parse,
+        # unstable -- the entry is what's trustworthy across the
+        # parse_doc() a few lines above) and force-redraw every
+        # CURRENT instance sharing that prototype -- covers every
+        # shared instance too, the same fix just applied directly in
+        # fillet()/shell() for the forward (non-undo) case. Cleared
+        # after use -- once this undo/redo has accounted for it,
+        # there's no reason for a LATER, unrelated undo/redo to keep
+        # re-forcing the same uid's redraw.
+        replaced_entries = getattr(dm, '_shape_replaced_entries', [])
+        if replaced_entries:
+            for entry in replaced_entries:
+                changed_survivors |= {
+                    u for u, info in dm.label_dict.items()
+                    if info.get('ref_entry') == entry
+                    and u in dm.part_dict}
+            dm._shape_replaced_entries = []
+        self._incremental_reconcile(old_uids,
+                                    force_redraw_uids=changed_survivors)
         n_undo = dm.doc.GetAvailableUndos()
         n_redo = dm.doc.GetAvailableRedos()
         self.statusBar().showMessage(
@@ -1491,7 +1579,8 @@ class MainWindow(QMainWindow):
         """Fit all displayed parts and wp's to the screen"""
         self.canvas._display.FitAll()
 
-    def _incremental_reconcile(self, old_uids, redraw_all_survivors=False):
+    def _incremental_reconcile(self, old_uids, redraw_all_survivors=False,
+                               force_redraw_uids=None):
         """Reconciles the viewer against dm.part_dict AFTER an
         operation that already called dm.parse_doc() (delete and
         undo/redo both do) -- diffing old_uids (captured by the
@@ -1548,6 +1637,19 @@ class MainWindow(QMainWindow):
         _refresh_after_history) an explicit way to say so. Delete
         continues to use the fast, provably-safe default.)
 
+        (Session 77: redraw_all_survivors is the RIGHT tool when the
+        caller genuinely has no idea which survivors changed (undo/
+        redo). It is the WRONG tool when the caller knows EXACTLY
+        which ones did -- using it for a Position-dialog assembly
+        move redrew the ENTIRE document (95 parts, 15-20+ seconds)
+        to correctly update 4. force_redraw_uids is the targeted
+        alternative: a specific set of uids to redraw regardless of
+        survivor status, for callers (like a moved assembly's own
+        descendants -- their world position changed via their
+        ancestor, but their own uid never changed) who know precisely
+        which subset needs it, without paying to re-examine
+        everything else in the document.)
+
         (Session 65 postscript: this same uid space is also where
         self.hide_list needs reconciling -- it held stale uids
         across undo/redo with nothing ever pruning it, causing tree/
@@ -1582,7 +1684,12 @@ class MainWindow(QMainWindow):
         _n_redrawn = 0
         _redrawn_uids = []
         genuinely_new = new_uids - old_uids
-        to_redraw = new_uids if redraw_all_survivors else genuinely_new
+        if redraw_all_survivors:
+            to_redraw = new_uids
+        else:
+            to_redraw = genuinely_new | (
+                set(force_redraw_uids) & new_uids
+                if force_redraw_uids else set())
         for uid in to_redraw:
             if uid in self.hide_list:
                 continue
