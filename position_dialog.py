@@ -574,22 +574,69 @@ class PositionDialog(QDialog):
         self.main_win.statusBar().showMessage("Pick point 1 (need not be on the part).")
 
     def _point_pick_callback(self, shapeList, *args):
+        """Session 75, Doug's report: workplane points highlighted
+        (the snap-engine catch glyph) but were never acknowledged --
+        this callback only ever handled a genuine 3D TopoDS_Vertex
+        from OCCT's own selection. A workplane catch point
+        (intersection, endpoint, Ctrl+Shift center/midpoint) is a
+        snap-engine construct, not necessarily backed by any real
+        TopoDS_Vertex at all -- the downcast below would silently
+        fail (or shapeList would be empty) and nothing ever advanced
+        the tool, even though the glyph correctly showed a valid
+        catch. Same bug class as distPtPtC's own original gap
+        (Session 63), fixed the identical way: ENGINE PATH FIRST --
+        a workplane catch becomes a world point via uv_to_world; the
+        3D vertex pick remains as fallback, so a workplane catch and
+        a part vertex can be used as the two points interchangeably,
+        matching distPtPtC's own established precedent exactly."""
         from OCP.BRep import BRep_Tool
-        for shape in shapeList:
-            try:
-                vrtx = TopoDS.Vertex_s(shape)
-            except Exception as e:
-                print(f"[PositionDialog] pick was not a vertex: {e}")
-                continue
-            gp_pt = BRep_Tool.Pnt_s(vrtx)
-            pt = position_math.Vec3.from_gp(gp_pt)
-            if self._pick1 is None:
-                self._pick1 = pt
-                self.main_win.statusBar().showMessage("Point 1 picked. Pick point 2.")
-            else:
-                self._pick2 = pt
-                self._apply_two_points()
-                return
+        pt = None
+        # 1. Engine path: catch on the active workplane
+        try:
+            click_xy = args[1] if len(args) > 1 else None
+            wp = self.main_win.activeWp
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import (screen_to_uv, find_snap,
+                                         uv_to_world, SNAP_PIXELS,
+                                         current_snap_mode)
+                uv = screen_to_uv(self.main_win.canvas.view,
+                                  click_xy[0], click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    try:
+                        tol = abs(self.main_win.canvas.view.Convert(
+                            SNAP_PIXELS))
+                    except Exception:
+                        tol = 1.0
+                    snap = find_snap(wp, uv, tol, current_snap_mode())
+                    if snap is not None:
+                        pt = uv_to_world(wp.gpPlane, snap[1][0],
+                                         snap[1][1])
+        except Exception as se:
+            print(f"[PositionDialog] engine path failed: {se}")
+        # 2. Fallback: a genuine 3D vertex pick
+        if pt is None:
+            for shape in shapeList:
+                if shape is None:
+                    continue
+                try:
+                    vrtx = TopoDS.Vertex_s(shape)
+                    pt = BRep_Tool.Pnt_s(vrtx)
+                    break
+                except Exception:
+                    continue
+        if pt is None:
+            self.main_win.statusBar().showMessage(
+                "No catch or vertex there -- click a workplane catch "
+                "or a part vertex.", 3000)
+            return
+        if self._pick1 is None:
+            self._pick1 = position_math.Vec3.from_gp(pt)
+            self.main_win.statusBar().showMessage(
+                "Point 1 picked. Pick point 2.")
+        else:
+            self._pick2 = position_math.Vec3.from_gp(pt)
+            self._apply_two_points()
 
     def _apply_two_points(self):
         self.main_win.clearCallback()
