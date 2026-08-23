@@ -1525,18 +1525,41 @@ class MainWindow(QMainWindow):
         # parse_doc() a few lines above) and force-redraw every
         # CURRENT instance sharing that prototype -- covers every
         # shared instance too, the same fix just applied directly in
-        # fillet()/shell() for the forward (non-undo) case. Cleared
-        # after use -- once this undo/redo has accounted for it,
-        # there's no reason for a LATER, unrelated undo/redo to keep
-        # re-forcing the same uid's redraw.
+        # fillet()/shell() for the forward (non-undo) case.
+        #
+        # Session 80 -- REAL REGRESSION FOUND AND FIXED, confirmed
+        # by Doug's own tutorial run: this list used to be CLEARED
+        # after being consulted once, on the theory that a later,
+        # unrelated undo/redo shouldn't keep re-forcing the same
+        # uid's redraw. That reasoning breaks the moment more than
+        # one shape-replacing operation happens before the FIRST
+        # undo ever runs (exactly Doug's sequence: 12 fillets, Pull,
+        # a second fillet, Shell -- all before undoing anything).
+        # Every one of those appends its own entry; the first undo
+        # correctly consulted the list and force-redrew the bottle --
+        # then wiped it clean, leaving every SUBSEQUENT undo/redo
+        # step with nothing left to consult, even though the bottle's
+        # shape kept genuinely changing at each step. The uid never
+        # changes across these operations and neither does its
+        # location, so nothing else was left to catch it -- the
+        # display froze on the first undo's result, permanently,
+        # regardless of how many more undo/redo clicks followed.
+        # Fixed by no longer clearing the list at all -- it persists
+        # for the life of the session, growing only when new
+        # replace_shape calls happen. Every undo/redo now force-
+        # redraws every recorded entry's current instances,
+        # unconditionally -- a small amount of possibly-redundant
+        # redraw work (re-drawing a part that may already be
+        # correct) traded for guaranteed correctness regardless of
+        # how many shape-replacing operations preceded the first
+        # undo. The list only ever holds a handful of short entry
+        # strings even across a long session -- not a real cost.
         replaced_entries = getattr(dm, '_shape_replaced_entries', [])
-        if replaced_entries:
-            for entry in replaced_entries:
-                changed_survivors |= {
-                    u for u, info in dm.label_dict.items()
-                    if info.get('ref_entry') == entry
-                    and u in dm.part_dict}
-            dm._shape_replaced_entries = []
+        for entry in replaced_entries:
+            changed_survivors |= {
+                u for u, info in dm.label_dict.items()
+                if info.get('ref_entry') == entry
+                and u in dm.part_dict}
         self._incremental_reconcile(old_uids,
                                     force_redraw_uids=changed_survivors)
         n_undo = dm.doc.GetAvailableUndos()
