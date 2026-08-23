@@ -603,7 +603,14 @@ def fillet(event=None):
             mkFillet.Add(fillet_r, edge)
         try:
             newPart = mkFillet.Shape()
-        except RuntimeError as e:
+        except Exception as e:
+            # Session 79: RuntimeError alone did NOT catch a real
+            # OCP.StdFail.StdFail_NotDone -- confirmed directly from
+            # Doug's own traceback (the raw exception still printed
+            # despite this exact guard shape). Broadened to Exception
+            # -- unverified before, now corrected against real
+            # evidence rather than an assumption carried over from
+            # this same pattern's first use.
             print(f"Unable to make Fillet shape. {e}")
             win.clearCallback()
             return
@@ -715,20 +722,49 @@ def shell(event=None):
         for face in win.faceStack:
             faces.Append(face)
         win.faceStack = []
-        workPart = win.activePart
+        # Session 79, Doug: the operation completed with no error at
+        # all but visibly did nothing -- consistent with the SAME
+        # mismatch fillet() needed fixing for earlier this project:
+        # the picked face comes from whatever's actually DISPLAYED,
+        # which can be a display-only NurbsConverted copy (Session
+        # 60/61's cylindrical-pick workaround), not literally
+        # win.activePart. If the picked face doesn't belong to
+        # workPart's own topology, MakeThickSolidByJoin has nothing
+        # valid to remove material from -- silently, no exception,
+        # matching exactly what Doug saw. shell() never got fillet's
+        # own fix for this same gap. Same resolution now applied.
+        cached = win._display_prep_cache.get(win.activePartUID)
+        workPart = cached[1] if cached is not None else win.activePart
         uid = win.activePartUID
         shellT = float(text) * win.unitscale
         mkShell = BRepOffsetAPI_MakeThickSolid()
         mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
-        newPart = mkShell.Shape()
-        win.erase_shape(uid)
-        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
-        old_uids = set(dm.part_dict.keys())
-        with docmodel.undo_transaction(dm):
-            dm.replace_shape(uid, newPart)
-        _redraw_after_shape_replace(ref_entry, old_uids)
+        try:
+            newPart = mkShell.Shape()
+        except Exception as e:
+            # Session 79: same fix as fillet's identical guard above
+            # -- RuntimeError did not catch the real
+            # OCP.StdFail.StdFail_NotDone Doug's traceback showed.
+            print(f"Unable to make Shell shape. {e}")
+            win.clearCallback()
+            return
+        try:
+            win.erase_shape(uid)
+            ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+            old_uids = set(dm.part_dict.keys())
+            with docmodel.undo_transaction(dm):
+                dm.replace_shape(uid, newPart)
+            _redraw_after_shape_replace(ref_entry, old_uids)
+            win.statusBar().showMessage("Shell operation complete")
+        except Exception as e:
+            # Session 79, Doug: the part vanished from the viewport
+            # but stayed in the tree after a replace_shape failure --
+            # erase_shape(uid) had already run, but nothing recovered
+            # the display when the operation failed partway through.
+            # Same protective structure fillet() already has.
+            print(f"Unable to replace/draw shape. {e}")
+            win.redraw()
         win.setActivePart(uid)
-        win.statusBar().showMessage("Shell operation complete")
         win.clearCallback()
     elif not require_active_part("Shell"):
         return

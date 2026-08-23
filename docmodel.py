@@ -1547,11 +1547,27 @@ class DocModel:
             from OCP.TDF import TDF_Tool, TDF_Label
             from OCP.TCollection import TCollection_AsciiString
             candidate = TDF_Label()
-            found = TDF_Tool.Label_s(
+            TDF_Tool.Label_s(
                 self.doc.GetData(), TCollection_AsciiString(ref_entry),
                 candidate)
-            if found and not candidate.IsNull():
+            # CONFIRMED BUG (Session 79, Doug's own diagnostic data):
+            # this OCP binding does NOT return a usable boolean from
+            # TDF_Tool.Label_s -- Doug's print showed found=None,
+            # candidate.IsNull()=False, meaning the lookup had ALREADY
+            # SUCCEEDED (a real, valid label) every single time since
+            # this fix was first written (Session 69), and `if found
+            # and not candidate.IsNull()` discarded that correct
+            # result every time because `found` was never a real
+            # boolean to begin with -- silently falling through to
+            # the fragile positional heuristic on EVERY call, not
+            # just this one. candidate.IsNull() is the only signal
+            # that actually reflects whether the lookup worked.
+            if not candidate.IsNull():
                 label = candidate
+            else:
+                print(f"[replace_shape] TDF_Tool.Label_s genuinely "
+                     f"found nothing for ref_entry={ref_entry!r} -- "
+                     f"falling back to the positional heuristic.")
         except Exception as le:
             print(f"[replace_shape] TDF_Tool.Label_s lookup failed "
                  f"({le}); falling back to the positional heuristic")
@@ -1562,6 +1578,9 @@ class DocModel:
             n = int(ref_entry.split(':')[-1])
             labels = TDF_LabelSequence()
             shape_tool.GetShapes(labels)
+            print(f"[replace_shape] fallback: ref_entry={ref_entry!r} "
+                 f"-> n={n}, but shape_tool.GetShapes() returned only "
+                 f"{labels.Length()} label(s) total.")
             label = labels.Value(n)
         if self.part_dict[uid]['loc']:
             modshape.Move(self.part_dict[uid]['loc'].Inverted())
@@ -1999,18 +2018,43 @@ def repair_unnamed_products(doc, context=""):
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
     labels = TDF_LabelSequence()
     shape_tool.GetShapes(labels)
+    # Session 79, Doug: a hard crash (Standard_NullObject, killing the
+    # whole process -- not a catchable Python exception) on reloading
+    # a STEP file whose only content is a BARE PART saved directly as
+    # the file's own root (save_step_doc's '/' unwrap, when there's
+    # no assembly at all to unwrap around -- 'exporting Bottle as the
+    # file root'). Traced to right here: GetUsers_s(label, ...) was
+    # being called on EVERY unnamed-looking label, including free/
+    # root shapes, with 'is this actually a free shape' checked only
+    # AFTER that call, via its returned count. A free root shape with
+    # no assembly ever wrapping it is exactly the case that call may
+    # not handle. Fixed by checking free-shape membership FIRST, via
+    # GetFreeShapes (already proven correct elsewhere in this exact
+    # file, not a new/unverified call) -- a free shape's label never
+    # reaches GetUsers_s at all now.
+    free_labels = TDF_LabelSequence()
+    shape_tool.GetFreeShapes(free_labels)
+    free_entries = {get_label_entry(free_labels.Value(i))
+                    for i in range(1, free_labels.Length() + 1)}
     repaired = 0
     for i in range(1, labels.Length() + 1):
         label = labels.Value(i)
         if shape_tool.IsReference_s(label):
             continue  # occurrences keep their own names
+        if get_label_entry(label) in free_entries:
+            continue  # free root shapes are named elsewhere; skip
+            # (was previously detected AFTER calling GetUsers_s below,
+            # via n_users < 1 -- moved earlier, before that call, since
+            # a free shape with no assembly ever wrapping it at all is
+            # exactly the case suspected of not handling GetUsers_s
+            # safely; see this function's own docstring update above)
         name = get_label_name(label)
         if name and not name.startswith("Open CASCADE STEP translator"):
             continue
         users = TDF_LabelSequence()
         n_users = shape_tool.GetUsers_s(label, users, False)
         if n_users < 1:
-            continue  # free root shapes are named elsewhere; skip
+            continue
         occ_name = get_label_name(users.Value(1))
         base = re.sub(r"(_\d+)+$", "", occ_name)
         if base and base != name:
