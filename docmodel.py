@@ -2072,6 +2072,29 @@ def load_stp_at_top(dm):
     if doc is None:
         return
     print("[load_stp_at_top] assigning doc...")
+    # CONFIRMED (Session 81, via Doug's own reproducible testing --
+    # a crash that was 100% reproducible on the first reload attempt
+    # every time survived six consecutive reloads across two separate
+    # process launches with this fix in place): replacing dm.doc
+    # drops the OLD document's reference count to zero, and CPython
+    # destroys objects immediately (not deferred) the moment that
+    # happens -- invoking the old TDocStd_Document's C++ destructor
+    # synchronously, right at the reassignment line. That destructor
+    # was throwing Standard_NullObject. Rather than fix (or fully
+    # understand) whatever's failing inside the destructor itself --
+    # not possible without live OCP access this sandbox doesn't have,
+    # and possibly a genuine OCCT/OCP-binding-level issue beyond
+    # application-code reach regardless -- every replaced document is
+    # kept alive for the life of the process instead of ever reaching
+    # a zero refcount. Known, accepted tradeoff: dm._retired_docs
+    # grows by one entry per reload, for the life of the session --
+    # a small, bounded memory cost (one reload is an explicit user
+    # action, not a per-frame or per-operation event) traded
+    # deliberately for not crashing.
+    if hasattr(dm, 'doc') and dm.doc is not None:
+        if not hasattr(dm, '_retired_docs'):
+            dm._retired_docs = []
+        dm._retired_docs.append(dm.doc)
     dm.doc = doc
     dm.app = app
     # Session load replaces the doc object: re-enable undo history on

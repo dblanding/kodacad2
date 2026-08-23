@@ -818,6 +818,32 @@ def load_session():
     """
     win.setActivePart(0)
     win.setActiveAsy(0)
+    # Session 81, cont'd: clear the viewport's own AIS objects BEFORE
+    # replacing dm.doc, not after. The previous order left every
+    # displayed AIS object -- built from the OLD document's shapes --
+    # alive and referenced by win.ais_shape_dict throughout the ENTIRE
+    # load (repair_unnamed_products, parse_doc, etc.), with nothing
+    # clearing them until win.redraw() ran at the very end. If Python
+    # decides to release the old document's underlying C++ object
+    # the moment dm.doc's reference is replaced (inside
+    # load_stp_at_top), those still-alive AIS objects would be
+    # holding dangling references to shape data that's being torn
+    # down out from under them -- a very plausible mechanism for a
+    # crash that only shows up when there's an existing document to
+    # replace, never on a fresh process with nothing loaded yet,
+    # matching Doug's own reproducible pattern exactly. The earlier
+    # attempt (explicitly closing the old document via
+    # TDocStd_Application.Close()) was confirmed ineffective by
+    # Doug's own diagnostic output -- that call fails unconditionally
+    # on a NewDocument()-created document, which is the only kind
+    # this codebase ever creates -- removed rather than left in as
+    # permanent, misleading noise.
+    win.ais_shape_dict.clear()
+    try:
+        win.canvas._display.Context.RemoveAll(False)
+    except Exception as ce:
+        print(f"[load_session] could not clear the viewport before "
+             f"loading ({ce}) -- continuing regardless")
     docmodel.load_stp_at_top(dm)
     win.build_tree()
     win.redraw()
