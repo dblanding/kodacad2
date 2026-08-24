@@ -5362,3 +5362,17 @@ Fixed: context.SetPixelTolerance(SNAP_PIXELS) called once at context creation (k
 ### Lesson for future development
 
 **"We've never configured X" is evidence that X needs research, not evidence that X is hard.** The honest answer to Doug's question started as 'no, this isn't simple' based on the absence of existing code -- but the actual complexity turned out to live entirely in not yet knowing the right API, not in the underlying problem. Checking OCCT's own documentation and source directly, rather than reasoning from what wasn't already in this codebase, turned a feared multi-session investigation into a single, well-confirmed line.
+
+# Session 85: item 2 -- traced both file-loading paths fully, confirmed solid, documented for future users
+
+Doug's framing was forward-looking: not just resolving his own confusion, but making sure the current design won't paint him into a corner as others discover the app. Traced both paths completely rather than relying on prior sessions' partial investigation:
+
+Load Session (load_stp_at_top) REPLACES the entire document -- structurally immune to '/' accumulation regardless of save/load cycle count, because there's no existing root to nest anything under. Import STEP (load_stp_cmpnt) ADDS content under the current root -- the one path that genuinely could accumulate nested '/' wrappers, and its own docstring documents the exact historical bug and fix (Session 56, ported from a sibling project's item 30): any '/'-named root in the imported file is unwrapped and its children composed through any nested legacy wrapper levels, in one pass, before being added.
+
+Also resolved the ORIGINAL double-'/' observation from the bottle tutorial (a fresh, never-saved session, unrelated to either load path): the tree's '/' under its '3D' header is pure UI scaffolding, always present; the document's own root assembly label is separately, deliberately ALSO named '/' by convention. Two different things sharing a name, not a bug -- confirmed by reading create_root_items() (the synthetic scaffolding) against create_doc()'s own docstring (the real document root at entry 0:1:1:1).
+
+Documented in docs/README.md's existing 'Loading a STEP file' section, expanded with why each path is safe and the two-things-named-slash clarification -- written for a future user encountering this for the first time, not just as an internal note. Also fixed a small, unrelated drift found while there: the RMB context-menu list in the README was stale after Session 82's menu cleanup (still listed 'Make Transparent'/'Edit Name', the pre-cleanup labels).
+
+### Lesson for future development
+
+**"Is this on solid ground" is a different, more valuable question than "is this bug fixed," and it deserves tracing the full mechanism even when nothing is currently broken.** Every prior session touching this territory (78, 79, 81) investigated it under time pressure, mid-crisis, chasing a specific symptom -- correct in each case, but never with the leisure to trace both paths completely end to end and write down why each is safe by construction rather than by accident. That's the difference between a fix and an understanding, and only the latter actually answers 'will this hold up when someone else starts using it.'

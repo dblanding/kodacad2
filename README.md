@@ -69,16 +69,41 @@ Dependencies (managed automatically by uv):
 
 **File → Load Session**
 Loads a previously saved KodaCAD session or any STEP file with assembly
-structure. The assembly appears under `/` in the tree.
+structure. *Replaces the entire current document* -- whatever was open
+before is gone. The loaded file's own content becomes the session, with
+no wrapping or nesting involved.
 
 **File → Import STEP**
-Imports a STEP file as a new component under `/`, ready to be
-positioned and organized into the assembly.
+*Adds* a STEP file as a new component under the current `/`, alongside
+whatever's already open, ready to be positioned and dragged into an
+assembly. This is the one operation that nests a file's content under
+an existing root, so it's the one that needs to guard against a saved
+session's own `/` wrapper getting nested under the current one --
+which it does automatically (see below).
 
 **File → Save Session**
 Saves the current state to a STEP file. This is KodaCAD's native save
 format -- STEP files can be reloaded exactly as saved, and opened in
 any other CAD application.
+
+**Why repeated save/load/import cycles stay clean:** Save strips any
+redundant `/` wrapper before writing, so a saved file never contains
+one to begin with. Load Session replaces the whole document rather
+than nesting anything, so there's nothing for a wrapper to accumulate
+into. Import STEP is the one path that adds content under an existing
+root, so it explicitly unwraps any `/`-named root in the file being
+imported before adding its children -- composing locations through any
+already-nested legacy wrapper levels in one pass, so even an older
+file saved before this existed unwraps completely on import.
+
+**Note on the tree's own `/` label:** the tree view always shows a `/`
+under the `3D` header, whether or not anything is loaded -- that's
+just the tree's own organizing scaffolding, not part of any document.
+The document's actual root assembly label is *also* named `/` by
+convention (visible in the tree as its child), which is why a
+freshly-built, never-saved session can show what looks like `/` nested
+under `/` -- two different things that happen to share a name, not an
+accumulation bug.
 
 ### Assembly tree
 
@@ -98,8 +123,9 @@ WP              ← workplanes (2D construction geometry)
 - **Checkbox** — show/hide part or assembly. Parent checkbox
   propagates to all children.
 - **Left-click** — select item
-- **Right-click** — context menu: Set Active Part, Set Active Assembly,
-  Item Info, Make Transparent, Edit Name
+- **Right-click** — context menu: Item Info, Set Active, Rename,
+  Create New Assembly, Create Shared Instance, Set Transparent,
+  Set Opaque, Delete
 
 ### Creating a new part (Creo-style workflow)
 
