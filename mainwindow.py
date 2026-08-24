@@ -722,11 +722,26 @@ class MainWindow(QMainWindow):
         """Add all workplanes to 2D section of tree view."""
 
         # add items to treeView
+        # Session 82, Doug: hiding a workplane didn't stick -- it
+        # reappeared after every modification. Root cause: this loop
+        # unconditionally checked every workplane, never consulting
+        # hide_list at all -- unlike the parts/assembly loop above in
+        # build_tree(), which already does this correctly. Since
+        # build_tree() (and therefore this function, via clearTree())
+        # runs after essentially every modification, every rebuild
+        # was silently re-showing anything the user had hidden. Same
+        # underlying issue Session 71 fixed for assembly checkbox
+        # derivation and expand/collapse state -- a rebuild must not
+        # discard user-set state -- just never applied to this
+        # specific, separate code path before now.
         for uid in self.wp_dict:
             itemName = [uid, uid]
             item = QTreeWidgetItem(self.wp_root, itemName)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(0, Qt.CheckState.Checked)
+            if uid in self.hide_list:
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+            else:
+                item.setCheckState(0, Qt.CheckState.Checked)
 
     #############################################
     #

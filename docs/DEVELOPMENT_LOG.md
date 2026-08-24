@@ -5342,3 +5342,13 @@ Removed: fuse() and fuseC() entirely, and the Fuse menu registration. Checked be
 ### Lesson for future development
 
 **Removing dead code well means checking each of its dependencies individually rather than sweeping everything it touched -- some belong to the removed thing, some just happened to be borrowed by it.** shapeStack and BRepAlgoAPI_Fuse both looked, at a glance, like they might be fuse-only debris; checking each one's actual usage separately confirmed both were shared, general-purpose infrastructure that needed to survive the removal intact.
+
+# Session 83: item 5 (hidden workplanes spontaneously reappearing) resolved -- Session 71's own fix, never applied to this specific code path
+
+Doug's question connecting this to Session 71's expand/collapse and checkbox-derivation work was exactly right, and led straight to the bug. repopulate_2D_tree_view() -- the function that builds the tree's WP branch, called via clearTree() at the start of every build_tree() -- unconditionally set every workplane's checkbox to Checked, never consulting hide_list at all. The parts/assembly loop directly above it in build_tree() already does this correctly (Session 71's own area of work). Since build_tree() runs after essentially every modification, every rebuild was silently re-showing anything the user had hidden -- exactly matching Doug's report.
+
+Fixed by mirroring the already-proven pattern from the parts/assembly loop: check hide_list before setting each workplane's checkbox state. Confirmed no broader scope needed -- expand/collapse doesn't apply to individual (childless) workplane items, and wp_root itself is already covered by Session 71's generic, root-agnostic expand-capture loop.
+
+### Lesson for future development
+
+**A principle fixed in one place doesn't fix itself everywhere it applies -- each code path that does structurally the same thing (rebuild a tree section, discard or preserve prior state) needs the SAME fix applied to it individually, even when the underlying lesson was already learned.** Session 71 established 'a tree rebuild must not discard user-set state' as a real principle here, but only touched the code path it was actively debugging at the time. The workplane branch was a structurally identical, entirely separate implementation that simply never got the memo -- worth remembering that fixing a bug's specific instance and fixing its underlying principle everywhere it applies are two different amounts of work, and the gap between them is exactly where bugs like this one hide.
