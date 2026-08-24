@@ -742,6 +742,7 @@ class MainWindow(QMainWindow):
         and did nothing -- including Delete.
         """
         menu = self.treeView.popMenu
+        menu.addAction("Item Info", self.showClickedInfo)
         menu.addAction("Set Active", self.setClickedActive)
         menu.addAction("Rename", self.editName)
         menu.addAction("Create New Assembly", self.createNewAssembly)

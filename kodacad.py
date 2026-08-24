@@ -683,36 +683,6 @@ def filletC(shapeList, *args):
         fillet()
 
 
-def fuse():
-    """Fuse an adjacent or overlapping solid shape to active part."""
-
-    if win.shapeStack:
-        shape = win.shapeStack.pop()
-        workpart = win.activePart
-        uid = win.activePartUID
-        newPart = BRepAlgoAPI_Fuse(workpart, shape).Shape()
-        win.erase_shape(uid)
-        with docmodel.undo_transaction(dm):
-            dm.replace_shape(uid, newPart)
-        win.draw_shape(uid)
-        win.setActivePart(uid)
-        win.statusBar().showMessage("Fuse operation complete")
-        win.clearCallback()
-    else:
-        win.registerCallback(fuseC)
-        statusText = "Select shape to fuse to active part."
-        win.statusBar().showMessage(statusText)
-
-
-def fuseC(shapeList, *args):
-    """Callback (collector) for fuse"""
-
-    for shape in shapeList:
-        win.shapeStack.append(shape)
-    if win.shapeStack:
-        fuse()
-
-
 def shell(event=None):
     """Shell active part"""
 
@@ -1002,7 +972,6 @@ if __name__ == "__main__":
         lambda: show_mill_pull_dialog(win))
     win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
     win.add_function_to_menu("Modify Active Part", "Shell", shell)
-    win.add_function_to_menu("Modify Active Part", "Fuse", fuse)
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")
@@ -1031,13 +1000,6 @@ if __name__ == "__main__":
     drawSubMenu = QMenu("Draw")
     win.popMenu.addMenu(drawSubMenu)
     drawSubMenu.addAction("Fit", win.fitAll)
-
-    win.treeView.popMenu.addAction("Item Info", win.showClickedInfo)
-    win.treeView.popMenu.addAction("Set Active", win.setClickedActive)
-    win.treeView.popMenu.addAction("Delete Item", win.deleteItem)
-    win.treeView.popMenu.addAction("Make Transparent", win.setTransparent)
-    win.treeView.popMenu.addAction("Make Opaque", win.setOpaque)
-    win.treeView.popMenu.addAction("Edit Name", win.editName)
 
     win.show()
     win.canvas.InitDriver()

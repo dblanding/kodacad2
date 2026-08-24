@@ -5322,3 +5322,23 @@ Also noted in Doug's log, not investigated -- a separate, unrelated message ('Pr
 ### Lesson for future development
 
 **A crash reproducible 100% of the time on first attempt, across multiple different parts and multiple sessions, going to zero-for-six after a change is about as strong a confirmation as empirical testing can offer without a live debugger.** This investigation is a clean example of the discipline that made it tractable: two reasonable, well-formed hypotheses tested and honestly disproven in a row (explicit document Close(); clearing viewport AIS references first), rather than declared successful on ambiguous evidence -- which is what left the search space narrow enough for individual-line bracketing to actually pinpoint the real mechanism on the next round. Neither disproven attempt was wasted; each one eliminated a genuine candidate and left a smaller, more tractable problem behind for the next round to solve.
+
+# Session 82: item 4 (RMB tree-menu duplicates) resolved -- turned out broader than the single pair Doug noticed
+
+Doug's own observation was Delete/Delete Item specifically. Investigation found the same vestige affecting five of six entries in kodacad.py's old popMenu-building block: Set Active, Delete Item, Make Transparent, Make Opaque, and Edit Name were all confirmed duplicates (same target function, sometimes a different label) of entries already added by mainwindow.py's populate_tree_context_menu -- whose own docstring documents it as the deliberate, newer fix for a previously-empty context menu. Only Item Info (win.showClickedInfo) was genuinely unique to the old block.
+
+Fixed: Item Info moved into populate_tree_context_menu (the confirmed-active, canonical menu builder); the entire six-line vestigial block removed from kodacad.py.
+
+### Lesson for future development
+
+**A user's single, specific observation is often the visible tip of a broader, structurally identical issue** -- Doug named one duplicate pair; checking the surrounding code found four more built the exact same way. Worth checking a reported vestige's immediate neighbors before fixing only the specific line named, since the same root cause (an old menu-building block never removed when a newer one replaced it) had produced a small family of near-identical duplicates, not just one.
+
+## Session 82 (cont'd): item 3 resolved -- Fuse removed entirely, per Doug's own call to keep any future boolean-ops work clean
+
+Investigation found fuse()/fuseC() served a genuinely different purpose than Mill/Pull (combining two independently-built solids, vs. sketching and pulling directly on the active part's own face) -- surfaced to Doug rather than assumed away. Doug's decision: remove it regardless, since any future, deliberate addition of boolean operations should be built fresh rather than extended from this narrow, single-purpose vestige.
+
+Removed: fuse() and fuseC() entirely, and the Fuse menu registration. Checked before removing rather than assumed: win.shapeStack (fuse's own collector storage) is a generic, reusable stack matching the same pattern as floatStack/edgeStack/faceStack -- left in place, since it's not fuse-specific and could plausibly serve that future clean addition. BRepAlgoAPI_Fuse's import also confirmed still needed (Mill/Pull's own join logic uses it directly) and left untouched.
+
+### Lesson for future development
+
+**Removing dead code well means checking each of its dependencies individually rather than sweeping everything it touched -- some belong to the removed thing, some just happened to be borrowed by it.** shapeStack and BRepAlgoAPI_Fuse both looked, at a glance, like they might be fuse-only debris; checking each one's actual usage separately confirmed both were shared, general-purpose infrastructure that needed to survive the removal intact.
