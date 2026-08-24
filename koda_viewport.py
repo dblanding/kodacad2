@@ -278,6 +278,25 @@ class KodaViewport(QWidget):
 
         context = AIS_InteractiveContext(viewer)
         context.SetDisplayMode(1, False)
+        # Session 84, Doug: 3D edge/vertex picking felt much fussier
+        # than 2D catch points. Confirmed why -- OCCT's own
+        # AIS_InteractiveContext pick tolerance for MoveTo() defaults
+        # to 2 pixels, versus SNAP_PIXELS = 12 used throughout the 2D
+        # snap engine (snap_engine.py) -- a genuine 6x difference,
+        # not a perception. SetPixelTolerance is a real, long-
+        # standing OCCT method (confirmed present since v6.9.0)
+        # setting this context-wide, not per-object or per-shape-
+        # type, so a single call here covers all 3D picking (edges,
+        # vertices, faces) uniformly. Guarded -- no live OCP install
+        # in this sandbox to run this end-to-end before Doug's own
+        # test.
+        try:
+            from snap_engine import SNAP_PIXELS
+            context.SetPixelTolerance(SNAP_PIXELS)
+        except Exception as pte:
+            print(f"[koda_viewport] could not set 3D pixel "
+                 f"tolerance to match 2D catch radius ({pte}) -- "
+                 f"3D picking keeps OCCT's own default sensitivity")
         self.context = context
         self._display = DisplayShim(context, view, self)
         self._vertex_center_pick_active = False
