@@ -1,4 +1,4 @@
-# KodaCAD 1.0
+# KodaCAD 2.0
 
 A 3D CAD application for Python, built on
 [OCCT](https://www.opencascade.com/) via the
@@ -156,12 +156,27 @@ parameters.
 
 ---
 
-## Tested workflows
+## Tutorials
 
-### The OCC Bottle tutorial
-The classic OCCT bottle can be recreated in KodaCAD using the
-workplane → sketch → extrude workflow, followed by shell to hollow
-it out and fillet to round the edges.
+Full, step-by-step walkthroughs live under [`tutorials/`](tutorials/) --
+each one doubles as a regression test, with every step annotated with
+what it exercises in KodaCAD's own code.
+
+- **[The OCC Bottle](tutorials/occ-bottle/README.md)** -- builds the
+  classic OpenCascade tutorial bottle entirely from scratch: sketching,
+  Extrude, Fillet, Mill/Pull, Shell, and Undo/Redo, all on a single
+  part.
+- **[Assembly Structure with `as1-oc-214.stp`](tutorials/as1-oc-214/README.md)** --
+  loading a pre-built, multi-part assembly two different ways, the XDE
+  hierarchy viewer, and fillet propagation across a pre-existing
+  shared instance.
+- **[Building Quaoar's Chassis](tutorials/chassis/README.md)** --
+  building a wheel-and-axle-in-a-chassis assembly from nothing:
+  sibling-assembly creation, reparenting, shared instances (both a
+  part and an assembly), the Position dialog's full surface, and
+  Undo/Redo across a long, mixed operation history.
+
+## Tested workflows
 
 ### Load / Modify / Save
 See `docs/DEVELOPMENT_LOG.md` for a detailed walkthrough matching
@@ -203,6 +218,10 @@ kodacad2/
   docs/
     DEVELOPMENT_LOG.md  session-by-session development history
     TODO.md             broken items + future ideas
+  tutorials/
+    occ-bottle/         build the OCC bottle from scratch
+    as1-oc-214/         load and explore a pre-built assembly
+    chassis/            build an assembly from scratch (Quaoar's chassis)
   pyproject.toml      uv project file
 ```
 
