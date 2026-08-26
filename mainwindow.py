@@ -640,6 +640,23 @@ class MainWindow(QMainWindow):
             name = dic["name"]
             parent_uid = dic["parent_uid"]
             if parent_uid not in parent_item_dict:
+                # Session 85, Doug: creating a new assembly directly
+                # at the root produced 'assy_root -> /  -> new-assy'
+                # instead of 'assy_root -> new-assy' -- an extra,
+                # redundant '/' layer. The document's own real root
+                # label is, by convention, ALSO named '/' -- when a
+                # top-level (parent-less) label is specifically that
+                # one, it's the same conceptual thing as assy_root's
+                # own '/' scaffolding, not a separate child of it.
+                # Both add_component and create_new_assembly's own
+                # root-creation logic explicitly reuse any existing
+                # root rather than ever creating a second one, so
+                # there's at most one genuine top-level '/' to merge
+                # this way -- any OTHER top-level label (not named
+                # '/') still gets its own normal tree item below.
+                if name == "/":
+                    parent_item_dict[uid] = self.assy_root
+                    continue
                 parent_item = self.assy_root
             else:
                 parent_item = parent_item_dict[parent_uid]
@@ -1098,22 +1115,41 @@ class MainWindow(QMainWindow):
 
     def createNewAssembly(self):
         """RMB: create a new, empty assembly under the clicked item
-        (which must be an assembly). Session 54."""
+        (which must be an assembly, or the tree's own top-level '/').
+        Session 54; Session 85 (Doug): the top-level '/' is the
+        tree's own permanent UI scaffolding (create_root_items), not
+        a real document label -- its uid ('0') was never in
+        label_dict at all in a fresh, empty session, since nothing
+        has been parsed into the document yet to discover. That made
+        it impossible to create a first-ever assembly without
+        Doug's own workaround (load a session with SOME assembly
+        that already has children, delete the children, then use
+        that now-empty-but-already-recognized label as the target).
+        """
         item = self._get_clicked_or_current_item()
         if not item:
             print("No item selected. Try first left clicking item then right clicking.")
             return
         uid = item.text(1)
+        target_uid = uid
         if uid not in dm.label_dict:
-            print(f"'{item.text(0)}' cannot hold a new assembly.")
-            self.itemClicked = None
-            return
+            if uid == "0":
+                # The tree's own synthetic '/' root (create_root_items'
+                # slash_root, always uid '0') -- not a real label yet
+                # in a fresh session. None signals dm.create_new_assembly
+                # to create the root itself first if it doesn't exist,
+                # mirroring add_component's own proven mechanism.
+                target_uid = None
+            else:
+                print(f"'{item.text(0)}' cannot hold a new assembly.")
+                self.itemClicked = None
+                return
         name, OK = QInputDialog.getText(
             self, "Create New Assembly",
             "Enter a name for the new assembly:", text="assembly")
         if OK and name:
             with undo_transaction(dm):
-                created = dm.create_new_assembly(uid, name)
+                created = dm.create_new_assembly(target_uid, name)
             if created:
                 # Full refresh -- not just build_tree(). Matching
                 # createSharedInstance (Session 60 fix): a structure

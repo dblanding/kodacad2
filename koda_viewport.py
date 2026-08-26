@@ -769,7 +769,24 @@ class KodaViewport(QWidget):
     def _edge_circle_center(self, shape):
         """gp_Pnt center if shape is a circular edge, else None.
         Shared by the hover marker and the click resolver so both
-        agree on what counts as a valid candidate."""
+        agree on what counts as a valid candidate.
+
+        Session 86, Doug's chassis tutorial: 2-Points positioning
+        failed on the axle's end (a long, thin, heavily-cylindrical
+        part) but worked on the wheel's rim (a short disc, much less
+        cylinder-dominant). Traced to this function ONLY ever
+        handling analytic GeomAbs_Circle edges -- exactly the gap
+        Rad's own measurement tool (radMeasC, mainwindow.py) already
+        solved via a sample-and-verify fallback (Session 74): a
+        cylinder-dominant part is a strong candidate for the
+        NurbsConvert display workaround (Session 60/61), whose
+        circular edges come back GeomAbs_BSplineCurve -- genuinely
+        circular, just not analytically typed -- while a short,
+        flat-dominant disc like the wheel is much less likely to
+        trigger that conversion at all. Ported the identical formula
+        (mainwindow.py's _circumcenter_3d) rather than importing
+        across modules, to avoid any risk of a circular import
+        between koda_viewport and mainwindow."""
         try:
             # Cheap, genuinely safe insurance (Session 66): IsNull()
             # is guaranteed not to crash even on a degenerate/default
@@ -789,11 +806,66 @@ class KodaViewport(QWidget):
             from OCP.GeomAbs import GeomAbs_CurveType
             edge = TopoDS.Edge_s(shape)
             crv = BRepAdaptor_Curve(edge)
-            if crv.GetType() != GeomAbs_CurveType.GeomAbs_Circle:
+            if crv.GetType() == GeomAbs_CurveType.GeomAbs_Circle:
+                return crv.Circle().Location()
+            # Sample-and-verify fallback -- identical approach and
+            # tolerance to Rad's own, proven independently correct
+            # there rather than assumed to transfer unchanged.
+            n_samples = 7
+            f0, f1 = crv.FirstParameter(), crv.LastParameter()
+            pts = [crv.Value(f0 + (f1 - f0) * i / (n_samples - 1))
+                   for i in range(n_samples)]
+            fit = self._circumcenter_3d(pts[0], pts[2], pts[4])
+            if fit is None:
                 return None
-            return crv.Circle().Location()
+            (cx, cy, cz), fit_r = fit
+            import math as _m
+            max_dev = 0.0
+            for p in pts:
+                d = _m.sqrt((p.X() - cx) ** 2 + (p.Y() - cy) ** 2
+                           + (p.Z() - cz) ** 2)
+                max_dev = max(max_dev, abs(d - fit_r))
+            if fit_r > 1.0e-9 and max_dev / fit_r < 1.0e-4:
+                from OCP.gp import gp_Pnt
+                return gp_Pnt(cx, cy, cz)
+            return None
         except Exception:
             return None
+
+    def _circumcenter_3d(self, p1, p2, p3):
+        """3D circumcenter/radius of the circle through 3 points, as
+        (center_xyz, radius) or None if collinear/degenerate. Ported
+        verbatim from mainwindow.py's own, independently-verified
+        version (Session 74) -- same formula, same discipline (plain
+        float extraction, no gp_Vec/gp_Dir method calls this sandbox
+        has no live OCP to verify the signatures of)."""
+        ax, ay, az = p1.X(), p1.Y(), p1.Z()
+        bx, by, bz = p2.X(), p2.Y(), p2.Z()
+        cx, cy, cz = p3.X(), p3.Y(), p3.Z()
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = cx - ax, cy - ay, cz - az
+        wx = uy * vz - uz * vy
+        wy = uz * vx - ux * vz
+        wz = ux * vy - uy * vx
+        w2 = wx * wx + wy * wy + wz * wz
+        if w2 < 1.0e-20:
+            return None  # collinear -- no well-defined circle
+        u2 = ux * ux + uy * uy + uz * uz
+        v2 = vx * vx + vy * vy + vz * vz
+        tx0 = v2 * ux - u2 * vx
+        ty0 = v2 * uy - u2 * vy
+        tz0 = v2 * uz - u2 * vz
+        tx = wy * tz0 - wz * ty0
+        ty = wz * tx0 - wx * tz0
+        tz = wx * ty0 - wy * tx0
+        scale = 1.0 / (2.0 * w2)
+        cxr = ax + tx * scale
+        cyr = ay + ty * scale
+        czr = az + tz * scale
+        import math as _m
+        radius = _m.sqrt((ax - cxr) ** 2 + (ay - cyr) ** 2
+                         + (az - czr) ** 2)
+        return ((cxr, cyr, czr), radius)
 
     def _center_pick_hover(self, x, y):
         """Move callback (Session 63, Doug's reassurance request):

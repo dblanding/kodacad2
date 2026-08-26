@@ -1026,7 +1026,8 @@ class DocModel:
 
     def get_full_path_name(self, uid):
         """Full breadcrumb path from '/' down to uid, e.g.
-        '/ / as1 / manual-lathe'.
+        '/ / as1 / manual-lathe' -- (see Session 85 fix below for the
+        two-slash example this docstring used to show).
 
         Kodacad's XCAF model allows the same part/assembly DEFINITION
         to appear as multiple distinct instances in different places
@@ -1034,6 +1035,23 @@ class DocModel:
         a bare name alone doesn't disambiguate which instance is
         meant. Used by PositionDialog's top section so there's no
         ambiguity about which instance is about to be moved.
+
+        Session 85, Doug: showed four slashes ('/ / / / wheel-axle-
+        asy_1 / wheel_2') for what should have been a single '/'.
+        Root cause: the walk-up loop below already naturally reaches
+        and collects the document's own root label -- which is
+        ITSELF named '/' by convention -- as the last real entry
+        before parent_uid runs out. An unconditional names.append('/')
+        used to run after the loop regardless, double-counting that
+        same root every single call. Removed -- the loop's own
+        termination already provides exactly one '/' for the root,
+        with no separate append needed. If a session still shows more
+        than one '/' after this fix, that reflects genuinely nested
+        '/'-named labels baked into that specific document's own
+        saved data (e.g. from before Session 85's create_new_assembly
+        and build_tree fixes) rather than this function's own
+        counting -- worth a separate, direct look at that file's
+        structure if it recurs.
         """
         names = []
         cur = uid
@@ -1044,7 +1062,6 @@ class DocModel:
             seen.add(cur)
             names.append(self.label_dict[cur].get('name') or '?')
             cur = self.label_dict[cur].get('parent_uid')
-        names.append('/')
         return ' / '.join(reversed(names))
 
     def get_descendant_part_uids(self, uid):
@@ -1110,6 +1127,22 @@ class DocModel:
         """Create a new, empty assembly as a component under the item
         identified by parent_uid (Session 54, RMB tree feature).
 
+        parent_uid=None means "create directly under the top-level
+        '/' root" -- Session 85, Doug: right-clicking the tree's own
+        '/' failed outright in a fresh, empty session (its uid isn't
+        in label_dict at all, since nothing has ever been parsed into
+        it yet), and even a genuinely-once-was-an-assembly label that
+        had all its children deleted then failed the IsAssembly_s()
+        check below (OCCT's XDE model treats "being an assembly" as
+        structural -- dependent on CURRENTLY having at least one
+        child -- not as a persistent flag; an assembly with zero
+        children simply isn't recognized as one, regardless of its
+        history). This mirrors add_component's own, already-proven
+        fix for the identical problem: check GetFreeShapes first, and
+        if there's nothing there yet, create the root '/' before
+        proceeding, rather than requiring the caller to already have
+        a valid assembly to target.
+
         The parent may be the root (a free shape) or a component
         (reference) -- a reference is resolved to its referred label
         first. The target must be an assembly. The new assembly is an
@@ -1129,26 +1162,41 @@ class DocModel:
         from OCP.TopoDS import TopoDS_Compound
         from OCP.BRep import BRep_Builder
         from OCP.TopLoc import TopLoc_Location
-        if parent_uid not in self.label_dict:
-            print(f"[create_new_assembly] Unknown uid {parent_uid}")
-            return False
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
-        parent_label = self._find_label_by_entry(
-            self.label_dict[parent_uid]['entry'])
-        if parent_label is None:
-            print(f"[create_new_assembly] Could not find label for "
-                  f"{parent_uid}")
-            return False
-        # Resolve a component reference to its referred label
-        target_assy = parent_label
-        ref = TDF_Label()
-        if shape_tool.GetReferredShape_s(parent_label, ref):
-            target_assy = ref
-        if not shape_tool.IsAssembly_s(target_assy):
-            print(f"[create_new_assembly] "
-                  f"'{get_label_name(target_assy)}' is not an assembly -- "
-                  f"a new assembly can only be created under an assembly.")
-            return False
+        if parent_uid is None:
+            # Same "ensure the root exists" logic as add_component --
+            # GetFreeShapes first; if empty, create the '/' root the
+            # same way this function already creates any other new,
+            # empty assembly.
+            free_labels = TDF_LabelSequence()
+            shape_tool.GetFreeShapes(free_labels)
+            if free_labels.Length() == 0:
+                root_shape = TopoDS_Compound()
+                BRep_Builder().MakeCompound(root_shape)
+                root_label = shape_tool.AddShape(root_shape, True)
+                set_label_name(root_label, "/")
+                shape_tool.GetFreeShapes(free_labels)
+            target_assy = free_labels.Value(1)
+        else:
+            if parent_uid not in self.label_dict:
+                print(f"[create_new_assembly] Unknown uid {parent_uid}")
+                return False
+            parent_label = self._find_label_by_entry(
+                self.label_dict[parent_uid]['entry'])
+            if parent_label is None:
+                print(f"[create_new_assembly] Could not find label for "
+                      f"{parent_uid}")
+                return False
+            # Resolve a component reference to its referred label
+            target_assy = parent_label
+            ref = TDF_Label()
+            if shape_tool.GetReferredShape_s(parent_label, ref):
+                target_assy = ref
+            if not shape_tool.IsAssembly_s(target_assy):
+                print(f"[create_new_assembly] "
+                      f"'{get_label_name(target_assy)}' is not an assembly -- "
+                      f"a new assembly can only be created under an assembly.")
+                return False
         new_shape = TopoDS_Compound()
         BRep_Builder().MakeCompound(new_shape)
         new_label = shape_tool.AddShape(new_shape, True)

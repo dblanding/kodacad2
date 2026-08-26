@@ -5376,3 +5376,57 @@ Documented in docs/README.md's existing 'Loading a STEP file' section, expanded 
 ### Lesson for future development
 
 **"Is this on solid ground" is a different, more valuable question than "is this bug fixed," and it deserves tracing the full mechanism even when nothing is currently broken.** Every prior session touching this territory (78, 79, 81) investigated it under time pressure, mid-crisis, chasing a specific symptom -- correct in each case, but never with the leisure to trace both paths completely end to end and write down why each is safe by construction rather than by accident. That's the difference between a fix and an understanding, and only the latter actually answers 'will this hold up when someone else starts using it.'
+
+# Session 85: 'cannot create an assembly in a fresh session' -- root cause found and fixed, one known limitation remains
+
+Doug discovered this while writing the as1-oc-214 tutorial's own "create a sibling assembly" step, in the cleanest possible test case -- a genuinely empty session. Two symptoms, traced to the SAME underlying OCCT/XDE fact: "being an assembly" is structural in XDE, dependent on CURRENTLY having at least one child label, not a persistent flag. An assembly with zero children simply isn't recognized as one by IsAssembly_s(), regardless of what it used to be or will become.
+
+Symptom 1 ('/ cannot hold a new assembly', a fresh session): the tree's top-level '/' is pure UI scaffolding (create_root_items' slash_root, permanent uid '0') -- in a genuinely empty session, the document's own real root label doesn't exist as a discoverable dm.label_dict entry at all yet, since nothing has ever been parsed into it. Confirmed by the caller's own check (uid not in label_dict) firing before dm.create_new_assembly is ever reached.
+
+Symptom 2 ('root is not an assembly', a reloaded, emptied assembly): this label IS found (the lookup succeeds -- the error is specifically IsAssembly_s() failing, not an unknown uid), but an assembly that HAD children, then had them all deleted, then got saved and reloaded, genuinely fails OCCT's own structural test -- this was never a KodaCAD bug, it's the underlying XDE model itself.
+
+Doug's own established habit -- seed a session with an assembly that already has children (so it registers), delete the children, use the now-recognized-but-empty label -- was a real, working workaround for exactly this limitation, discovered independently well before this session diagnosed it properly.
+
+**Fixed**: the root-level case (symptom 1), by mirroring add_component's own, already-proven mechanism for the identical problem -- check GetFreeShapes first; if there's nothing there yet, create the '/' root before proceeding, rather than requiring a pre-existing valid target. dm.create_new_assembly now accepts parent_uid=None as "create at the top-level root, creating it first if needed"; the RMB handler recognizes a click on the tree's synthetic '/' (uid '0') and routes to this path instead of failing outright.
+
+**NOT fixed, and flagged honestly rather than silently left**: symptom 2, creating a new assembly under some OTHER (non-root), already-emptied assembly. This is a deeper, genuine OCCT/XDE limitation -- KodaCAD would need to track "the user intends this to remain an assembly" as its own, independent, application-level concept, since XDE's own model has no way to express that for an empty label. The root-level fix removes Doug's own immediate need for the seed-and-delete workaround entirely (a first assembly can now be created directly, from scratch), but doesn't generalize to every empty-assembly scenario.
+
+### Lesson for future development
+
+**A user's own long-standing workaround is often the clearest evidence that a real, diagnosable bug has been silently tolerated rather than fixed.** Doug had already solved this well enough to keep working -- which is exactly why it never got investigated as a bug in its own right until a genuinely fresh, empty session (the cleanest possible test case, with no workaround habits accidentally masking it) forced the question. Worth remembering that "I've found a way to work around X" and "X is fine" are very different claims, and the gap between them is worth periodically checking.
+
+## Session 85 (cont'd): the extra '/' layer created by the root-level fix itself, resolved by merging it into the tree's existing scaffolding
+
+Doug's report: creating an assembly at the root now works, but produces 'assy_root -> / -> new-assy' instead of the expected 'assy_root -> new-assy' -- an extra, redundant '/' level, introduced by the previous fix's own success (it now genuinely creates the document's real root label when one doesn't exist yet, and that label is, by convention, ALSO named '/').
+
+Traced to build_tree()'s main loop: any top-level (parent-less) label gets its own separate tree item under assy_root, the synthetic '/' scaffolding -- correct for any OTHER top-level content, but redundant specifically when that label IS the document's own '/' root, since it's the same conceptual thing as assy_root itself, not a distinct child of it.
+
+Fixed by merging: when a top-level label is specifically named '/', it's no longer given its own tree item -- parent_item_dict[uid] points directly at assy_root instead, so its own children attach there directly. Confirmed safe against both checkbox mechanisms before shipping, not just assumed: the bottom-up derivation loop only walks assy_list, and this merged uid is deliberately excluded from it; the ancestor-correction walk already guards against non-checkable ancestors (assy_root was never checkable), so it terminates cleanly at the merge point regardless. Confirmed at most one genuine top-level '/' can ever exist in a normal session -- both add_component and create_new_assembly's own root-creation logic explicitly reuse an existing root rather than ever creating a second one -- so this merge can't accidentally collapse two GENUINELY different things that happen to share a name.
+
+### Lesson for future development
+
+**A fix that correctly solves the reported problem can introduce a new, visible side effect precisely BECAUSE it succeeded at something the codebase previously never did.** The redundant '/' wasn't a leftover bug from before -- it's a direct, honest consequence of the root now genuinely getting created where it never existed before. Worth remembering that "the fix worked" and "the fix is finished" aren't always the same claim, especially when a fix causes a previously-impossible code path to start running for the first time.
+
+## Session 85 (cont'd): Position dialog's breadcrumb path -- a separate function, its own separate double-counting bug
+
+Doug's screenshot ('/ / / / wheel-axle-asy_1 / wheel_2') came from a completely different code path than the tree-widget fix earlier this session -- dm.get_full_path_name(), used only by PositionDialog's own header label, not build_tree() at all. Confirmed by its own docstring, which documented '/ / as1 / manual-lathe' as the expected example -- already showing two slashes, meaning this over-counting existed from the function's very first version, not introduced by anything recent.
+
+Root cause: the walk-up loop already naturally reaches and collects the document's own root label (itself named '/' by convention) as its last entry before parent_uid runs out and the loop terminates. A separate, unconditional names.append('/') ran after the loop regardless, double-counting that same root on every single call.
+
+Fixed by removing the redundant append -- the loop's own natural termination already provides exactly one '/' for the root. Flagged honestly rather than promised: if Doug's specific wheel-axle-asy session still shows more than one '/' after this fix, that would point at genuinely nested '/'-labels baked into that particular file's own saved data (plausibly from before this session's earlier fixes existed), not at this function's counting -- worth checking that file's actual structure directly if it recurs, rather than assuming this fix alone accounts for every slash.
+
+### Lesson for future development
+
+**The same visible symptom (extra slashes in a displayed path) coming from two unrelated functions in the same conversation is a reminder that a fix's scope is exactly as wide as the code it touched -- no wider, no matter how similar two symptoms look from the outside.** Today's earlier tree-widget merge fixed build_tree()'s own redundant '/' entirely; it had zero effect on get_full_path_name(), a separate function with its own separate implementation of essentially the same idea (walk to the root, represent it once). Worth checking whether a visually similar bug shares an actual code path before assuming a prior fix already covers it.
+
+# Session 86: chassis tutorial bug 1 -- 2-Points positioning failed on the axle's end, same root cause Rad already solved
+
+Doug's exact reproduction: first pick (wheel's top rim, above the workplane) acknowledged; second pick (axle's end) failed with 'No catch or vertex there'. Doug's own correction mid-investigation -- the first pick was ALSO above the workplane, not a workplane-engine-path success as initially assumed -- redirected the diagnosis correctly: a circular edge's seam vertex (real topology, sitting ON the circle) likely caught accidentally for the wheel, not its true center; the axle simply had no equivalently convenient vertex to snap onto.
+
+Traced through koda_viewport.py's existing Ctrl+Shift center-catch infrastructure (SetSelectionModeVertex -> _on_click -> _resolve_vertex_or_center -> _edge_circle_center) rather than treating this as needing new machinery -- the mechanism for exactly this already existed, wired up since Session 63. Found the actual gap in _edge_circle_center: it only ever handled analytic GeomAbs_Circle edges, with no fallback for non-analytic (B-spline) circular edges -- exactly the same limitation Rad's own radMeasC already solved (Session 74) via a sample-and-verify approach. The axle -- long, thin, heavily cylindrical -- is a strong candidate for the NurbsConvert display workaround (Session 60/61), whose circular edges come back GeomAbs_BSplineCurve; the wheel -- a short, flat-dominant disc -- is much less likely to trigger that conversion, explaining precisely why one worked and the other didn't.
+
+Fixed by porting Rad's own, independently-verified _circumcenter_3d formula and sample-and-verify logic directly into koda_viewport.py's _edge_circle_center (duplicated rather than cross-imported, to avoid any circular-import risk between koda_viewport and mainwindow). Because _edge_circle_center is shared by both the hover marker and the click resolver, this also extends the cyan center-preview marker to non-analytic circular edges as a direct side effect -- not a separate fix.
+
+### Lesson for future development
+
+**When a fix for one tool solves a real geometric problem, checking every OTHER tool that does conceptually the same kind of pick is worth doing at the time, not waiting for each one to be separately reported broken.** Rad solved 'find the center of a possibly-non-analytic circular edge' at the measurement level in Session 74; the 3D Ctrl+Shift center-catch mechanism needed the identical fix at the picking level, and simply hadn't been exercised on a sufficiently cylinder-dominant part before Doug's own axle did.
