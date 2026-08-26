@@ -1474,7 +1474,24 @@ class MainWindow(QMainWindow):
         if dm.doc.GetAvailableUndos() < 1:
             self.statusBar().showMessage("Nothing to undo", 3000)
             return
-        dm.doc.Undo()
+        try:
+            dm.doc.Undo()
+        except Exception as e:
+            # Session 86, Doug's chassis tutorial: Redo threw a raw,
+            # uncaught Standard_DomainError deep inside OCAF's own
+            # transaction replay after a full undo-then-redo cycle
+            # (root cause not yet found -- genuinely internal to
+            # OCAF's Redo(), not bracketable the way a multi-line
+            # Python function is). This guard is a safety net, not a
+            # fix for that -- but an uncaught exception here shouldn't
+            # ever crash-adjacent print a raw traceback regardless of
+            # what caused it.
+            print(f"[editUndo] Undo failed ({e}). Undo/redo history "
+                 f"may now be unreliable for this session -- saving "
+                 f"and reloading is the safest recovery.")
+            self.statusBar().showMessage(
+                "Undo failed -- see terminal for details", 4000)
+            return
         self._refresh_after_history("Undo")
 
     def editRedo(self):
@@ -1482,7 +1499,27 @@ class MainWindow(QMainWindow):
         if dm.doc.GetAvailableRedos() < 1:
             self.statusBar().showMessage("Nothing to redo", 3000)
             return
-        dm.doc.Redo()
+        # DIAGNOSTIC (Session 86, still open): Doug's chassis
+        # tutorial hit 'Standard_DomainError: This label has already
+        # such an attribute' here, after undoing an entire ~14-step
+        # session back to the start and then redoing. Printed before
+        # the call in case a later reproduction narrows down which
+        # specific redo step (by position/count) is the one that
+        # fails, rather than only knowing it happens somewhere in a
+        # full-history redo.
+        print(f"[editRedo] attempting redo -- available redos: "
+             f"{dm.doc.GetAvailableRedos()}, available undos: "
+             f"{dm.doc.GetAvailableUndos()}, HasOpenCommand: "
+             f"{dm.doc.HasOpenCommand()}")
+        try:
+            dm.doc.Redo()
+        except Exception as e:
+            print(f"[editRedo] Redo failed ({e}). Undo/redo history "
+                 f"may now be unreliable for this session -- saving "
+                 f"and reloading is the safest recovery.")
+            self.statusBar().showMessage(
+                "Redo failed -- see terminal for details", 4000)
+            return
         self._refresh_after_history("Redo")
 
     def _loc_differs(self, loc_a, loc_b):

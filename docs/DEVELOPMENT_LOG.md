@@ -5430,3 +5430,47 @@ Fixed by porting Rad's own, independently-verified _circumcenter_3d formula and 
 ### Lesson for future development
 
 **When a fix for one tool solves a real geometric problem, checking every OTHER tool that does conceptually the same kind of pick is worth doing at the time, not waiting for each one to be separately reported broken.** Rad solved 'find the center of a possibly-non-analytic circular edge' at the measurement level in Session 74; the 3D Ctrl+Shift center-catch mechanism needed the identical fix at the picking level, and simply hadn't been exercised on a sufficiently cylinder-dominant part before Doug's own axle did.
+
+# Session 86 (cont'd): chassis tutorial bug 2 -- Redo fails after a full undo sequence, root cause still open
+
+Doug's exact reproduction: an ~14-operation session (workplane, sketch, two extrudes, assembly creation, drag-reparenting, shared-instance creation, positioning via three methods, a second assembly, second shared instance, second positioning), undone completely back to the start, then Redo throws:
+
+Standard_DomainError: This label has already such an attribute.
+
+Investigated the two most likely candidates directly rather than guess:
+
+1. Session 85's own create_new_assembly root-creation fix -- ruled out. By the time Doug's sequence reaches Create New Assembly (step 3), the wheel and axle have already been extruded, so the root already exists and that fix's root-creation branch never fires in this sequence at all.
+
+2. Workplane creation (the very first operation) -- ruled out directly by reading makeWP(): it never touches dm.doc at all, confirmed by tracing every line. It's not part of OCAF's undo/redo history in any way, consistent with Doug's own separate observation that workplanes don't survive a session reload either.
+
+Root cause not yet found -- the failure is inside OCAF's own Redo() call itself, a single opaque C++ operation that can't be bracketed line-by-line the way a multi-line Python function (like Session 81's load_stp_at_top investigation) can be. "This label has already such an attribute" is consistent with an attribute-add delta being replayed onto a label that already carries one of that type, but confirming which attribute, on which label, and why the corresponding undo didn't clear it first requires more direct evidence than is available from the traceback alone.
+
+**Fixed for now, honestly scoped as a safety net rather than a resolution**: editUndo/editRedo (mainwindow.py) no longer let an OCAF-internal failure propagate as a raw, uncaught traceback -- both show a clear status-bar message and print recovery guidance (save and reload) instead. A diagnostic printing available undo/redo counts and HasOpenCommand() state was added before the Redo call itself, to give the next reproduction more to work with.
+
+**Requested from Doug for the next round**: whether a much shorter, simpler sequence (e.g., create one part, undo, redo) reproduces the same failure, or whether it's specific to something in this longer, more complex chassis sequence -- that answer would directly separate 'this is a general OCAF/undo-transaction problem' from 'something specific to shared instances, nested assemblies, or the Position dialog's own transaction handling is the actual trigger.'
+
+### Lesson for future development
+
+**Ruling out two well-reasoned, directly-checked candidates is real progress even without a confirmed root cause -- it narrows an otherwise-unbounded search space (OCAF's own internals) down to a specific, smaller set of remaining possibilities**, rather than leaving the investigation exactly where it started. Worth resisting the pull to guess at a plausible-sounding fix once the obvious candidates are exhausted; the honest answer here is that more targeted reproduction data is needed before a real fix (as opposed to a safety net) can be attempted responsibly.
+
+## Session 86 (cont'd): chassis tutorial bug 2 -- root cause narrowed to a specific mechanism, fix attempted, needs Doug's test to confirm
+
+Doug's minimal reproduction (workplane, sketch, one extrude, undo, redo -- nothing else) fully isolated the bug: it's entirely contained within add_component's single transaction, needing no second part and no positioning at all. Since Redo always replays chronologically, the failure on the very first Redo click is necessarily the very first add_component call -- the one that both creates the root '/' label and adds the first-ever component to it.
+
+Traced add_component's exact sequence within that one transaction: AddShape(root_shape, True) sets root_label's own shape attribute (an empty compound); AddComponent(root_label, shape, True), a few lines later in the SAME transaction, updates that SAME label's shape attribute again to reflect the new component. set_label_name was checked and ruled out directly -- TDataStd_Name.Set_s is OCCT's standard, idempotent helper, not something that can throw a duplicate-attribute error.
+
+**Reasoned hypothesis, not live-verified**: OCCT's shape-attribute (TNaming) mechanism has known complexity around exactly this kind of double-touch of one label's shape within a single transaction, particularly for assembly/compound updates. Not confirmable without a live OCP install to test OCAF's own redo internals directly.
+
+**Fix attempted**: split root-creation into its own, separately committed transaction from the first component-add, in both add_component AND create_new_assembly (Session 85's own root-creation fix has the identical pattern -- AddComponent touching the just-created root's shape attribute again -- and was fixed identically for consistency, even though Doug's own chassis sequence never exercised that specific path). Both changes are scoped tightly: they only run the very first time either function ever creates the root at all; every subsequent call (root already existing) is completely unaffected. Cost: undoing the very first part or assembly ever created in a fresh session now takes 2 clicks instead of 1 -- a minor, honest tradeoff for a fix whose real effectiveness is still unconfirmed.
+
+**Explicitly not yet claimed resolved.** This needs Doug's own retest of the identical minimal sequence (wp, sketch, extrude, undo, redo) to confirm the split actually prevents the failure, rather than being presented as fixed on reasoning alone.
+
+### Lesson for future development
+
+**A minimal reproduction is worth asking for even when a longer one already exists and already fails reliably -- it does more than confirm the bug is real, it directly bounds where the fix has to live.** Doug's 14-step chassis sequence and his 3-step wheel-and-axle test both failed the same way, but only the second one made it possible to point at ONE specific transaction with confidence, rather than searching a much larger space of 14 candidate operations for whichever one was actually responsible.
+
+## Session 86 (cont'd): CONFIRMED RESOLVED -- Redo failure fixed, confirmed by Doug's identical minimal test
+
+Doug re-ran the exact minimal reproduction (workplane, sketch, one extrude, undo, redo) with both fixes in place: the wheel came back correctly, no exception. The diagnostic added alongside the safety net confirms the mechanism directly -- HasOpenCommand: False immediately before the successful Redo call, meaning the transaction split (root-creation committed and closed before the first component-add's transaction opens) is doing exactly what it was designed to do. Not just 'it didn't crash' -- direct evidence the two transactions are now genuinely separate.
+
+Both chassis-tutorial bugs (2-Points positioning on a non-analytic circular edge; this Redo failure) are now resolved and confirmed by Doug's own retesting, not just reasoned about.

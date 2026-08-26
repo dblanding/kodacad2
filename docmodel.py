@@ -1175,6 +1175,18 @@ class DocModel:
                 BRep_Builder().MakeCompound(root_shape)
                 root_label = shape_tool.AddShape(root_shape, True)
                 set_label_name(root_label, "/")
+                # Session 86: same fix as add_component's identical
+                # pattern -- AddShape here and AddComponent below
+                # both touch root_label's own shape attribute within
+                # one transaction, matching the reasoned (not live-
+                # verified) cause of Doug's reported Redo failure.
+                # Splitting into two committed transactions so each
+                # touches it only once. Only runs the very first
+                # time EITHER add_component or create_new_assembly
+                # creates the root -- unaffected once it exists.
+                if self.doc.HasOpenCommand():
+                    self.doc.CommitCommand()
+                    self.doc.NewCommand()
                 shape_tool.GetFreeShapes(free_labels)
             target_assy = free_labels.Value(1)
         else:
@@ -1673,6 +1685,34 @@ class DocModel:
             BRep_Builder().MakeCompound(root_shape)
             root_label = shape_tool.AddShape(root_shape, True)
             set_label_name(root_label, "/")
+            # Session 86, Doug: 'This label has already such an
+            # attribute' on Redo, isolated by Doug's own minimal
+            # test (wp, sketch, one extrude, undo, redo -- nothing
+            # else) to the FIRST-EVER add_component call in a fresh
+            # session -- the one that both creates the root '/' AND
+            # immediately adds the first component to it, in ONE
+            # transaction. AddShape (just above) and AddComponent
+            # (just below) both touch root_label's own shape
+            # attribute within that single transaction -- a
+            # reasoned, though not live-verified, candidate for
+            # OCAF's shape-attribute redo mechanism not cleanly
+            # replaying a double-touch of the same attribute within
+            # one command. Closing this transaction here and
+            # reopening a fresh one splits root creation from the
+            # first component-add, so each touches root_label's
+            # shape attribute only once per transaction. This ONLY
+            # runs the very first time a session creates its first
+            # part ever (root not existing yet) -- every subsequent
+            # add_component call is completely unaffected, since
+            # free_labels.Length() == 0 is false from then on. Cost:
+            # undoing the very first part in a brand-new session now
+            # takes 2 clicks instead of 1 -- a minor, honest
+            # tradeoff for a hypothesis that needs Doug's own
+            # real-world test to confirm, not something verifiable
+            # without a live OCP install.
+            if self.doc.HasOpenCommand():
+                self.doc.CommitCommand()
+                self.doc.NewCommand()
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 
