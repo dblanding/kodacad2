@@ -1012,6 +1012,29 @@ class DocModel:
                     chosen_uid = c_uid
                     break
 
+        # Session 87, Doug: moving a component nested inside a shared
+        # parent (e.g. nut-bolt-assembly_1 within l-bracket-assembly,
+        # shared by l-bracket-assembly_1/_2) correctly propagated in
+        # the DOCUMENT DATA -- this function's own parent-resolution
+        # logic above (parent_entry = ref_entry or entry) has done
+        # that deliberately since Session 31. But the OTHER occurrence
+        # never visibly moved, because nothing was telling its display
+        # to redraw: PositionDialog._refresh_display's default fast
+        # path explicitly assumed (per this function's own docstring,
+        # now stale for this exact case) that other shared instances
+        # are untouched, and skipped every surviving uid accordingly.
+        # Same shape of bug as the earlier fillet/shell propagation
+        # fix -- correct data, no signal telling the display to catch
+        # up. Recorded the same way that fix's signal was recorded
+        # (dm._shape_replaced_entries): if propagation happened here
+        # (the parent was resolved through its OWN shared/referred
+        # entry, not its direct one), record that shared entry so the
+        # caller can force-redraw every current instance sharing it.
+        if parent_info.get('ref_entry'):
+            if not hasattr(self, '_shared_parent_moves'):
+                self._shared_parent_moves = []
+            self._shared_parent_moves.append(parent_entry)
+
         post_name = self.label_dict[chosen_uid].get('name')
         post_loc = (self.label_dict[chosen_uid].get('world_loc')
                     if self.label_dict[chosen_uid].get('is_assy')

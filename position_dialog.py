@@ -959,7 +959,37 @@ class PositionDialog(QDialog):
             # get_descendant_part_uids is the same method
             # _reattach_manipulator already uses to find exactly this
             # set.
-            force = self.dm.get_descendant_part_uids(self.uid)
+            force = set(self.dm.get_descendant_part_uids(self.uid))
+            # Session 87, Doug: moving a component nested inside a
+            # SHARED parent (e.g. nut-bolt-assembly_1 within l-bracket-
+            # assembly, itself shared by l-bracket-assembly_1/_2)
+            # correctly propagates in the document data -- confirmed,
+            # deliberate behavior since Session 31 -- but the OTHER
+            # occurrence never visibly moved, because this default
+            # path's own comment assumed (citing set_component_
+            # location's docstring, now stale for this exact case)
+            # that other shared instances are always untouched.
+            # dm._shared_parent_moves records the shared parent's own
+            # entry whenever set_component_location's parent-
+            # resolution logic actually took the shared-propagation
+            # branch (mirrors dm._shape_replaced_entries, the proven
+            # signal for the identical shape of bug in fillet/shell
+            # propagation). Resolve each recorded entry to every
+            # CURRENT sibling sharing that same parent, force-redraw
+            # each one, and its own descendants too in case that
+            # sibling is itself an assembly.
+            shared_parent_moves = getattr(
+                self.dm, '_shared_parent_moves', [])
+            for parent_entry in shared_parent_moves:
+                for u, info in self.dm.label_dict.items():
+                    p_uid = info.get('parent_uid')
+                    p_info = self.dm.label_dict.get(p_uid, {})
+                    p_entry = p_info.get('ref_entry') or p_info.get('entry')
+                    if p_entry == parent_entry:
+                        force.add(u)
+                        force |= set(
+                            self.dm.get_descendant_part_uids(u))
+            self.dm._shared_parent_moves = []
             self.main_win._incremental_reconcile(
                 old_uids, force_redraw_uids=force)
         else:

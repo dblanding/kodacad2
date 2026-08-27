@@ -52,7 +52,7 @@ scratchpad rather than re-typing each value by hand. Hovering the
 cursor over any tool in the 2D sketch tools panel shows a **tooltip**
 describing what it does.
 
-* Click the **H + V Construction Lines** tool in the 2D sketch tools
+* Click the **Horizontal Construction Line** tool in the 2D sketch tools
   panel.
   * The status bar prompts *"Pick a pt or enter a value"*.
   * "Current operation: clineH" is confirmed to the right of the
