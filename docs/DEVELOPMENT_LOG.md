@@ -5496,3 +5496,43 @@ Also likely explains (not yet confirmed by Doug) the first of two additional 'qu
 Doug's retest: the moved nut-bolt-assembly now correctly shows in BOTH l-bracket-assembly_1 and l-bracket-assembly_2, and the previously-vanishing nut-bolt-assembly_3 is intact and visible in both, in sync with its checkbox. Confirms the fix's force-redraw correctly reached every sibling sharing the modified parent, not just the specific instance being watched.
 
 Doug confirmed the tree-reordering behavior (items renumbering after a move) is already understood and doesn't need fixing -- a known, accepted side effect of the remove-then-re-add mechanism, not something to chase further.
+
+# Session 88: Import STEP's own Redo failure -- same root cause and fix as Session 86, a third occurrence found and closed
+
+Doug found this while polishing the as1-oc-214 tutorial's Step 1 (the two loading paths): Import STEP into an empty session, Undo back to empty, Redo -- fails identically to Session 86's bug ('This label has already such an attribute'). Confirmed via git checkout across recent commits that this predates Session 86 entirely -- not a regression from anything recent, a separate, pre-existing occurrence of the identical pattern.
+
+Traced directly to add_component_from_label (called by load_stp_cmpnt, Import STEP's own implementation): the exact same structure as Session 86's two fixed functions -- AddShape(root_shape, True) creates the root's shape attribute, then AddComponent(root_label, ...) touches that same attribute again within the same transaction. Fixed identically: split into two separately-committed transactions, only on the very first call that actually creates the root (every subsequent call, including later items in the same import's own worklist, is unaffected).
+
+Searched exhaustively for every occurrence of this pattern across docmodel.py rather than assuming three was the full count -- found a fourth, in load_stp_undr_top, whose own docstring confirms it's been dead code with no callers since Session 52. Left unfixed deliberately: fixing code nothing calls doesn't help Doug and adds nothing to test.
+
+### Lesson for future development
+
+**A bug fixed in one function, once confirmed as a real mechanism rather than a one-off, is worth searching the whole codebase for by its actual PATTERN (the exact code shape), not just waiting for each remaining occurrence to be separately reported.** Session 86 fixed two instances of this pattern from two different bug reports, days apart. This session found the third from a single, deliberate grep across the whole file -- the same search that could have caught all three at once, had it been run right after the first fix confirmed the pattern was real rather than incidental.
+
+# Session 89: the Redo failure's real shape found -- structural fix instead of another patch
+
+Doug's precise reproduction (undo once -> redo works fine; undo TWICE -> redo fails) revealed that Session 86/88's fix, while a real and correct fix for what it addressed, never actually got tested against the specific case that still breaks: redoing the transaction that creates a document's very-first-ever label, from a state of genuinely zero free shapes. Every prior confirmation (Session 86's own retest included) stopped one undo short of that state.
+
+Rather than continue chasing whatever OCAF-internal reason redoing a document's first-ever label creation doesn't replay cleanly, this sidesteps the problem structurally: DocModel.__init__ now creates the root '/' label BEFORE SetUndoLimit is ever called, so its creation is never recorded as an undoable transaction in the first place -- the same way the tree's own permanent '/' UI scaffolding was never something the user did and can undo. For the app-startup session, there is no longer a 'redo the root's creation' scenario to reach at all: importing a file becomes a single undoable transaction (the component-add alone), and undoing it returns to the same permanently-existing empty root with zero undos remaining -- Doug's own two-undo reproduction shouldn't be reachable anymore.
+
+The visible startup screen is unchanged: the tree's synthetic '/' scaffolding displays independently of label_dict's content regardless, and the document's new root label becomes visible the first time any real operation calls parse_doc()/build_tree(), which already happens naturally on a user's first action.
+
+Session 86/88's fixes (splitting root-creation into its own transaction inside add_component, create_new_assembly, and add_component_from_label) are left in place as a safety net for any other path that might still encounter a genuinely rootless document -- _load_step's own, separate document creation for a freshly-read file was not changed here.
+
+**Not yet confirmed by Doug's own retest** -- offered with real confidence given the structural reasoning, but confidence isn't confirmation for anything touching OCAF's own undo internals.
+
+### Lesson for future development
+
+**When a patch keeps almost-but-not-quite working, it's worth asking whether the SCENARIO can be eliminated rather than continuing to patch around its symptoms.** Session 86 and 88 both correctly fixed the specific transactions they were built against; neither noticed that the deeper case (redoing a document's very-first label) was never actually exercised by either confirmation test. Removing the root's creation from the undo history entirely doesn't require understanding OCAF's own internal reason the redo fails -- it just makes sure that specific redo is never attempted at all.
+
+## Session 89 (cont'd): Session 89's structural fix reverted per Doug's own call -- landing point is Session 86/88's known-limitation state
+
+Doug's retest of Session 89's fix confirmed the structural prediction exactly (only 1 undo after import, second undo correctly reports 'nothing to undo') but the remaining single transaction still failed to redo -- revealing the deeper, recursive nature of the problem (rebuild_imported_structure's identical create-then-wire pattern recurring at every level of nested assembly structure, not just the root).
+
+Given the choice between chasing that recursive case further (many transactions, uncertain payoff) or making Import STEP non-undoable outright, Doug made a third, simpler call: keep imports undoable -- he specifically wants to be able to undo a SEQUENCE of several imports -- and accept the known, narrow limitation from Session 86/88's own fix as an acceptable tradeoff: undoing ONE step and redoing works correctly (the common case); undoing all the way back on a first-ever import or part, past the root's own creation, then redoing, still fails, but that's a minor, rare edge case rather than something worth further risk to eliminate.
+
+Reverted DocModel.__init__ to its Session 86/88 state (SetUndoLimit called immediately after create_doc(), no pre-created root). The three transaction-split fixes inside add_component, create_new_assembly, and add_component_from_label remain in place and unaffected -- confirmed directly rather than assumed.
+
+### Lesson for future development
+
+**Not every bug needs to be fully eliminated -- sometimes the right outcome is a well-understood, narrow, documented limitation that the person who has to live with it explicitly accepts, rather than continuing to add risk chasing a deeper fix.** Doug's own judgment about the tradeoff here (undoable imports, including sequences of several, versus a rare two-click edge case on the very first one) is exactly the kind of call that belongs to the person actually using the tool, not something to keep pushing past once a reasonable, working state has been reached.

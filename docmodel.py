@@ -433,6 +433,22 @@ class DocModel:
 
     def __init__(self):
         self.doc, self.app = create_doc()
+        # Session 89's attempt to pre-create the root '/' here (before
+        # SetUndoLimit, so its creation would never be part of the
+        # undo history at all) was reverted per Doug's own test: it
+        # correctly eliminated the root-creation transaction, but
+        # exposed that the underlying redo issue is deeper than root-
+        # creation alone -- rebuild_imported_structure (used by Import
+        # STEP) has the identical create-then-wire pattern recurring
+        # at EVERY level of nested assembly structure in an imported
+        # file, not just the top. Doug's own call: accept the known,
+        # minor limitation from Session 86/88's fix (undoing all the
+        # way back on a first-ever import or part, past the root's own
+        # creation, then redoing, fails -- but undoing ONE step and
+        # redoing works correctly, which is the common case) rather
+        # than chase the recursive case further or make Import STEP
+        # non-undoable outright. He specifically wants imports to stay
+        # undoable, including a SEQUENCE of several imports.
         self.doc.SetUndoLimit(UNDO_LIMIT)  # Session 61
         self.part_dict = {}   # {uid: {keys: 'shape', 'name', 'color', 'loc'}}
         self.label_dict = {}  # {uid: {keys: 'entry', 'name', 'parent_uid', ...}}
@@ -1833,6 +1849,23 @@ class DocModel:
             BRep_Builder().MakeCompound(root_shape)
             root_label = shape_tool.AddShape(root_shape, True)
             set_label_name(root_label, "/")
+            # Session 88, Doug: 'This label has already such an
+            # attribute' on Redo after Import STEP into an empty
+            # session, then Undo, then Redo -- git checkout confirmed
+            # this predates Session 86's fix entirely (present on
+            # every recent commit checked), the identical pattern in
+            # a third place. Same root cause, same fix: AddShape
+            # (just above) and AddComponent (just below) both touch
+            # root_label's own shape attribute within one transaction.
+            # Splitting into two committed transactions so each
+            # touches it only once. Only runs the very first time
+            # add_component_from_label creates the root at all --
+            # every subsequent call (root already existing, including
+            # every later item in the same import's own worklist) is
+            # completely unaffected.
+            if self.doc.HasOpenCommand():
+                self.doc.CommitCommand()
+                self.doc.NewCommand()
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 

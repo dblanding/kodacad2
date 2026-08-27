@@ -29,9 +29,14 @@ one).
 
 1. **File -> Load Session**, choose `as1-oc-214.stp`. The assembly
    appears under `/` -- this *replaces* whatever was open.
-2. Undo back to empty (or restart), then **File -> Import STEP**,
+2. Alternatively, you can restart KodaCAD, then **File -> Import STEP**,
    choose the same file. This time it's *added* as a new component
-   under the current `/`, alongside anything else already open.
+   under the current `/`, alongside anything else already open. 
+
+> **A note on Undo/Redo after Import STEP:** if this is the first thing you've brought into an empty session, Undo and Redo have one quirk worth knowing. Undoing once and then Redoing works perfectly — you'll get your import back every time. But if you Undo twice in a row right after that first import (past the point where the assembly disappears), Redo will no longer bring it back, and you'll need to restart KodaCAD to get a clean session again.
+
+> In practice: after your first-ever import, don't click Undo more than once unless you're sure you want to go further back — after that, Redo may not work. **Load Session doesn't have this limitation at all**, which is worth keeping in mind if you're the type to click Undo a few extra times "just to be safe."
+
 
 Load file `as1-oc-214.stp` as session | Import file `as1-oc-214.stp` into empty session
 -------------|--------------
@@ -137,11 +142,11 @@ found in the same lookup dict simple parts were).*
 surface in one pass -- Dynamic drag, Nudge (including the workplane-
 relative gizmo realignment), Mate/Align, 2 Points, Back/Reverse.*
 
-## Step 9 -- Undo the whole chain
+## Step 9 -- Undo / Redo
 
-Undo back through the fillet, the position changes, the shared-
-instance creation, and the reparenting, one step at a time --
-confirming each step visibly reverts, not just the first one.
+Undo back through the position changes, the shared-
+instance creation, the reparenting, the creation of the sibling assemblies, etc, all the way back to the fillet, one step at a time --
+confirming each step in the sequence visibly reverts, not just the first one. As long as you don't go all the way back past the loading of the STEP file, you can Redo to get back to the state prior to the first Undo. If you Undo back past the import of the step file, then you've gone too far and Redo may not get you back.
 
 *Exercises: undo/redo's targeted redraw across a genuinely mixed
 chain -- both the location-comparison path (position changes) and
