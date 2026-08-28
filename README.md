@@ -1,10 +1,20 @@
 # KodaCAD 2.0
 
-A 3D CAD application for Python, built on
-[OCCT](https://www.opencascade.com/) via the
-[OCP](https://github.com/CadQuery/OCP) Python bindings.
+A from-scratch 3D CAD application
+* Based on the original [KodaCAD](https://github.com/dblanding/kodacad)
+* Built on OCP (Python bindings for OpenCascade's
+    [OCCT](https://www.opencascade.com/)) -- see below for how this
+    differs from other Python CAD libraries
+* Patterned after HP's dynamic modeling lineage (ME-30 → SolidDesigner)
+* Part creation workflow: workplane → sketch → extrude/revolve → modify 
+* Intended to meet the basic requirements in a typical CAD workflow:
+    * Start a new session or load a previous one (saved in STEP format)
+    * Import components in STEP format
+    * Position them within an assembly structure
+    * Create simple mounting plates & brackets
+    * Save session in STEP format
 
-KodaCAD is designed for users who want to assemble, modify, and create
+Designed for users who want to assemble, modify, and create
 3D mechanical parts and assemblies using a scriptable, open-source
 toolchain -- with no commercial dependencies and no Conda environment.
 
@@ -59,7 +69,6 @@ uv run kodacad.py
 Dependencies (managed automatically by uv):
 - `ocp` -- OCCT Python bindings (replaces PythonOCC)
 - `pyside6` -- Qt6 Python bindings (replaces PyQt5)
-- `build123d` -- used for geometry utilities
 
 ---
 
@@ -150,7 +159,7 @@ WP              ← workplanes (2D construction geometry)
 Because KodaCAD modifies the XDE prototype shape, all instances of the
 modified part update simultaneously.
 
-**Modify Active Part → Shell, Mill, Pull, Fuse**
+**Modify Active Part → Mill, Pull, Fillet, Shell**
 Same workflow -- Set Active, choose operation, select geometry, enter
 parameters.
 
