@@ -179,8 +179,6 @@ what it exercises in KodaCAD's own code.
 ## Tested workflows
 
 ### Load / Modify / Save
-See `docs/DEVELOPMENT_LOG.md` for a detailed walkthrough matching
-the steps in `docs/Load_Modify_Save_Demo.pdf`:
 1. Load `as1-oc-214.stp`
 2. Set `l-bracket_1` as active part
 3. Apply fillet -- both L-brackets update simultaneously
