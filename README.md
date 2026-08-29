@@ -69,6 +69,7 @@ uv run kodacad.py
 Dependencies (managed automatically by uv):
 - `ocp` -- OCCT Python bindings (replaces PythonOCC)
 - `pyside6` -- Qt6 Python bindings (replaces PyQt5)
+- `build123d` -- used for geometry utilities
 
 ---
 
@@ -179,6 +180,11 @@ what it exercises in KodaCAD's own code.
   loading a pre-built, multi-part assembly two different ways, the XDE
   hierarchy viewer, and fillet propagation across a pre-existing
   shared instance.
+- **[Build Assembly `as1` from a Kit of Parts](tutorials/build-as1-oc-214/README.md)** --
+  the reverse of the tutorial above: starting from `as1-oc-214`'s five
+  loose, un-positioned prototype parts and rebuilding the real
+  assembly from scratch, exercising nearly every Position dialog
+  method along the way.
 - **[Building Quaoar's Chassis](tutorials/chassis/README.md)** --
   building a wheel-and-axle-in-a-chassis assembly from nothing:
   sibling-assembly creation, reparenting, shared instances (both a
@@ -228,6 +234,7 @@ kodacad2/
   tutorials/
     occ-bottle/         build the OCC bottle from scratch
     as1-oc-214/         load and explore a pre-built assembly
+    build-as1-oc-214/   rebuild that same assembly from loose parts
     chassis/            build an assembly from scratch (Quaoar's chassis)
   pyproject.toml      uv project file
 ```
