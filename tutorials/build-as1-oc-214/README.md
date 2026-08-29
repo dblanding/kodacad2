@@ -119,7 +119,7 @@ deliberately as a rough, intermediate move rather than a final one;
 * Drag `bolt` into the new `bolt-nut-asy`.
 * Drag `nut` into `bolt-nut-asy`.
 
-![Bolt & Nut Assembly](imgs/b5.png)
+![Bolt & Nut Assembly](imgs/b6.png)
 
 *Exercises: grouping two already-positioned, unrelated parts into a
 new sub-assembly after the fact, rather than creating the assembly
