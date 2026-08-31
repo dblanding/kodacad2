@@ -21,7 +21,10 @@ Both STEP loading paths and why each is safe against `/` accumulation;
 the XDE hierarchy viewer; recognizing a shared prototype from its
 referring components; fillet propagation across two *pre-existing*
 shared instances (as opposed to the Chassis tutorial's freshly-created
-one).
+one); toggling transparency from the tree's own RMB menu; deleting one
+of two shared instances and confirming the other survives intact; and
+Mill (material removal, as opposed to Pull's material addition)
+through the Mill/Pull dialog's own operation-linked direction default.
 
 ---
 
@@ -73,6 +76,57 @@ on `as1-oc-214.stp` specifically (rather than a freshly-created shared
 instance, as in the Chassis tutorial) confirms the fix also holds for
 sharing relationships that came in from an imported file rather than
 being built in the current session.*
+
+## Step 4 -- See through the plate
+
+RMB click `plate` in the tree and select **Set Transparent**. Confirm
+the plate becomes see-through in the viewport, revealing the bolt
+heads and L-bracket geometry that would otherwise be hidden beneath
+it. RMB click `plate` again and select **Set Opaque** to restore it.
+
+*Exercises: Set Transparent / Set Opaque from the tree's own RMB
+menu -- neither has appeared in any tutorial before this one.*
+
+## Step 5 -- Delete one of the shared L-bracket assemblies
+
+RMB click `l-bracket-assembly_2` (or whichever of the two shared
+instances you didn't fillet in Step 3) and select **Delete**. Confirm:
+
+* The deleted instance disappears from both the tree and the
+  viewport.
+* The *other* L-bracket assembly is completely unaffected -- still
+  present, still filleted, still correctly showing every nut, bolt,
+  and bracket it had before.
+
+*Exercises: deleting one occurrence of a shared prototype while the
+other survives -- the underlying prototype must not be torn down
+just because one of its two occurrences was removed, since the
+remaining occurrence still refers to it. `Delete` hasn't been
+exercised on a part or assembly in any tutorial before this one
+(only once before, briefly, on a workplane).*
+
+## Step 6 -- Mill a hole into the plate
+
+* **Workplane -> On Face**, click the plate's top face, then a side
+  face for the +U direction.
+* Sketch a circle somewhere on the plate that doesn't intersect any
+  existing hole.
+* Set the plate active, then **Modify Active Part -> Mill / Pull**.
+* In the dialog:
+  * Operation: **Remove material (Mill)** -- Direction defaults to
+    **-W** automatically once Mill is selected (cutting straight down
+    into the part), unless you touch the Direction field yourself.
+  * Distance (mm): enter something less than the plate's own
+    thickness.
+  * Click **✅ Done**.
+* Confirm the hole appears in the viewport, cut straight down into
+  the plate.
+
+*Exercises: Mill -- Pull has been used repeatedly across other
+tutorials (the Bottle's neck, elsewhere), but Mill (material
+*removal* through the same dialog) has never been demonstrated
+anywhere until this step. Also exercises the dialog's own
+operation-linked direction default.*
 
 ---
 

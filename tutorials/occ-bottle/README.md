@@ -19,9 +19,9 @@ Workplane creation, the AIS ViewCube, the RPN calculator's
 send-to-KodaCAD workflow, H/V construction lines, sketch geometry
 (line, arc, construction circle), Extrude, Fillet (including its
 edge-ownership resolution and the sample-and-verify fallback for
-non-analytic circular edges), Mill/Pull, Shell, Undo/Redo across
-shape-replacing operations, and STEP save/reload (file size, geometry
-round-trip).
+non-analytic circular edges), Mill/Pull, Shell, workplane visibility
+surviving a modification, Undo/Redo across shape-replacing operations,
+and STEP save/reload (file size, geometry round-trip).
 
 ---
 
@@ -131,9 +131,11 @@ isometric view.
 
 ## Step 6 -- Fillet the vertical corners
 
-The workplane is no longer needed at this point -- it can be either
-deleted (RMB click in the tree -> **Delete**) or hidden (uncheck its
-box in the tree).
+The first workplane is no longer needed at this point. **Uncheck its
+box in the tree to hide it -- don't delete it yet.** (A second
+workplane is coming up in Step 7, so leaving this one hidden rather
+than deleted sets up a check worth doing once both workplanes exist:
+confirm this one is *still* unchecked, not silently re-shown.)
 
 A few ways to adjust the viewport at any point:
 
@@ -150,12 +152,19 @@ Then:
 * Select all 12 edges of the bottle, one at a time -- the status bar
   acknowledges each one.
 * Enter `3` as the radius.
+* **Check the tree: confirm the first workplane is still hidden.**
+  Any modification rebuilds the tree, which is exactly the moment a
+  hidden workplane could silently reappear if its visibility state
+  weren't actually being respected.
 
 ![Fillets](imgs/fillets.png)
 
 *Exercises: fillet's edge-ownership resolution at pick time; the
 sample-and-verify circumcenter fallback if any of these edges aren't
-typed as an analytic circle/line after display prep.*
+typed as an analytic circle/line after display prep; workplane
+visibility surviving a modification -- a hidden workplane used to
+silently re-check itself on every tree rebuild, which every
+modification triggers.*
 
 ## Step 7 -- Create a workplane on the bottle's top face
 
@@ -189,13 +198,16 @@ part.*
 
 ## Step 9 -- Fillet the neck / top face
 
-Hide or delete the last workplane -- it's no longer needed. With the
-bottle still active, add a 2 mm radius fillet at the base of the neck.
+Hide this second workplane too (uncheck its box) -- it's no longer
+needed. **Confirm both workplanes now show as unchecked in the tree,
+and stay that way through the fillet below.** With the bottle still
+active, add a 2 mm radius fillet at the base of the neck.
 
 ![Add Neck Fillet](imgs/neck-fillet.png)
 
 *Exercises: a second fillet operation on the same part, at a different
-location and radius than Step 6's.*
+location and radius than Step 6's; workplane visibility surviving a
+modification, now with two hidden workplanes at once rather than one.*
 
 ## Step 10 -- Shell the body
 
