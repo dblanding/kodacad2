@@ -23,6 +23,10 @@
 * Implement abilty to create and save a 1x scale drawing view in printable format (for checking feature alignment w/ real parts)
     * Workaround: Export the part in Step format and create the dwg in another app.
 
+* **Workplane → By 3 Points**: currently underused — no clear motivating use case yet. Possible future redesign, modeled on Creo's Pt-Pt-Pt method: 1st point = origin, 2nd point sets +U direction, 3rd point establishes the plane (+V direction). Not being touched until a real need for it turns up.
+
+* **Create 3D → Revolve**: carried over from the original KodaCAD, works in BasiCAD, rarely used here. Natural sibling of Extrude (angular vs. linear), and will likely eventually need "add/subtract" cousins living under Modify Active Part rather than Create 3D. Worth a look at why/how it works in BasiCAD before touching it. Not a current priority.
+
 ## Deferred (Not easily implemented)
 
 * View Cube is unresponsive when 2D drawing tools are in use
