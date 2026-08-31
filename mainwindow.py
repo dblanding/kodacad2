@@ -1930,7 +1930,7 @@ class MainWindow(QMainWindow):
                     except Exception:
                         _oc = Quantity_Color(Quantity_NOC_DARKGREEN)
                     context.SetColor(ais_outline, _oc, False)
-                    context.SetWidth(ais_outline, 2.0, False)
+                    context.SetWidth(ais_outline, 6.0, False)
                     self.canvas._display.add_never_pick(ais_outline)
             except Exception as oe:
                 if not getattr(self, "_wpoutline_warned", False):
