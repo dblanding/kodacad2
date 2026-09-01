@@ -289,7 +289,16 @@ class KodaViewport(QWidget):
         else:
             win_handle = int(self.winId())
         occ_win = Aspect_NeutralWindow()
-        occ_win.SetSize(max(self.width(), 1), max(self.height(), 1))
+        # Doug, Windows: the black region in the top-left with content
+        # squeezed into the bottom-right is a classic HiDPI symptom --
+        # OCCT needs the PHYSICAL pixel size of the render surface,
+        # not Qt's logical one. devicePixelRatioF() is 1.0 on most
+        # Linux/X11 setups (why this worked there without it), but
+        # commonly isn't on Windows by default. Harmless no-op
+        # wherever the ratio genuinely is 1.0.
+        _dpr = self.devicePixelRatioF()
+        occ_win.SetSize(max(int(self.width() * _dpr), 1),
+                        max(int(self.height() * _dpr), 1))
         occ_win.SetNativeHandle(win_handle)
         view.SetWindow(occ_win)
         if not occ_win.IsMapped():
@@ -417,7 +426,9 @@ class KodaViewport(QWidget):
         super().resizeEvent(event)
         if self._occt_window is not None and self.view is not None:
             try:
-                self._occt_window.SetSize(self.width(), self.height())
+                _dpr = self.devicePixelRatioF()
+                self._occt_window.SetSize(int(self.width() * _dpr),
+                                          int(self.height() * _dpr))
                 self.view.MustBeResized()
                 self.update()
             except Exception as e:
