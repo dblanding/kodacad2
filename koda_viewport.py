@@ -265,7 +265,29 @@ class KodaViewport(QWidget):
         view.SetBackgroundColor(
             Quantity_Color(0.5, 0.5, 0.5, Quantity_TypeOfColor.Quantity_TOC_RGB))
 
-        win_handle = int(self.winId())
+        # Doug, on Windows: OCP's SetNativeHandle() there only accepts
+        # a capsule, not a bare int -- confirmed as a real, known gap
+        # (a matching, unanswered Qt Forum thread: someone else hit
+        # this exact PySide6+OCP+Windows combination -- see
+        # forum.qt.io/topic/156013). PyCapsule_New via
+        # ctypes.pythonapi is the standard, general Python technique
+        # for wrapping a raw pointer value into a capsule -- NOT
+        # something OCP-specific, but this exact call has no live
+        # Windows+OCP install anywhere to verify against, so treat
+        # this as a first attempt needing your own confirmation, not
+        # a settled fix. Linux/macOS path is completely untouched --
+        # this only runs on win32.
+        import sys as _sys
+        if _sys.platform == "win32":
+            import ctypes as _ctypes
+            _PyCapsule_New = _ctypes.pythonapi.PyCapsule_New
+            _PyCapsule_New.restype = _ctypes.py_object
+            _PyCapsule_New.argtypes = (_ctypes.c_void_p,
+                                       _ctypes.c_char_p,
+                                       _ctypes.c_void_p)
+            win_handle = _PyCapsule_New(int(self.winId()), None, None)
+        else:
+            win_handle = int(self.winId())
         occ_win = Aspect_NeutralWindow()
         occ_win.SetSize(max(self.width(), 1), max(self.height(), 1))
         occ_win.SetNativeHandle(win_handle)
