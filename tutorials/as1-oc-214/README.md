@@ -145,3 +145,7 @@ operation-linked direction default.*
   for the reverse of this tutorial: starting from `as1-oc-214`'s five
   loose prototype parts and rebuilding the real assembly from scratch,
   exercising nearly every Position dialog method along the way.
+- See the [Lathe tutorial](../lathe/README.md) for organizing and
+  navigating a large, messily-imported assembly -- renaming, sibling
+  assemblies, and reparenting an assembly that already has a parent
+  to a different one.

@@ -226,3 +226,7 @@ positioned independently.*
   point of comparison once this one is finished, to confirm the
   rebuilt assembly matches the real thing structurally, not just
   visually.
+- See the [Lathe tutorial](../lathe/README.md) for organizing and
+  navigating a large, messily-imported assembly -- renaming, sibling
+  assemblies, and reparenting an assembly that already has a parent
+  to a different one.

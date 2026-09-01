@@ -162,3 +162,7 @@ everything Step 3 built.*
   the two STEP-loading paths explored in more depth, and for fillet
   propagation across a *pre-existing* (rather than freshly-created)
   shared instance.
+- See the [Lathe tutorial](../lathe/README.md) for organizing and
+  navigating a large, messily-imported assembly -- renaming, sibling
+  assemblies, and reparenting an assembly that already has a parent
+  to a different one.
