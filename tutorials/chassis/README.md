@@ -92,8 +92,8 @@ Extrude operations from the same sketch.*
 * Select the new wheel instance and position it at the opposite end of
   the axle. All three methods work:
   * **Dynamic** -> Nudge 100 mm in Z.
-  * **Mate Align** -> Align.
-  * **2 Points** -- pick the center of each wheel's rim.
+  * **Mate Align** -> Align. Click top face of wheel, then top face of axle.
+  * **2 Points** -- Pick center of wheel top, then center of axle top.
 * RMB click `/` and select **Create New Assembly** again. Name it
   "chassis".
 * Drag "wheel-axle-asy" into "chassis".

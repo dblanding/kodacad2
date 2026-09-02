@@ -62,9 +62,6 @@ nested into each other.*
 
 * Drag `l-bracket` into `L-brkt-asy` in the tree.
 * Select it, then **Position -> Position Selected**.
-
-![The Position dialog](imgs/b11.png)
-
   * Choose method **Mate Align**.
     1. Constraint **Mate** -- click the bottom face of the bracket,
        then the top face of the plate.

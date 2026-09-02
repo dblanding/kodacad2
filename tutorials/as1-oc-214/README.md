@@ -32,7 +32,7 @@ through the Mill/Pull dialog's own operation-linked direction default.
 
 1. **File -> Load Session**, choose `as1-oc-214.stp`. The assembly
    appears under `/` -- this *replaces* whatever was open.
-2. Undo back to empty (or restart), then **File -> Import STEP**,
+2. Restart, then **File -> Import STEP**,
    choose the same file. This time it's *added* as a new component
    under the current `/`, alongside anything else already open.
 
@@ -52,6 +52,8 @@ saved-session's own `/` wrapper before nesting its children).*
 
 Note which labels are components (occurrences, referring to a
 prototype) versus the prototypes themselves.
+
+Format: component  name-of-component => prototype
 
 Load file `as1-oc-214.stp` as session | Import file `as1-oc-214.stp` into empty session
 -------------|--------------

@@ -27,6 +27,8 @@
 
 * **Create 3D → Revolve**: carried over from the original KodaCAD, works in BasiCAD, rarely used here. Natural sibling of Extrude (angular vs. linear), and will likely eventually need "add/subtract" cousins living under Modify Active Part rather than Create 3D. Worth a look at why/how it works in BasiCAD before touching it. Not a current priority.
 
+* **Unshare** a part or assembly. Example: bearing-block_3 in lathe tutorial should be unshared prior to modifying it for a new purpose on the rotor-asy.
+
 ## Deferred (Not easily implemented)
 
 * View Cube is unresponsive when 2D drawing tools are in use
