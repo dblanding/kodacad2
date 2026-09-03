@@ -214,19 +214,36 @@ def same_pt_p(p1, p2):
 
 
 def cline_box_intrsctn(cline, box):
-    """Return tuple of pts where line intersects edges of box."""
+    """Return tuple of pts where line intersects edges of box.
+
+    Doug's pumpkin-eyes report: a 45-degree cline through the center
+    of a ccirc produced no catch glyph at all, with nothing printed
+    anywhere -- traced to this function. The box is centered on the
+    line's own closest point to the circle, so a line passing exactly
+    through the circle's center also passes exactly through two
+    opposite corners of this box (never true for H/V lines, which
+    cross the middle of two opposite edges instead). Each corner then
+    gets computed twice -- once via each of its two adjacent edges,
+    through different arithmetic -- and those two results can be the
+    same point mathematically without being exactly equal as floats.
+    The old exact-equality dedup (`pt not in pts`) could then return
+    3 or 4 points instead of 2, silently breaking the `p1, p2 = ...`
+    unpack two lines below this call in line_circ_inters -- caught by
+    find_snap's own try/except, so the failure was silent."""
     x0, y0, x1, y1 = box
     pts = []
     segments = [((x0, y0), (x1, y0)),
                 ((x1, y0), (x1, y1)),
                 ((x1, y1), (x0, y1)),
                 ((x0, y1), (x0, y0))]
+    tol = 1.0e-7  # matches the TOLERANCE constant printed at startup
     for seg in segments:
         pt = intersection(cline, cnvrt_2pts_to_coef(seg[0], seg[1]))
         if pt:
             if p2p_dist(pt, seg[0]) <= p2p_dist(seg[0], seg[1]) and \
                p2p_dist(pt, seg[1]) <= p2p_dist(seg[0], seg[1]):
-                if pt not in pts:
+                if not any(p2p_dist(pt, existing) < tol
+                          for existing in pts):
                     pts.append(pt)
     return tuple(pts)
 
