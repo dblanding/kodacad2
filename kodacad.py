@@ -689,6 +689,7 @@ def shell(event=None):
     if win.lineEditStack and win.faceStack:
         text = win.lineEditStack.pop()
         faces = TopTools_ListOfShape()
+        _picked_faces = list(win.faceStack)  # snapshot before cleared below
         for face in win.faceStack:
             faces.Append(face)
         win.faceStack = []
@@ -707,8 +708,57 @@ def shell(event=None):
         workPart = cached[1] if cached is not None else win.activePart
         uid = win.activePartUID
         shellT = float(text) * win.unitscale
+        # DIAGNOSTIC (Doug's pumpkin shell: 0 open faces despite
+        # picking the top face) -- the Session 79 comment above
+        # describes exactly this failure mode (picked face doesn't
+        # belong to workPart's own topology), supposedly already
+        # fixed via _display_prep_cache. This checks directly whether
+        # that's still happening, or whether the cache itself is
+        # stale, rather than guessing further.
+        # FIX: this loop originally iterated win.faceStack, which is
+        # cleared to [] a few lines above -- always empty by the time
+        # this runs, which is exactly why nothing ever printed. The
+        # picked faces are still available in 'faces' below.
+        try:
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+            workpart_faces = []
+            exp = TopExp_Explorer(workPart, TopAbs_FACE)
+            while exp.More():
+                workpart_faces.append(exp.Current())
+                exp.Next()
+            for i, pf in enumerate(_picked_faces):
+                matched = any(pf.IsSame(wf) for wf in workpart_faces)
+                print(f"[shell] picked face {i}: IsSame match in "
+                     f"workPart's own {len(workpart_faces)} faces? "
+                     f"{matched} (cached={cached is not None})")
+        except Exception as _de:
+            print(f"[shell] diagnostic failed: {_de}")
         mkShell = BRepOffsetAPI_MakeThickSolid()
-        mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
+        # EXPERIMENT (Doug's tangent-fillet-boundary hypothesis,
+        # confirmed by direct evidence -- the picked face genuinely
+        # matches workPart's own topology, so the problem is inside
+        # MakeThickSolidByJoin itself, not a face-mismatch). OCCT's
+        # own docs on the Join parameter (default GeomAbs_Arc):
+        # GeomAbs_Intersection "enlarge[s] and intersect[s]" the
+        # parallels to adjacent faces "so that there are no free
+        # edges on parallels to faces" -- worth trying directly
+        # against a face whose entire boundary is tangent rather than
+        # sharp. Also independently confirmed as a real, known OCCT
+        # weakness: a 10-year-old open OCCT issue (#172) describes
+        # Fillet failing on tangent (C1), not sharp, face boundaries
+        # -- a different operation, same underlying limitation class.
+        from OCP.GeomAbs import GeomAbs_Intersection
+        try:
+            mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3,
+                                         Join=GeomAbs_Intersection)
+        except TypeError as _je:
+            # Keyword form not accepted by this OCP binding -- fall
+            # back to the original call rather than let the
+            # experiment break Shell entirely.
+            print(f"[shell] Join= keyword not accepted ({_je}), "
+                 f"falling back to default Join")
+            mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
         try:
             newPart = mkShell.Shape()
         except Exception as e:
@@ -725,7 +775,7 @@ def shell(event=None):
             with docmodel.undo_transaction(dm):
                 dm.replace_shape(uid, newPart)
             _redraw_after_shape_replace(ref_entry, old_uids)
-            win.statusBar().showMessage("Shell operation complete")
+            shell_ok = True
         except Exception as e:
             # Session 79, Doug: the part vanished from the viewport
             # but stayed in the tree after a replace_shape failure --
@@ -734,8 +784,17 @@ def shell(event=None):
             # Same protective structure fillet() already has.
             print(f"Unable to replace/draw shape. {e}")
             win.redraw()
+            shell_ok = False
         win.setActivePart(uid)
         win.clearCallback()
+        # FIX (Doug: "the terminal says it's there, but it is most
+        # definitely not there"): clearCallback() itself calls
+        # statusBar().showMessage("") -- it was silently wiping this
+        # message the moment it was set, before any repaint could
+        # ever show it. The message now has to be set AFTER
+        # clearCallback runs, not before, so nothing overwrites it.
+        if shell_ok:
+            win.statusBar().showMessage("Shell operation complete")
     elif not require_active_part("Shell"):
         return
     else:
