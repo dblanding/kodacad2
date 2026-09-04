@@ -262,3 +262,8 @@ save/reload fidelity.*
   KodaCAD's assembly machinery -- this tutorial is deliberately
   single-part, and doesn't touch shared instances, reparenting, or
   the Position dialog at all.
+- See the [Jack-o'-Lantern tutorial](../jack/README.md) for a fuller
+  workout of the 2D sketch toolbar, and for this same
+  extrude-then-heavily-fillet technique reused to build a pumpkin,
+  followed by a real, multi-profile Mill/Pull operation this
+  tutorial's own single-profile neck-pull doesn't demonstrate.

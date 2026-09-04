@@ -190,6 +190,15 @@ what it exercises in KodaCAD's own code.
   sibling-assembly creation, reparenting, shared instances (both a
   part and an assembly), the Position dialog's full surface, and
   Undo/Redo across a long, mixed operation history.
+- **[Organizing an Assembly](tutorials/lathe/README.md)** --
+  organizing a flat file in which all parts are a direct child of
+  the root (often with cryptic names), into a hierarchical structure
+  of functional subassemblies, making it easier to navigate. 
+- **[Sketching a Jack-o'-Lantern](tutorials/jack/README.md)** --
+  a full workout of the 2D sketch toolbar building a jack-o'-lantern
+  face, then reusing the OCC Bottle's extrude-then-heavily-fillet
+  technique to carve that same face into a pumpkin with a real,
+  multi-profile Mill operation.
 
 ## Tested workflows
 
@@ -236,6 +245,8 @@ kodacad2/
     as1-oc-214/         load and explore a pre-built assembly
     build-as1-oc-214/   rebuild that same assembly from loose parts
     chassis/            build an assembly from scratch (Quaoar's chassis)
+    lathe/              organizing and navigating a large assembly
+    jack/               sketch a jack-o'-lantern face, then carve a pumpkin
   pyproject.toml      uv project file
 ```
 
