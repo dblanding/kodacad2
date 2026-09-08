@@ -194,6 +194,20 @@ def rebuild_imported_structure(src_label, shape_tool, color_tool, memo):
             set_label_name(new_comp, comp_name)
     else:
         shape = shape_tool.GetShape_s(src_label)
+        # DIAGNOSTIC (Doug: can-via-extrude survives save/reload
+        # alone; empty-part-then-Pull does not, despite both being a
+        # single part with identity location, going through this
+        # exact same code path). Checking the shape itself directly,
+        # since the code path is now confirmed identical for both --
+        # whatever differs has to be in the shape data itself.
+        try:
+            from OCP.BRepCheck import BRepCheck_Analyzer
+            analyzer = BRepCheck_Analyzer(shape)
+            print(f"[rebuild_imported_structure] {get_label_name(src_label)!r} "
+                 f"ShapeType={shape.ShapeType()} IsNull={shape.IsNull()} "
+                 f"BRepCheck_Analyzer.IsValid()={analyzer.IsValid()}")
+        except Exception as _de:
+            print(f"[rebuild_imported_structure] diagnostic failed: {_de}")
         dst_label = shape_tool.AddShape(shape, False)
         set_label_name(dst_label, get_label_name(src_label))
         memo[entry] = dst_label
@@ -508,6 +522,41 @@ class DocModel:
         shape_tool.GetComponents_s(root_label, top_comps, subchilds)
         if top_comps.Length():
             self.parse_components(top_comps, shape_tool, color_tool)
+        elif root_name != '/' and not shape_tool.IsAssembly_s(root_label):
+            # FIX (Doug's empty-part-then-Pull investigation): a
+            # saved file's own '/' unwrap can produce exactly this --
+            # a single part promoted to the file's own root, with no
+            # assembly wrapper around it at all. The unconditional
+            # 'is_assy': True set above is wrong for this case;
+            # root_label is a genuine, bare leaf part, holding its
+            # shape directly -- not a '/'-style container. parse_
+            # components' own machinery expects component-refers-to-
+            # prototype pairs (a separate occurrence label pointing
+            # at a separate prototype label), which don't exist here:
+            # root_label IS both at once. Populated directly instead,
+            # matching the same part_dict/label_dict shape
+            # parse_components builds for the normal case.
+            #
+            # The root_name != '/' guard matters: a freshly-
+            # bootstrapped, genuinely-empty '/' root (add_component's
+            # own bootstrap creates exactly this, before anything's
+            # been added underneath it -- a state an Undo could
+            # plausibly land back on) ALSO shows zero components and
+            # IsAssembly_s()=False, by the same documented "structural,
+            # zero-children" logic. Without this guard, that empty
+            # wrapper would be misclassified as if it were a real
+            # part. The '/' root is always literally named '/' by
+            # established convention; a genuine, promoted bare part
+            # never would be.
+            root_shape = shape_tool.GetShape_s(root_label)
+            color = get_part_display_color(
+                color_tool, shape_tool, root_label, root_shape)
+            self.part_dict[root_uid] = {'shape': root_shape,
+                                        'color': color,
+                                        'name': root_name,
+                                        'loc': loc}
+            self.label_dict[root_uid].update({'is_assy': False,
+                                              'ref_entry': root_entry})
         # Pop the root-level push for symmetry with the fix above
         # (not load-bearing -- these stacks reset at the top of
         # every parse_doc() call regardless -- but kept paired for
@@ -1469,6 +1518,18 @@ class DocModel:
                     break
                 child = children.Value(1)
                 child_loc = shape_tool.GetShape_s(child).Location()
+                # DIAGNOSTIC (Doug: can-via-extrude survives save/
+                # reload alone; empty-part-then-Pull does not, even
+                # though both end up as one component under '/'
+                # referring to one prototype with real geometry).
+                # This is the exact condition that decides whether
+                # the '/' unwrap proceeds -- printing it directly
+                # answers whether an empty-placeholder-derived part's
+                # component location differs from a normally-created
+                # one's, rather than guessing further.
+                print(f"[save_step_doc] unwrap check: child="
+                     f"{get_label_name(child)!r} loc.IsIdentity()="
+                     f"{child_loc.IsIdentity()}")
                 if not child_loc.IsIdentity():
                     cur = None
                     break
@@ -2247,6 +2308,43 @@ def load_stp_at_top(dm):
     repair_unnamed_products(doc, context=" load")
     print("[load_stp_at_top] calling parse_doc...")
     dm.parse_doc()
+    # DIAGNOSTIC (Doug's empty-part-then-Pull test: cube written with
+    # 361 entities -- clearly real geometry, not an empty 20-entity
+    # file -- but nothing shows in the viewport after reload). Mirrors
+    # save_step_doc's own pre-write dump style, plus a face count per
+    # leaf shape -- this is the direct question: did the reader bring
+    # back real geometry that just isn't drawing, or did something
+    # revert/lose it before or during the read itself?
+    try:
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_LabelSequence
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_FACE
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(dm.doc.Main())
+
+        def _dump(label, depth):
+            name = get_label_name(label)
+            shape = shape_tool.GetShape_s(label)
+            n_faces = 0
+            exp = TopExp_Explorer(shape, TopAbs_FACE)
+            while exp.More():
+                n_faces += 1
+                exp.Next()
+            print(f"{'  ' * depth}{name!r} entry={get_label_entry(label)} "
+                 f"IsNull={shape.IsNull()} faces={n_faces}")
+            children = TDF_LabelSequence()
+            shape_tool.GetComponents_s(label, children, False)
+            for i in range(1, children.Length() + 1):
+                _dump(children.Value(i), depth + 1)
+
+        free_labels = TDF_LabelSequence()
+        shape_tool.GetFreeShapes(free_labels)
+        print(f"[load_stp_at_top] post-load dump "
+             f"({free_labels.Length()} free shape(s)):")
+        for i in range(1, free_labels.Length() + 1):
+            _dump(free_labels.Value(i), 0)
+    except Exception as _de:
+        print(f"[load_stp_at_top] post-load dump failed: {_de}")
     print("[load_stp_at_top] done")
 
 

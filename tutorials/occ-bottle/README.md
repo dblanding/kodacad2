@@ -129,7 +129,7 @@ isometric view.
 
 *Exercises: profile-to-solid extrusion, multi-loop face building.*
 
-## Step 6 -- Fillet the vertical corners
+## Step 6 -- Fillet the edges
 
 The first workplane is no longer needed at this point. **Uncheck its
 box in the tree to hide it -- don't delete it yet.** (A second

@@ -825,6 +825,22 @@ def load_session():
              f"loading ({ce}) -- continuing regardless")
     docmodel.load_stp_at_top(dm)
     win.build_tree()
+    # DIAGNOSTIC (Doug's empty-part-then-Pull test: correct geometry
+    # confirmed present after reload -- IsNull=False, faces=6 -- but
+    # nothing draws). load_session() never clears self.hide_list,
+    # which is a session-level Python set, not something persisted
+    # in the STEP file itself. Doug tested hide/show on this exact
+    # part earlier in the same session -- if a stale entry survived
+    # that, and the reloaded part happens to land on the same uid
+    # string (plausible, since parse ordering is deterministic),
+    # redraw()'s own "if uid not in self.hide_list" check would
+    # silently skip it. This checks that directly instead of guessing.
+    print(f"[load_session] hide_list contents: {win.hide_list}")
+    print(f"[load_session] part_dict keys: {list(dm.part_dict.keys())}")
+    for _u in dm.part_dict:
+        if _u in win.hide_list:
+            print(f"[load_session] part {_u!r} IS in hide_list -- "
+                 f"redraw() will skip drawing it")
     win.redraw()
     win.fitAll()
 
@@ -878,6 +894,185 @@ def dumpDoc():
 def topoDumpAP():
     if win.activePart:
         Topology.dumpTopology(win.activePart)
+
+
+def test_create_empty_part():
+    """Utility menu smoke test (Doug: does an empty part -- no
+    geometry at all, standing in for Creo E/D's 'p1' -- survive
+    KodaCAD's own pipeline cleanly?).
+
+    add_component() already creates an empty TopoDS_Compound
+    internally, every time it bootstraps a fresh session's own root
+    '/' label -- real, already-proven precedent that XDE accepts one
+    as a legal shape via this exact code path. This asks the next
+    question: does everything downstream of that (tree build, draw,
+    set-active, hide/show, and -- most importantly -- a later
+    replace_shape swapping in real geometry) handle it just as
+    cleanly, or does something trip on zero faces somewhere
+    unexpected?
+
+    This mirrors extrude()'s own proven closing sequence exactly
+    (build_tree/redraw/syncUncheckedToHideList), just with an empty
+    shape instead of a real extruded one. Deliberately doesn't set
+    the new part active -- Doug's own call to make, via the tree's
+    normal RMB Set Active, same as any other part.
+
+    Meant as a throwaway: once the underlying idea is confirmed (or
+    isn't), this menu item and function are meant to be deleted, not
+    kept as permanent app behavior.
+    """
+    # EXPERIMENT: Compound confirmed IsAssembly_s=True (Doug's own
+    # test, direct evidence). Trying TopoDS_Solid instead -- likely
+    # tied to the shape TYPE, since add_component()'s AddComponent
+    # call passes True (OCCT's own "make assembly" flag) regardless
+    # of shape type; Compound may simply be what that flag treats as
+    # assembly-worthy. Solid is also the more semantically honest
+    # placeholder anyway, being the shape family a real part will
+    # actually become.
+    from OCP.TopoDS import TopoDS_Solid
+    from OCP.BRep import BRep_Builder
+    empty_shape = TopoDS_Solid()
+    BRep_Builder().MakeSolid(empty_shape)
+    try:
+        with docmodel.undo_transaction(dm):
+            returned_uid = dm.add_component(
+                empty_shape, "empty_part_test_solid", DEFAULT_COLOR)
+        # BUG FOUND (not this test's own): add_component()'s own
+        # returned uid doesn't match what parse_doc() actually stored
+        # in label_dict -- get_uid_from_entry() gets called twice for
+        # the same entry (once inside parse_doc()'s own traversal,
+        # once more right after, redundantly), and parse_doc() resets
+        # its serial counter on every call, so the second call always
+        # returns a uid one serial higher than the real one. Every
+        # other caller (extrude()) never uses the return value for
+        # anything, which is why this has never surfaced before now.
+        # Worked around here by searching for the known, controlled
+        # name instead of trusting the returned uid.
+        uid = None
+        for k, v in dm.label_dict.items():
+            if v.get('name') == 'empty_part_test_solid_1':
+                uid = k
+                break
+        print(f"[test_create_empty_part] add_component() returned "
+             f"{returned_uid!r}, but label_dict actually has it "
+             f"under {uid!r} -- these SHOULD be the same and aren't.")
+        name = dm.label_dict.get(uid, {}).get('name', '?') if uid else '?'
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry') if uid else None
+        is_assy = None
+        if ref_entry:
+            ref_label = dm._find_label_by_entry(ref_entry)
+            if ref_label is not None:
+                from OCP.XCAFDoc import XCAFDoc_DocumentTool
+                shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(dm.doc.Main())
+                is_assy = shape_tool.IsAssembly_s(ref_label)
+        print(f"[test_create_empty_part] name={name!r} uid={uid} "
+             f"IsAssembly_s={is_assy}")
+        win.build_tree()
+        win.redraw()
+        win.syncUncheckedToHideList()
+        msg = f"Empty part created: {name!r} (uid={uid}, " \
+             f"IsAssembly_s={is_assy}). Check the tree, try Set " \
+             f"Active, hide/show, save+reload, and a Mill/Pull Pull " \
+             f"to add real material."
+        win.statusBar().showMessage(msg, 8000)
+        print(f"[test_create_empty_part] SUCCESS -- {msg}")
+    except Exception as e:
+        print(f"[test_create_empty_part] FAILED -- {e}")
+        win.statusBar().showMessage(
+            f"Empty part smoke test failed: {e}", 8000)
+
+
+def test_pull_on_active_part():
+    """Utility menu smoke test, companion to test_create_empty_part.
+
+    Just click this menu item (with an active part and active
+    workplane already set up) -- pulls a hardcoded 40mm, mirrors
+    mill_pull_dialog.py's own "Add material" (Pull) logic exactly,
+    active workplane's profile extruded via BRepPrimAPI_MakePrism,
+    fused onto the active part -- EXCEPT for the fix this test exists
+    to verify: BRepAlgoAPI_Fuse(part, tool) needs two genuine,
+    non-degenerate solids, and the empty placeholder solid
+    test_create_empty_part creates is degenerate on purpose (zero
+    faces, zero volume). Doug's own diagnostic evidence (a
+    BRepCheck_Analyzer + ShapeType() check right where the saved file
+    gets rebuilt) showed the fused result silently coming out as a
+    TopAbs_COMPOUND instead of a TopAbs_SOLID -- topologically valid,
+    which is why it displayed and behaved correctly right up until
+    save+reload, but not the same shape type extrude() ever produces.
+    The fix: check whether the active part is genuinely empty (zero
+    faces) BEFORE ever reaching for the fuse, and if so, skip the
+    degenerate boolean entirely -- the tool's own shape IS the
+    correct result on its own.
+
+    Deliberately kept in this throwaway utility-test workflow rather
+    than touching mill_pull_dialog.py's own, real _on_done -- that
+    code is due for more substantial changes once the comprehensive
+    create/modify dialog gets built, so this verifies the underlying
+    fix cleanly first, without investing careful surgery into
+    production code that's about to be reworked anyway.
+    """
+    if not require_active_part("Test Pull"):
+        return
+    wp = win.activeWp
+    if wp is None:
+        win.statusBar().showMessage("No active workplane.", 6000)
+        return
+
+    # Sidestepped: win.lineEditStack needs some kind of "armed" tool
+    # state this simple menu item never sets up (Doug: typing a value
+    # first, in any order, never got it to populate). Not worth
+    # chasing for a throwaway test -- hardcoded instead.
+    dist = 40.0 * win.unitscale
+    faces, err = wp.make_faces()
+    if err is not None:
+        win.statusBar().showMessage(f"Profile problem: {err}", 6000)
+        return
+
+    part = win.activePart
+    uid = win.activePartUID
+    vec = wp.wVec * dist
+
+    try:
+        tool = None
+        for f in faces:
+            prism = BRepPrimAPI_MakePrism(f, vec).Shape()
+            tool = prism if tool is None else \
+                BRepAlgoAPI_Fuse(tool, prism).Shape()
+
+        # THE FIX: check emptiness before ever reaching for the fuse.
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_FACE
+        n_faces = 0
+        exp = TopExp_Explorer(part, TopAbs_FACE)
+        while exp.More():
+            n_faces += 1
+            exp.Next()
+        part_is_empty = (n_faces == 0)
+        print(f"[test_pull_on_active_part] active part face count="
+             f"{n_faces} -> part_is_empty={part_is_empty}")
+
+        if part_is_empty:
+            newPart = tool
+            print(f"[test_pull_on_active_part] part is empty -- using "
+                 f"the tool's own shape directly, skipping the "
+                 f"degenerate fuse entirely")
+        else:
+            newPart = BRepAlgoAPI_Fuse(part, tool).Shape()
+        print(f"[test_pull_on_active_part] result ShapeType="
+             f"{newPart.ShapeType()}")
+    except Exception as be:
+        win.statusBar().showMessage(f"Boolean failed: {be}", 6000)
+        return
+
+    win.erase_shape(uid)
+    with docmodel.undo_transaction(dm):
+        dm.replace_shape(uid, newPart)
+    win.draw_shape(uid)
+    win.setActivePart(uid)
+    win.statusBar().showMessage(
+        f"Test Pull complete (part_is_empty was {part_is_empty}, "
+        f"result ShapeType={newPart.ShapeType()}). Now try "
+        f"save+reload.", 8000)
 
 
 def printActiveAsyInfo():
@@ -994,6 +1189,10 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
     win.add_function_to_menu("Utility", "dump doc", dumpDoc)
     win.add_function_to_menu("Utility", "Topology of Act Prt", topoDumpAP)
+    win.add_function_to_menu(
+        "Utility", "Test: Create Empty Part", test_create_empty_part)
+    win.add_function_to_menu(
+        "Utility", "Test: Pull on Active Part", test_pull_on_active_part)
     win.add_function_to_menu(
         "Utility", "print(Active Wp Info)", printActiveWpInfo)
     win.add_function_to_menu(

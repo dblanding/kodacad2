@@ -5536,3 +5536,105 @@ Reverted DocModel.__init__ to its Session 86/88 state (SetUndoLimit called immed
 ### Lesson for future development
 
 **Not every bug needs to be fully eliminated -- sometimes the right outcome is a well-understood, narrow, documented limitation that the person who has to live with it explicitly accepts, rather than continuing to add risk chasing a deeper fix.** Doug's own judgment about the tradeoff here (undoable imports, including sequences of several, versus a rare two-click edge case on the very first one) is exactly the kind of call that belongs to the person actually using the tool, not something to keep pushing past once a reasonable, working state has been reached.
+
+# Session 90: empty-part creation, then Pull, survives save/reload -- two independent bugs found and fixed along the way
+
+Motivated by a planning conversation about a future, unified create/modify dialog (patterned partly after Creo Elements/Direct's own Pull dialog): rather than Extrude always creating a brand-new component in one step, could KodaCAD create a genuinely empty part first -- the way Creo's own 'p1', 'p2' defaults work -- then let Mill/Pull's existing "Add material" logic fill it in? A throwaway Utility-menu smoke test (test_create_empty_part) was built to answer the underlying feasibility question directly, without touching any production dialog code, since that code is expected to change substantially anyway once the real, unified dialog gets built.
+
+XDE has no native concept of "a label with no shape at all" -- every shape label needs a real TopoDS_Shape at creation. The first attempt used an empty TopoDS_Compound as the placeholder. This immediately surfaced a real surprise: Doug's own retest showed the new part highlighting blue instead of yellow on Set Active, and the status bar calling it "the active assembly" -- IsAssembly_s(), checked directly, confirmed True. An empty Compound is apparently assembly-shaped to XDE regardless of whether it has any actual children, likely tied to the 'makeAssembly' flag add_component's own AddComponent call passes unconditionally -- a genuinely different mechanism from the "structural, zero-children" rule documented elsewhere in this file for a label that USED TO have children and lost them. Switching the placeholder to an empty TopoDS_Solid instead resolved this cleanly (IsAssembly_s confirmed False), and is also the more semantically honest choice regardless, being the shape family the part will actually become once real geometry lands.
+
+## Bug 1: BRepAlgoAPI_Fuse against a degenerate, empty solid silently produced the wrong shape type
+
+With the placeholder fixed, Set Active, hide/show, and a real Pull operation (adding a cylinder's worth of geometry) all worked correctly in-session. But save, then reload, and the part vanished from the viewport -- present in the tree, entirely missing from the 3D view.
+
+A companion diagnostic (BRepCheck_Analyzer + ShapeType(), added at the exact point the save-time '/' unwrap logic reads the shape for export) found the actual cause: the Pull result's ShapeType was TopAbs_COMPOUND, not TopAbs_SOLID -- topologically VALID (IsValid()=True), which is exactly why it displayed and behaved correctly in every in-session check, but not the same shape type Extrude's own, unrelated code path ever produces.
+
+Root cause: Mill/Pull's own "Add material" logic (mill_pull_dialog.py, _on_done) always calls `BRepAlgoAPI_Fuse(part, tool)`. Boolean operations expect two genuine, non-degenerate solids. The empty placeholder solid is degenerate on purpose -- zero faces, zero volume -- and fusing against it apparently makes OCCT fall back to a structurally-safe-but-different result: a Compound wrapping the tool's own geometry, rather than a bare Solid.
+
+Fixed in the same throwaway-test spirit as the rest of this investigation (a new Utility-menu function, test_pull_on_active_part, rather than touching mill_pull_dialog.py's own, real code, which is due for more substantial rework once the comprehensive dialog exists): check the active part's face count BEFORE ever reaching for the fuse. If it's genuinely empty, skip the boolean entirely and use the tool's own shape directly as the result -- confirmed via the same diagnostic to correctly produce TopAbs_SOLID.
+
+## Bug 2: parse_doc()'s reload logic assumed the top-level free shape is always a '/'-style wrapper
+
+Fixing Bug 1 did NOT fix the save/reload symptom -- the part still failed to appear after reload, with an unchanged, identical-looking failure. This turned out to be a second, completely independent, pre-existing bug that happened to produce the exact same symptom, which is why it looked at first like Bug 1's fix hadn't worked.
+
+save_step_doc has its own, separate, legitimate optimization: when a session contains exactly one part directly under '/', with nothing else, the '/' wrapper is redundant and gets stripped before writing, promoting the single part to be the file's own root (confirmed directly via a Doug-provided XDE Label Hierarchy screenshot comparison: two labels before save, one bare label after reload, sitting at the entry '/' used to occupy). This is correct, working behavior on its own terms -- it keeps single-part STEP files clean.
+
+parse_doc()'s own reload logic was never written to expect this. It unconditionally treats the top-level free shape as the assembly root (`'is_assy': True`, set without checking), looks for its components, and calls parse_components() -- the ONLY function that ever populates part_dict -- only if any are found. A genuine leaf part has zero components by definition. When the top-level shape IS a leaf part (exactly what the '/'-unwrap produces for a single-part session), parse_components() never runs, part_dict stays completely empty, and redraw() -- which simply iterates part_dict -- has nothing to draw, even though the shape data itself is correct and intact (confirmed independently via a post-load dump: IsNull=False, correct face count, every time).
+
+### Why the fix needs all three conditions, and what breaks if any one is dropped
+
+The fix adds a new branch to parse_doc(), tried only when the established, normal path (parse_components on the root's components) finds nothing:
+
+```python
+if top_comps.Length():
+    self.parse_components(top_comps, shape_tool, color_tool)
+elif root_name != '/' and not shape_tool.IsAssembly_s(root_label):
+    # populate part_dict directly for root_label itself
+```
+
+Each of the three conditions is answering a genuinely different question, and dropping any one of them reopens a real failure mode -- not a redundant safety margin.
+
+**Condition 1 -- `top_comps.Length()` is zero (checked first, as the existing `if`).** This asks: did the normal, already-correct mechanism find anything to walk? If a real assembly with real children is sitting at the root (the ordinary, everyday case), this is where the story ends -- parse_components already handles it correctly, and the new branch below never runs at all.
+
+*What breaks without it:* the new branch would also try to run on a normal, populated assembly -- treating the assembly's own root label as if it were a single bare part, ignoring every real child underneath it. An entire, correct assembly tree would collapse into one wrong, empty-shaped part_dict entry.
+
+```
+Normal case (Condition 1 true -> new branch never runs):
+  /  (root, IsAssembly_s=True, real children)
+    can_1 => can
+    lid_1 => lid
+  parse_components walks BOTH children correctly. Fine as-is.
+
+If Condition 1 were skipped (new branch ran anyway):
+  /  (treated as if it were a single bare part)
+  -- can_1 and lid_1 never walked at all. Tree collapses to one
+     wrong entry; the real assembly structure is silently lost.
+```
+
+**Condition 2 -- `not shape_tool.IsAssembly_s(root_label)`.** This asks: even with zero children RIGHT NOW, is this label still structurally assembly-shaped? An assembly can genuinely have zero children in the moment (every part just removed from it, mid-session) without having stopped being conceptually an assembly.
+
+*What breaks without it:* a currently-empty assembly gets misclassified and populated into part_dict as if it were a real, drawable part -- with an empty, meaningless shape. redraw() would then try to draw nothing where a legitimate (if temporarily empty) assembly should have been recognized as one.
+
+```
+Empty-but-still-an-assembly case (Condition 2 catches this):
+  /  (root, IsAssembly_s=True, 0 children -- last part just deleted)
+  Condition 2 is False here (IsAssembly_s IS True) -> new branch
+  correctly does NOT run. Root stays correctly typed as an assembly.
+
+If Condition 2 were dropped:
+  /  (same state) -- now WOULD be populated into part_dict directly,
+  with an empty shape. redraw() draws nothing meaningful in a spot
+  that should still be recognized as (an empty) assembly.
+```
+
+**Condition 3 -- `root_name != '/'`.** This is the one this session's own investigation almost missed. A freshly-bootstrapped, genuinely-empty '/' root -- the exact placeholder add_component's own bootstrap creates, before anything has ever been added underneath it (a state reachable via Undo, given the deliberate transaction-split pattern from Sessions 86/88/89) -- ALSO shows zero components AND IsAssembly_s()=False, by the identical "structural, zero-children" rule Condition 2 is checking. Conditions 1 and 2 alone cannot tell a genuine, promoted, single real part apart from this synthetic, empty wrapper -- both look identical by every check available so far. The '/' root is always literally named '/', by convention confirmed in every tree screenshot throughout this project; a real, promoted part never would be.
+
+*What breaks without it:* a brand-new session's own bootstrap wrapper -- before the user has done anything at all -- gets misclassified as if it were a real, empty-shaped "part," polluting part_dict with a meaningless entry representing internal scaffolding, not anything the user created.
+
+```
+Fresh, empty '/' bootstrap (Condition 3 catches this):
+  /  (root, name IS '/', IsAssembly_s=False -- structurally, zero
+      children right now, same rule as Condition 2 describes)
+  Conditions 1 and 2 alone would NOT distinguish this from a real,
+  promoted bare part -- both look identical by those two checks.
+  Condition 3 (root_name != '/') correctly excludes it.
+
+If Condition 3 were dropped:
+  /  (same state) -- misclassified as a real part with an empty
+  shape. part_dict gains a meaningless entry for internal '/'
+  scaffolding the user never created or asked to see.
+
+The actual bug this session fixes (all three conditions true):
+  empty_part_test_solid  (root, name is NOT '/', IsAssembly_s=False,
+                           zero components, REAL geometry attached)
+  Correctly recognized as a genuine, promoted bare part.
+  part_dict populated directly; redraw() finds it and draws it.
+```
+
+Where the new branch does fire, it builds the same part_dict/label_dict shape parse_components() already builds for the normal case -- including `ref_entry` pointing back at root_label itself (there being no separate component/prototype split to point at instead), which matters for replace_shape to keep working correctly on a part reloaded this way, not only for it to display once.
+
+Confirmed by Doug's own full retest of the complete loop -- create empty part, Set Active, workplane, sketch, Pull, save, reload -- with part_dict correctly populated after reload and the part genuinely visible in the viewport, not just reported present in diagnostic output.
+
+### Lesson for future development
+
+**Two bugs that produce the identical symptom can hide behind each other -- fixing the first one confirmed and evidenced doesn't mean the investigation is over if the original symptom persists unchanged.** Bug 1 (the degenerate boolean producing the wrong shape type) was fixed and directly confirmed via diagnostic evidence -- ShapeType=TopAbs_SOLID, all the way through to the STEP writer's own statistics output. The save/reload symptom looked completely unchanged afterward, which could easily have read as "the fix didn't work." It had worked; a second, independent, already-diagnosed-and-deliberately-deferred bug (parse_doc()'s own reload assumption) was still live underneath it, producing the same "part doesn't appear after reload" symptom through a completely different mechanism. Only re-running the full diagnostic trail -- not just checking the final outcome -- made it possible to tell that the two bugs were separate at all, rather than one fix simply having failed.
