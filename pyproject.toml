@@ -4,6 +4,7 @@ version = "2.0.0"
 description = "Kodacad ported to OCP + PySide6, using uv"
 requires-python = ">=3.11"
 dependencies = [
-    "cadquery-ocp>=7.9.3.1.1",
+    "ocp",
+    "build123d",
     "pyside6",
 ]
