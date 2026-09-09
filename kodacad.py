@@ -585,19 +585,40 @@ def fillet(event=None):
         edges = list(win.edgeStack)
         win.edgeStack = []
         uid = win.activePartUID
-        # workPart: use the shape the picked edges ACTUALLY belong
-        # to, not necessarily win.activePart itself (Doug: testing
-        # with a STEP-imported bottle, which is exactly the case
-        # Session 60/61's NurbsConvert display workaround targets --
-        # a converted part's picked edges live in the DISPLAYED copy,
-        # not the original win.activePart, and BRepFilletAPI_MakeFillet
-        # needs edges that genuinely belong to the shape it was built
-        # from). _display_prep_cache[uid] holds (src_shape,
-        # displayed_shape) -- prefer the displayed one since that's
-        # what was actually picked from; fall back to win.activePart
-        # if no cache entry exists (e.g. never NurbsConverted).
-        cached = win._display_prep_cache.get(uid)
-        workPart = cached[1] if cached is not None else win.activePart
+        # Session 91 (Doug's own undo-twice discovery): fillet()'s
+        # result becomes the document's own stored shape, which
+        # becomes the input to every operation after it -- if this
+        # keeps building from cached[1] (the surrogate), a filleted
+        # part is permanently surrogate-derived from this point
+        # forward, regardless of any fix downstream (confirmed
+        # directly: undoing back to before the fillet let shell()
+        # succeed on the exact same part that failed after fillet+
+        # shell). Same fix as shell() -- map picked edges back to
+        # their analytic counterparts via the face-prep map's own
+        # edge_pairs, operate on the analytic shape instead.
+        face_prep = win._face_prep_map.get(uid)
+        if face_prep is not None:
+            analytic_shape, _face_pairs, edge_pairs = face_prep
+            workPart = analytic_shape
+            mapped_edges = []
+            for picked_edge in edges:
+                matched = None
+                for analytic_edge, surrogate_edge in edge_pairs:
+                    if picked_edge.IsSame(surrogate_edge):
+                        matched = analytic_edge
+                        break
+                if matched is not None:
+                    mapped_edges.append(matched)
+                else:
+                    print(f"[fillet] picked edge has no analytic "
+                         f"counterpart in the face-prep map -- "
+                         f"skipping it rather than risk a mismatch")
+            edges = mapped_edges
+        else:
+            # No face-prep map -- this part never needed the Session
+            # 60 workaround. Unchanged from before Session 91.
+            cached = win._display_prep_cache.get(uid)
+            workPart = cached[1] if cached is not None else win.activePart
         mkFillet = BRepFilletAPI_MakeFillet(workPart)
         for edge in edges:
             mkFillet.Add(fillet_r, edge)
@@ -688,29 +709,83 @@ def shell(event=None):
 
     if win.lineEditStack and win.faceStack:
         text = win.lineEditStack.pop()
+        # Session 91 (Doug's own session-60 connection): shell() was
+        # operating on the NurbsConvert surrogate (cached[1]) -- the
+        # SAME multi-patch geometry that made picking cylindrical
+        # faces reliable in the first place, but MakeThickSolidByJoin
+        # chokes offsetting across the seams between converted
+        # patches on any face that's still part of the result (not
+        # necessarily the one being removed). Fixed by mapping each
+        # picked (surrogate) face back to the original, analytic face
+        # it came from, via the map draw_shape now builds, and
+        # operating on the analytic shape instead of the surrogate.
+        face_prep = win._face_prep_map.get(win.activePartUID)
         faces = TopTools_ListOfShape()
-        for face in win.faceStack:
-            faces.Append(face)
+        if face_prep is not None:
+            analytic_shape, face_pairs, _edge_pairs = face_prep
+            workPart = analytic_shape
+            # DIAGNOSTIC (Doug: fillet worked, shell reported success
+            # but produced no opening -- the picked face matched
+            # nothing in face_pairs at all). Checking two things
+            # directly: is face_pairs genuinely empty, or does it have
+            # entries that just don't match? And is analytic_shape
+            # ITSELF still genuinely analytic, or could fillet()'s own
+            # use of cached[1] (the surrogate, not the analytic shape)
+            # as its input mean the post-fillet shape handed back into
+            # the document is already surrogate-derived -- testing
+            # the hypothesis directly rather than guessing further.
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            print(f"[shell] face_pairs has {len(face_pairs)} entries")
+            for i, picked_face in enumerate(win.faceStack):
+                pf_surf = BRepAdaptor_Surface(picked_face)
+                print(f"[shell] picked face {i}: surface type="
+                     f"{pf_surf.GetType()}")
+            for i, (analytic_face, surrogate_face) in enumerate(face_pairs):
+                af_surf = BRepAdaptor_Surface(analytic_face)
+                print(f"[shell] face_pairs[{i}]: analytic surface type="
+                     f"{af_surf.GetType()}")
+            for picked_face in win.faceStack:
+                matched = None
+                for analytic_face, surrogate_face in face_pairs:
+                    if picked_face.IsSame(surrogate_face):
+                        matched = analytic_face
+                        break
+                if matched is not None:
+                    faces.Append(matched)
+                else:
+                    # Genuinely unexpected (every analytic face should
+                    # have at least one surrogate counterpart) -- loud
+                    # rather than silently appending a face that
+                    # doesn't belong to workPart's own topology, which
+                    # would just recreate the original Session 79 bug.
+                    print(f"[shell] picked face has no analytic "
+                         f"counterpart in the face-prep map -- "
+                         f"skipping it rather than risk a mismatch")
+        else:
+            # No face-prep map -- either this part never needed the
+            # Session 60 workaround, OR (Doug's STEP-import report)
+            # the map exists under a DIFFERENT uid than the one being
+            # looked up right now -- uids aren't guaranteed stable
+            # across a re-parse, and STEP import triggers several.
+            # This distinguishes the two rather than guessing further.
+            print(f"[shell] no face-prep map for uid="
+                 f"{win.activePartUID!r}. Map currently has "
+                 f"{len(win._face_prep_map)} entries, keys="
+                 f"{list(win._face_prep_map.keys())}")
+            cached = win._display_prep_cache.get(win.activePartUID)
+            workPart = cached[1] if cached is not None else win.activePart
+            for face in win.faceStack:
+                faces.Append(face)
         win.faceStack = []
-        # Session 79, Doug: the operation completed with no error at
-        # all but visibly did nothing -- consistent with the SAME
-        # mismatch fillet() needed fixing for earlier this project:
-        # the picked face comes from whatever's actually DISPLAYED,
-        # which can be a display-only NurbsConverted copy (Session
-        # 60/61's cylindrical-pick workaround), not literally
-        # win.activePart. If the picked face doesn't belong to
-        # workPart's own topology, MakeThickSolidByJoin has nothing
-        # valid to remove material from -- silently, no exception,
-        # matching exactly what Doug saw. shell() never got fillet's
-        # own fix for this same gap. Same resolution now applied.
-        cached = win._display_prep_cache.get(win.activePartUID)
-        workPart = cached[1] if cached is not None else win.activePart
         uid = win.activePartUID
         shellT = float(text) * win.unitscale
         mkShell = BRepOffsetAPI_MakeThickSolid()
         mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
         try:
             newPart = mkShell.Shape()
+            print(f"[shell] SUCCESS -- result ShapeType="
+                 f"{newPart.ShapeType()} (analytic mapping "
+                 f"{'used' if face_prep is not None else 'not needed'})")
         except Exception as e:
             # Session 79: same fix as fillet's identical guard above
             # -- RuntimeError did not catch the real

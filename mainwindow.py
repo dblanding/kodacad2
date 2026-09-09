@@ -519,6 +519,18 @@ class MainWindow(QMainWindow):
         self.ais_shape_dict = {}  # {uid: <AIS_Shape> object}
         self._display_prep_cache = {}  # {uid: (src_shape,
         # prepared_shape)} -- Session 61 draw-prep cache
+        self._face_prep_map = {}  # {uid: (analytic_shape, [(analytic_face,
+        # surrogate_face), ...])} -- Session 91: shell()/fillet() were
+        # both operating on the NurbsConvert surrogate (multi-patch)
+        # geometry, not the original analytic shape -- MakeThickSolidByJoin
+        # choking on offsetting across the converted patches' own seams
+        # is what "Unable to make Shell shape" traced back to (Doug's own
+        # session-60-connection insight). This maps each surrogate face
+        # produced by the conversion back to the original, analytic face
+        # it came from, via BRepBuilderAPI_NurbsConvert's own Modified()
+        # -- built only when the conversion actually runs (see draw_shape),
+        # empty/absent otherwise, so parts that never needed the Session
+        # 60 workaround are completely unaffected.
         self._syncing_highlight = False  # re-entrancy guard for
         # bidirectional tree<->viewport highlight sync (Session 60):
         # each side's highlight setter fires the other side's
@@ -778,6 +790,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Set Active", self.setClickedActive)
         menu.addAction("Rename", self.editName)
         menu.addAction("Create New Assembly", self.createNewAssembly)
+        menu.addAction("Create Empty Part", self.createEmptyPart)
         menu.addAction("Create Shared Instance", self.createSharedInstance)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
@@ -1162,6 +1175,59 @@ class MainWindow(QMainWindow):
                 self.ais_shape_dict.clear()
                 self.build_tree()
                 self.redraw()
+        self.treeView.clearSelection()
+        self.itemClicked = None
+
+    def createEmptyPart(self):
+        """RMB: create a new, empty part directly under the top-level
+        '/' (the clicked item must be '/' -- either the tree's own
+        synthetic scaffolding in a fresh session, uid '0', or a real,
+        already-populated '/' label). Session 90's own planning: Step
+        1 of the empty-part-creation feature, following Session 90's
+        smoke test that confirmed the underlying idea works (an empty
+        TopoDS_Solid placeholder, later filled in via Mill/Pull's
+        existing "Add material" logic, survives Set Active, hide/
+        show, and save/reload).
+
+        Deliberately only targets '/' directly, matching Extrude's
+        own, already-established workflow (README: "The new part
+        appears under `/` in the tree... Drag the new part onto the
+        target assembly") -- new parts are created at the top level
+        first, then dragged into whichever assembly they belong in,
+        if any. Unlike createNewAssembly, no parent_uid=None special-
+        casing is needed here: add_component() itself always targets
+        the root directly and already bootstraps it internally if it
+        doesn't exist yet (the same mechanism extrude() has always
+        relied on), so there's no equivalent gap to work around.
+        """
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        if uid != "0" and dm.label_dict.get(uid, {}).get('name') != '/':
+            print(f"'{item.text(0)}' cannot hold a new part -- "
+                 f"RMB click '/' instead.")
+            self.itemClicked = None
+            return
+        name, OK = QInputDialog.getText(
+            self, "Create Empty Part",
+            "Enter a name for the new part:", text="part")
+        if OK and name:
+            from OCP.TopoDS import TopoDS_Solid
+            from OCP.BRep import BRep_Builder
+            from kodacad import DEFAULT_COLOR
+            empty_shape = TopoDS_Solid()
+            BRep_Builder().MakeSolid(empty_shape)
+            with undo_transaction(dm):
+                dm.add_component(empty_shape, name, DEFAULT_COLOR)
+            # Same full-refresh rationale as createNewAssembly just
+            # above (Session 60 fix, re-confirmed there): a structure
+            # change leaves stale AIS objects that display but aren't
+            # re-activated for selection.
+            self.ais_shape_dict.clear()
+            self.build_tree()
+            self.redraw()
         self.treeView.clearSelection()
         self.itemClicked = None
 
@@ -1930,7 +1996,15 @@ class MainWindow(QMainWindow):
                     except Exception:
                         _oc = Quantity_Color(Quantity_NOC_DARKGREEN)
                     context.SetColor(ais_outline, _oc, False)
-                    context.SetWidth(ais_outline, 6.0, False)
+                    # Session ~90, Doug: widened from 2.0 -- his own
+                    # CoCreate reference screenshots (wp1, wp2) both
+                    # show a noticeably more substantial frame than a
+                    # thin 2px stroke. This is the one number to
+                    # adjust if it still isn't wide enough, or is now
+                    # too wide -- purely cosmetic, no other effect
+                    # (the outline was already marked never-pick, so
+                    # width has zero bearing on selection either way).
+                    context.SetWidth(ais_outline, 4.0, False)
                     self.canvas._display.add_never_pick(ais_outline)
             except Exception as oe:
                 if not getattr(self, "_wpoutline_warned", False):
@@ -2206,12 +2280,98 @@ class MainWindow(QMainWindow):
                                  f"mutations may leak into the saved "
                                  f"document")
                             self._copy_warned = True
-                    if _needs_analytic_workaround(shape):
+                    _needs_wa = _needs_analytic_workaround(shape)
+                    print(f"[draw_shape] uid={uid!r} "
+                         f"_needs_analytic_workaround={_needs_wa}")
+                    if _needs_wa:
+                        analytic_shape = shape  # the copy, pre-conversion --
+                        # this is what shell()/fillet() should operate on
                         try:
                             from OCP.BRepBuilderAPI import \
                                 BRepBuilderAPI_NurbsConvert
-                            shape = BRepBuilderAPI_NurbsConvert(
-                                shape, True).Shape()
+                            nurbs_op = BRepBuilderAPI_NurbsConvert(
+                                shape, True)
+                            shape = nurbs_op.Shape()
+                            # Session 91: build the surrogate-face ->
+                            # analytic-face map right here, while nurbs_op
+                            # (the operation object itself, not just its
+                            # .Shape() result) is still alive -- Modified()
+                            # is only available on the operation object.
+                            # One analytic face can produce SEVERAL
+                            # surrogate faces (a full 360-degree cylindrical
+                            # face becomes multiple NURBS patches, which is
+                            # exactly the "quadrant lines" Doug noticed
+                            # visually) -- a list of pairs, not a dict,
+                            # since matching a picked face back against
+                            # this needs IsSame() comparison, not Python
+                            # hashing (OCP-wrapped shapes aren't guaranteed
+                            # to hash/compare the way distinct Python
+                            # objects normally would).
+                            try:
+                                from OCP.TopExp import TopExp_Explorer
+                                from OCP.TopAbs import (
+                                    TopAbs_FACE, TopAbs_EDGE)
+                                from OCP.TopoDS import TopoDS
+                                face_pairs = []
+                                fexp = TopExp_Explorer(
+                                    analytic_shape, TopAbs_FACE)
+                                while fexp.More():
+                                    analytic_face = TopoDS.Face_s(
+                                        fexp.Current())
+                                    modified = nurbs_op.Modified(
+                                        analytic_face)
+                                    # TopTools_ListIteratorOfListOfShape
+                                    # doesn't exist in this OCP binding
+                                    # (confirmed directly from Doug's own
+                                    # ImportError) -- direct Python
+                                    # iteration instead, matching how
+                                    # CadQuery's own OCP-based code
+                                    # treats sibling container types
+                                    # (TopTools_IndexedMapOfShape) as
+                                    # natively iterable, no explicit
+                                    # iterator wrapper needed.
+                                    for surrogate_shape in modified:
+                                        surrogate_face = TopoDS.Face_s(
+                                            surrogate_shape)
+                                        face_pairs.append(
+                                            (analytic_face, surrogate_face))
+                                    fexp.Next()
+                                # Session 91 continued (Doug's own
+                                # undo-twice-then-succeeds discovery):
+                                # fillet() builds its result from
+                                # cached[1] (the surrogate), not the
+                                # analytic shape -- meaning a filleted
+                                # part's shape is ALREADY surrogate-
+                                # derived from the moment the fillet
+                                # runs, permanently, regardless of any
+                                # fix downstream. fillet() needs this
+                                # SAME mapping, but for edges -- same
+                                # Modified() mechanism, same reasoning,
+                                # different sub-shape type.
+                                edge_pairs = []
+                                eexp = TopExp_Explorer(
+                                    analytic_shape, TopAbs_EDGE)
+                                while eexp.More():
+                                    analytic_edge = TopoDS.Edge_s(
+                                        eexp.Current())
+                                    modified = nurbs_op.Modified(
+                                        analytic_edge)
+                                    for surrogate_shape in modified:
+                                        surrogate_edge = TopoDS.Edge_s(
+                                            surrogate_shape)
+                                        edge_pairs.append(
+                                            (analytic_edge, surrogate_edge))
+                                    eexp.Next()
+                                self._face_prep_map[uid] = (
+                                    analytic_shape, face_pairs, edge_pairs)
+                            except Exception as fme:
+                                if not getattr(self, "_facemap_warned",
+                                              False):
+                                    print(f"[draw_shape] face-map build "
+                                         f"failed ({fme}) -- shell/fillet "
+                                         f"will fall back to the surrogate "
+                                         f"shape for this part")
+                                    self._facemap_warned = True
                         except Exception as ce:
                             if not getattr(self, "_nurbs_warned", False):
                                 print(f"[draw_shape] nurbs convert "
