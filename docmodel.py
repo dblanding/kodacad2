@@ -1488,95 +1488,31 @@ class DocModel:
                  f"the file is still correct, just larger")
         step_writer = STEPCAFControl_Writer(WS, False)
 
-        # Export-side unwrap (Session 56, Basicad item 30 ported):
-        # if the root is a '/'-wrapper chain -- each level named '/',
-        # with exactly ONE child sitting at IDENTITY location --
-        # descend to the first REAL assembly and export THAT as the
-        # file root, by rebuilding it into a temporary document via
-        # rebuild_imported_structure (the validated Session 52
-        # machinery: names, locations, sharing, and colors all carry).
-        # The written file then contains e.g. 'as1' at top, no '/'
-        # wrapper at all -- and because the descent walks the WHOLE
-        # chain, one re-save fully cleans a legacy multi-wrapped file
-        # ('/'->'/'->'/'->as1 exports as just as1). Any deviation from
-        # the safe pattern (multiple children, non-identity location,
-        # nothing but wrappers) falls through to writing the document
-        # as-is, unchanged behavior.
-        from OCP.TDF import TDF_Label
-        export_root_ref = None
-        export_root_name = None
-        if free_labels.Length() == 1:
-            cur = free_labels.Value(1)
-            descended = False
-            last_occ_name = None
-            while (cur is not None and get_label_name(cur) == '/'
-                   and shape_tool.IsAssembly_s(cur)):
-                children = TDF_LabelSequence()
-                shape_tool.GetComponents_s(cur, children, False)
-                if children.Length() != 1:
-                    cur = None
-                    break
-                child = children.Value(1)
-                child_loc = shape_tool.GetShape_s(child).Location()
-                # DIAGNOSTIC (Doug: can-via-extrude survives save/
-                # reload alone; empty-part-then-Pull does not, even
-                # though both end up as one component under '/'
-                # referring to one prototype with real geometry).
-                # This is the exact condition that decides whether
-                # the '/' unwrap proceeds -- printing it directly
-                # answers whether an empty-placeholder-derived part's
-                # component location differs from a normally-created
-                # one's, rather than guessing further.
-                print(f"[save_step_doc] unwrap check: child="
-                     f"{get_label_name(child)!r} loc.IsIdentity()="
-                     f"{child_loc.IsIdentity()}")
-                if not child_loc.IsIdentity():
-                    cur = None
-                    break
-                ref = TDF_Label()
-                if not shape_tool.GetReferredShape_s(child, ref):
-                    cur = None
-                    break
-                last_occ_name = get_label_name(child)
-                cur = ref
-                descended = True
-            if (descended and cur is not None
-                    and get_label_name(cur) != '/'):
-                export_root_ref = cur
-                ref_name = get_label_name(cur)
-                # Session 57 (fixes a Session 56 regression): the
-                # unwrap discarded the final occurrence's name -- so a
-                # user's RENAME of the top assembly (which renames the
-                # occurrence, e.g. 'as1_1' -> 'my-lathe') was silently
-                # lost on every save. If the occurrence name is a user
-                # rename rather than the auto '<ref>_<digits>' suffix
-                # pattern, the exported root carries it.
-                import re
-                if (last_occ_name
-                        and last_occ_name != ref_name
-                        and not re.fullmatch(
-                            re.escape(ref_name) + r"_\d+", last_occ_name)):
-                    export_root_name = last_occ_name
-
-        if export_root_ref is not None:
-            real_name = export_root_name or get_label_name(export_root_ref)
-            print(f"[save_step_doc] unwrapping '/' chain -- exporting "
-                  f"'{real_name}' as the file root (in-memory document "
-                  f"unchanged)")
-            temp_doc, temp_app = create_doc()
-            temp_shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(temp_doc.Main())
-            temp_color_tool = XCAFDoc_DocumentTool.ColorTool_s(temp_doc.Main())
-            memo = {}
-            rebuilt_root = rebuild_imported_structure(
-                export_root_ref, temp_shape_tool, temp_color_tool, memo)
-            if export_root_name:
-                # Carry the user's top-assembly rename (Session 57 --
-                # fixes the Session 56 regression that discarded it)
-                set_label_name(rebuilt_root, export_root_name)
-            temp_shape_tool.UpdateAssemblies()
-            step_writer.Transfer(temp_doc, STEPControl_AsIs)
-        else:
-            step_writer.Transfer(self.doc, STEPControl_AsIs)
+        # Export-side unwrap REMOVED (was Session 56/57, Basicad item
+        # 30 port). Doug's own stated invariant: "the '/' label is
+        # always 0:1:1:1, period, full stop" -- once a document
+        # exists at all, every other function in this codebase should
+        # be able to rely on that unconditionally. This unwrap
+        # violated it on two fronts at once: the single-part case
+        # (promoting a lone part to be the file's own root, no '/' at
+        # all) and the legacy-multi-wrapper case (descending into a
+        # real, named sub-assembly like 'as1' and exporting THAT as
+        # the root instead). Both are the confirmed, demonstrated
+        # source of real bugs discovered well after this was written
+        # -- Session 90's parse_doc() fix, and add_component() /
+        # create_new_assembly()'s shared "GetFreeShapes().Value(1) is
+        # always '/'" assumption breaking on a reloaded single-part
+        # session. Rather than keep patching each downstream consumer
+        # individually as more are discovered (a real, demonstrated
+        # risk -- an earlier attempt at exactly that broke basic
+        # Extrude), removing the cause at its one, actual source: the
+        # document is now always written exactly as it exists in
+        # memory, '/' included, unconditionally. The one narrow,
+        # separate exception -- a session that has never had anything
+        # created in it at all has no real '/' label yet, since one
+        # is only ever created lazily on first use -- is unaffected
+        # by this and unrelated to the unwrap being removed here.
+        step_writer.Transfer(self.doc, STEPControl_AsIs)
 
         # Customize the STEP header (Session 58, revised cont'd). The
         # first attempt produced OCCT's default header, silently --
@@ -1835,7 +1771,34 @@ class DocModel:
         set_label_name(component_label, f"{name}_1")
         shape_tool.UpdateAssemblies()
         self.parse_doc()
-        uid = self.get_uid_from_entry(entry)
+        # FIX (bug found Session 90, fixed Session 92): this used to
+        # call self.get_uid_from_entry(entry) again here -- but
+        # parse_doc() just above ALREADY called it once for this same
+        # entry, during its own traversal, correctly, storing that
+        # true uid in self.label_dict. get_uid_from_entry()'s own
+        # counter resets on every parse_doc() call, so calling it a
+        # second time for the same entry always returned a DIFFERENT,
+        # wrong uid -- one that was never actually stored anywhere.
+        # Confirmed directly (Doug's own retest): the returned uid and
+        # the one actually in label_dict differed by exactly one
+        # serial, every time. Fixed by looking up what parse_doc()
+        # already, correctly assigned, instead of computing a second,
+        # wrong answer. Verified safe for every current caller:
+        # neither extrude() nor createEmptyPart() ever uses this
+        # return value at all -- this only changes behavior for a
+        # future caller that actually needs a reliable uid back.
+        uid = None
+        for k, v in self.label_dict.items():
+            if v.get('entry') == entry:
+                uid = k
+                break
+        if uid is None:
+            # Should not happen -- parse_doc() just walked this exact
+            # label. Loud rather than silent if it ever does.
+            print(f"[add_component] WARNING: could not find entry "
+                 f"{entry!r} in label_dict after parse_doc() -- "
+                 f"falling back to the old (possibly wrong) method")
+            uid = self.get_uid_from_entry(entry)
         return uid
 
     def add_component_from_label(self, source_label, name, loc=None):
