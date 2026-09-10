@@ -248,11 +248,6 @@ def display_new_active_wp(prev_uid, new_uid):
         win.draw_wp(new_uid)
 
 
-#############################################
-#
-# 3D Geometry creation functions
-#
-#############################################
 
 
 def get_tag_of_active_asy():
@@ -269,157 +264,6 @@ def get_inv_loc_of_active_asy():
 
     # New parts always created at root -- no inverse transform needed.
     return TopLoc_Location()
-
-
-def extrude():
-    """Extrude profile on active WP to create a new part.
-    Add new part to active assembly, if any, else to Top"""
-
-    tag = get_tag_of_active_asy()
-    loc = get_inv_loc_of_active_asy()
-    wp = win.activeWp
-    if len(win.lineEditStack) == 2:
-        name = win.lineEditStack.pop()
-        length = float(win.lineEditStack.pop()) * win.unitscale
-        # MULTI-PROFILE (Session 63, Doug: 'use multiple wires to
-        # create a new part'): same wp.make_faces() the Mill/Pull
-        # dialog uses -- outer loops with contained loops as holes;
-        # disjoint outers prism separately and fuse into one part.
-        faces, err = wp.make_faces()
-        if err is not None:
-            win.statusBar().showMessage(f"Profile problem: {err}",
-                                        6000)
-            print(f"[extrude] profile problem: {err}")
-            return
-        aPrismVec = wp.wVec * length
-        new_part = None
-        for f in faces:
-            prism = BRepPrimAPI_MakePrism(f, aPrismVec).Shape()
-            new_part = prism if new_part is None else \
-                BRepAlgoAPI_Fuse(new_part, prism).Shape()
-        loc_new_part = BRepBuilderAPI_Transform(
-            new_part, loc.Transformation()).Shape()
-        with docmodel.undo_transaction(dm):
-            uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
-        win.build_tree()
-        win.redraw()
-        win.syncUncheckedToHideList()
-        win.statusBar().showMessage("New part created.")
-        win.clearCallback()
-    else:
-        win.registerCallback(extrudeC)
-        win.lineEdit.setFocus()
-        statusText = "Enter extrusion length, then enter part name."
-        win.statusBar().showMessage(statusText)
-
-
-def extrudeC(shapeList, *args):
-    """Callback (collector) for extrude"""
-
-    win.lineEdit.setFocus()
-    if len(win.lineEditStack) == 1:
-        win.statusBar().showMessage("Length received. Enter part name.")
-    elif len(win.lineEditStack) == 2:
-        extrude()
-
-
-def revolve():
-    """Revolve profile on active WP to create a new part.
-    Add new part to active assembly, if any, else to Top"""
-
-    wp = win.activeWp
-    if win.lineEditStack and len(win.ptStack) == 2:
-        p2 = win.ptStack.pop()
-        p1 = win.ptStack.pop()
-        name = win.lineEditStack.pop()
-        win.clearAllStacks()
-        wireOK = wp.makeWire()
-        if not wireOK:
-            print("Unable to make wire.")
-            return
-        face = BRepBuilderAPI_MakeFace(wp.wire).Shape()
-        revolve_axis = gp_Ax1(p1, gp_Dir(gp_Vec(p1, p2)))
-        new_part = BRepPrimAPI_MakeRevol(face, revolve_axis).Shape()
-        loc_new_part = BRepBuilderAPI_Transform(
-            new_part, loc.Transformation()).Shape()
-        with docmodel.undo_transaction(dm):
-            uid = dm.add_component(loc_new_part, name, DEFAULT_COLOR)
-        win.build_tree()
-        win.redraw()
-        win.syncUncheckedToHideList()
-        win.statusBar().showMessage("New part created.")
-        win.clearCallback()
-    else:
-        win.registerCallback(revolveC)
-        display.SetSelectionModeVertex()
-        win.lineEdit.setFocus()
-        statusText = "Pick two points on revolve axis."
-        win.statusBar().showMessage(statusText)
-
-
-def revolveC(shapeList, *args):
-    """Callback (collector) for revolve.
-
-    Session 63 sweep: same retired-paradigm consumer as the
-    calculator's distPtPt was -- it expected wp intersection-point
-    VERTEX picks for the axis, which no longer exist. ENGINE INPUT
-    FIRST (a catch on the active wp becomes a world point -- the
-    natural way to define an axis in the sketch), 3D vertex pick as
-    fallback, polite decline otherwise. Fixed BEFORE it bit, per the
-    every-consumer-sweep lesson."""
-    pt = None
-    try:
-        click_xy = args[1] if len(args) > 1 else None
-        wp = win.activeWp
-        if (click_xy is not None and click_xy[0] is not None
-                and wp is not None):
-            from snap_engine import (screen_to_uv, find_snap,
-                                     uv_to_world, SNAP_PIXELS,
-                                     current_snap_mode)
-            uv = screen_to_uv(win.canvas.view, click_xy[0],
-                              click_xy[1], wp.gpPlane)
-            if uv is not None:
-                try:
-                    tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
-                except Exception:
-                    tol = 1.0
-                snap = find_snap(wp, uv, tol, current_snap_mode())
-                if snap is not None:
-                    pt = uv_to_world(wp.gpPlane, snap[1][0], snap[1][1])
-    except Exception as se:
-        print(f"[revolve] engine path failed: {se}")
-    if pt is None:
-        for shape in shapeList:
-            if shape is None:
-                continue
-            try:
-                vrtx = TopoDS.Vertex_s(shape)
-                pt = BRep_Tool.Pnt_s(vrtx)
-                break
-            except Exception:
-                continue
-    if pt is None:
-        win.statusBar().showMessage(
-            "No catch or vertex there -- click a workplane catch or "
-            "a part vertex for the axis.", 3000)
-        return
-    win.ptStack.append(pt)
-    if len(win.ptStack) == 1:
-        statusText = "Select 2nd point on revolve axis."
-        win.statusBar().showMessage(statusText)
-    elif len(win.ptStack) == 2 and not win.lineEditStack:
-        statusText = "Enter part name."
-        win.statusBar().showMessage(statusText)
-    win.lineEdit.setFocus()
-    if win.lineEditStack and len(win.ptStack) == 2:
-        revolve()
-
-
-#############################################
-#
-# 3D Geometry positioning functons
-#
-#############################################
 
 
 #############################################
@@ -448,88 +292,6 @@ def require_active_part(op_name):
         f"You must set an Active Part before using {op_name}.\n\n"
         f"Select a part in the tree, then RMB \u2192 Set Active.")
     return False
-
-
-def mill():
-    """Mill profile on active WP into active part."""
-
-    wp = win.activeWp
-    if win.lineEditStack:
-        depth = float(win.lineEditStack.pop()) * win.unitscale
-        wireOK = wp.makeWire()
-        if not wireOK:
-            print("Unable to make wire.")
-            return
-        wire = wp.wire
-        workPart = win.activePart
-        uid = win.activePartUID
-        punchProfile = BRepBuilderAPI_MakeFace(wire)
-        aPrismVec = wp.wVec * -depth
-        tool = BRepPrimAPI_MakePrism(punchProfile.Shape(), aPrismVec).Shape()
-        newPart = BRepAlgoAPI_Cut(workPart, tool).Shape()
-        win.erase_shape(uid)
-        with docmodel.undo_transaction(dm):
-            dm.replace_shape(uid, newPart)
-        win.draw_shape(uid)
-        win.setActivePart(uid)
-        win.statusBar().showMessage("Mill operation complete")
-        win.clearCallback()
-    elif not require_active_part("Mill"):
-        return
-    else:
-        win.registerCallback(millC)
-        win.lineEdit.setFocus()
-        statusText = "Enter milling depth (pos in -w direction)"
-        win.statusBar().showMessage(statusText)
-
-
-def millC(shapeList, *args):
-    """Callback (collector) for mill"""
-
-    win.lineEdit.setFocus()
-    if win.lineEditStack:
-        mill()
-
-
-def pull():
-    """Pull profile on active WP onto active part."""
-
-    wp = win.activeWp
-    if win.lineEditStack:
-        length = float(win.lineEditStack.pop()) * win.unitscale
-        wireOK = wp.makeWire()
-        if not wireOK:
-            print("Unable to make wire.")
-            return
-        wire = wp.wire
-        workPart = win.activePart
-        uid = win.activePartUID
-        pullProfile = BRepBuilderAPI_MakeFace(wire)
-        aPrismVec = wp.wVec * length
-        tool = BRepPrimAPI_MakePrism(pullProfile.Shape(), aPrismVec).Shape()
-        newPart = BRepAlgoAPI_Fuse(workPart, tool).Shape()
-        win.erase_shape(uid)
-        with docmodel.undo_transaction(dm):
-            dm.replace_shape(uid, newPart)
-        win.draw_shape(uid)
-        win.setActivePart(uid)
-        win.statusBar().showMessage("Pull operation complete")
-        win.clearCallback()
-    elif not require_active_part("Pull"):
-        return
-    else:
-        win.registerCallback(pullC)
-        win.lineEdit.setFocus()
-        statusText = "Enter pull distance (pos in +w direction)"
-        win.statusBar().showMessage(statusText)
-
-
-def pullC(shapeList, *args):
-    """Callback (collector) for pull"""
-
-    win.lineEdit.setFocus()
-    if win.lineEditStack:
-        pull()
 
 
 def _redraw_after_shape_replace(ref_entry, old_uids):
@@ -1059,29 +821,24 @@ if __name__ == "__main__":
     win.add_function_to_menu("Workplane", "By 3 points", wpBy3Pts)
     win.add_function_to_menu(
         "Workplane", "Point && Direction", wpByPtDir)
-    win.add_menu("Create 3D")
-    win.add_function_to_menu("Create 3D", "Extrude", extrude)
-    win.add_function_to_menu("Create 3D", "Revolve", revolve)
-    win.add_menu("Modify Active Part")
-    # Session 63: Mill & Pull COMBINED into one lean dialog (the
-    # banked Creo Pull spec: Operation / Direction / Distance) with
-    # multi-profile support. Legacy mill()/pull() remain in code.
-    from mill_pull_dialog import show_mill_pull_dialog
-    win.add_function_to_menu(
-        "Modify Active Part", "Mill / Pull...",
-        lambda: show_mill_pull_dialog(win))
-    win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
-    win.add_function_to_menu("Modify Active Part", "Shell", shell)
-    # Step 2 of the integrated create/modify dialog plan (Doug's
-    # Pull_Dialog_Specification.pdf): added ALONGSIDE the existing
-    # Create 3D / Modify Active Part menus, not replacing them --
-    # Doug's own explicit call, "crystal ball" end state deferred
-    # until Pull is genuinely feature-complete. Linear mode fully
-    # functional; Angular is a deliberate stub (Step 3 makes it real).
-    win.add_menu("Create/Modify 3D")
+    # Session 96: the "crystal ball" end state from Doug's own
+    # Pull_Dialog_Specification.pdf, now realized -- Create 3D and
+    # Modify Active Part are gone, folded into one Create/Modify menu
+    # (Doug: dropped the "3D" to match the rest of the bar's own
+    # one-word rhythm -- File, Edit, Workplane, Position, Utility).
+    # Deferred deliberately back in Session 93 until Pull was
+    # genuinely feature-complete (Linear, then Angular, both tested
+    # against real geometry) -- that's now true, so the swap and the
+    # accompanying dead-code removal (extrude/revolve/mill/pull and
+    # mill_pull_dialog.py, all superseded) happen together, this
+    # session, matching Doug's own "rip it out by the roots" call
+    # rather than leave any of it as orphaned, unreferenced code.
+    win.add_menu("Create/Modify")
     from pull_dialog import show_pull_dialog
     win.add_function_to_menu(
-        "Create/Modify 3D", "Pull", lambda: show_pull_dialog(win))
+        "Create/Modify", "Pull", lambda: show_pull_dialog(win))
+    win.add_function_to_menu("Create/Modify", "Fillet", fillet)
+    win.add_function_to_menu("Create/Modify", "Shell", shell)
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")

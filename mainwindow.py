@@ -964,7 +964,7 @@ class MainWindow(QMainWindow):
         every RMB handler used to use directly.
 
         self.itemClicked can go stale: if the tree gets rebuilt (e.g.
-        extrude() -> build_tree()) after an item was clicked but
+        createEmptyPart() -> build_tree()) after an item was clicked but
         before an RMB action is taken on it, the underlying C++
         QTreeWidgetItem is destroyed even though the Python reference
         in self.itemClicked is untouched. A dead shiboken wrapper is
@@ -1185,20 +1185,21 @@ class MainWindow(QMainWindow):
         already-populated '/' label). Session 90's own planning: Step
         1 of the empty-part-creation feature, following Session 90's
         smoke test that confirmed the underlying idea works (an empty
-        TopoDS_Solid placeholder, later filled in via Mill/Pull's
-        existing "Add material" logic, survives Set Active, hide/
-        show, and save/reload).
+        TopoDS_Solid placeholder, later filled in via Pull's own
+        "Add Material" logic, survives Set Active, hide/show, and
+        save/reload).
 
-        Deliberately only targets '/' directly, matching Extrude's
-        own, already-established workflow (README: "The new part
-        appears under `/` in the tree... Drag the new part onto the
-        target assembly") -- new parts are created at the top level
-        first, then dragged into whichever assembly they belong in,
-        if any. Unlike createNewAssembly, no parent_uid=None special-
-        casing is needed here: add_component() itself always targets
-        the root directly and already bootstraps it internally if it
-        doesn't exist yet (the same mechanism extrude() has always
-        relied on), so there's no equivalent gap to work around.
+        Deliberately only targets '/' directly, matching this
+        codebase's own, long-established workflow (README: "The new
+        part appears under `/` in the tree... Drag the new part onto
+        the target assembly") -- new parts are created at the top
+        level first, then dragged into whichever assembly they belong
+        in, if any. Unlike createNewAssembly, no parent_uid=None
+        special-casing is needed here: add_component() itself always
+        targets the root directly and already bootstraps it
+        internally if it doesn't exist yet (the same mechanism the
+        old, now-removed extrude() always relied on), so there's no
+        equivalent gap to work around.
 
         Session 93 update: auto-activates the new part (matching
         get_wp_uid()'s own workplane-activation convention) using
@@ -1394,9 +1395,9 @@ class MainWindow(QMainWindow):
         """Register the always-on viewport->tree highlight callback.
         Called once after the display exists (Session 60). Kept
         SEPARATE from registerCallback's operation-callback slot:
-        operations (mate, extrude, ...) temporarily own selection and
-        must not be disturbed, so onViewportSelect no-ops whenever an
-        operation callback is active."""
+        operations (mate, Pull's axis pick, ...) temporarily own
+        selection and must not be disturbed, so onViewportSelect
+        no-ops whenever an operation callback is active."""
         try:
             self.canvas._display.register_select_callback(
                 self.onViewportSelect)

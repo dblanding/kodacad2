@@ -1,15 +1,14 @@
 """
-pull_dialog.py -- the new, integrated Pull dialog (Step 2 of the
-Create/Modify 3D plan; Doug's Pull_Dialog_Specification.pdf).
+pull_dialog.py -- the Pull dialog, under the Create/Modify menu.
+Built from Doug's own Pull_Dialog_Specification.pdf across Steps 2-3
+of the integrated Create/Modify dialog plan; Session 96 completed the
+plan's own "crystal ball" end state -- Create 3D and Modify Active
+Part are gone, folded into one Create/Modify menu (Pull, Fillet,
+Shell together), and the code Pull fully supersedes (extrude(), the
+old mill()/pull(), and mill_pull_dialog.py) was removed rather than
+left as orphaned, unreferenced code.
 
-Added ALONGSIDE the existing Extrude / Mill-Pull / Fillet / Shell menu
-structure, not replacing it yet -- Doug's own explicit call: the
-spec's "Create/Modify 3D replaces Create 3D and Modify Active Part"
-is a "crystal ball" end state, not this step. Nothing existing is
-touched; this is purely additive, so every current tutorial keeps
-working unchanged.
-
-Linear mode is fully functional -- reuses mill_pull_dialog.py's own,
+Linear mode reuses the old, now-removed mill_pull_dialog.py's own,
 already-proven Add/Remove Material + tool-building logic exactly,
 plus one real addition: createEmptyPart() means parts routinely start
 genuinely empty now, so Add Material on an empty part skips the
@@ -18,25 +17,31 @@ the same, already-verified fix from the Session 90/91 empty-part
 investigation, carried into the dialog meant to be its permanent home
 rather than re-proven from scratch.
 
-Angular mode (Step 3) is now real, not a stub. "Select Axis" picks two
-points -- tail, then head -- reusing position_dialog.py's own proven
-"2 Points" pattern exactly (engine-path-first: a workplane catch
-becomes a world point; a genuine 3D vertex is the fallback). The
-second point gives the user explicit control over which way a
-positive angle rotates (the right-hand rule), rather than an implicit
-sign derived from a single picked line -- an earlier, single-cline-
-pick design was tried and replaced after Doug's own live testing
-found exactly this ambiguity. Hover feedback on both picks reuses
-mainwindow's own _preview_start_meas/_pick_marker mechanism directly
-(already used by radMeasC/angMeasC for the same purpose) -- confirmed
-mainwindow-native, not a2d-toolset-only, so no reimplementation was
-needed for this part at all.
+Angular mode's axis-picking ("Select Axis") picks two points -- tail,
+then head -- reusing position_dialog.py's own proven "2 Points"
+pattern exactly (engine-path-first: a workplane catch becomes a world
+point; a genuine 3D vertex is the fallback). The second point gives
+the user explicit control over which way a positive angle rotates
+(the right-hand rule), rather than an implicit sign derived from a
+single picked line -- an earlier, single-cline-pick design was tried
+and replaced after Doug's own live testing found exactly this
+ambiguity. Hover feedback on both picks reuses mainwindow's own
+_preview_start_meas/_pick_marker mechanism directly (already used by
+radMeasC/angMeasC for the same purpose) -- confirmed mainwindow-
+native, not a2d-toolset-only, so no reimplementation was needed for
+this part at all. Direction (+W/-W) is deliberately absent from
+Angular's own page entirely -- Doug's own live test (a 180-degree
+pull swept into the -W half-plane with Direction still set to +W)
+proved it inert once the axis has an explicit, user-picked direction:
+the right-hand rule already fully determines rotation, with no second,
+independent choice left to make the way there is for Linear.
 
-Layout follows the spec's own 4-section structure exactly:
+Layout follows the spec's own 4-section structure:
     Top:           Active Part / Active Workplane (bold, read-only)
-    Upper Middle:  "Method" -- Operation / Direction / Mode
-    Lower Middle:  unlabeled, swaps with Mode (Distance, or Angle +
-                   Select Axis)
+    Upper Middle:  "Method" -- Operation / Mode
+    Lower Middle:  unlabeled, swaps with Mode -- Linear: Direction,
+                   then Distance. Angular: Angle + Select Axis, no
+                   Direction control at all.
     Bottom:        one '\u2705 Done' button only -- no Reverse/Back,
                    no Keep WP/Keep Prof (Doug: shortcuts, not needed
                    yet)
@@ -59,7 +64,7 @@ from OCP.gp import gp_Ax1, gp_Dir, gp_Vec
 import docmodel
 # dm is created in mainwindow (module-global there); importing it at
 # module level here would be circular-adjacent -- fetch lazily, same
-# precedent as mill_pull_dialog.py.
+# precedent as the old, now-removed mill_pull_dialog.py.
 from mainwindow import dm
 
 

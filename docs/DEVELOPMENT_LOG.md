@@ -5820,3 +5820,35 @@ Fixed at both levels, not just visually: Direction moved out of the shared Metho
 ### Lesson for future development
 
 **Live testing against real geometry surfaces genuinely different classes of feedback than code review ever can -- an ambiguous design choice, a missing affordance, and a control that silently does nothing all showed up here, each only visible once the feature was actually in front of a person clicking through it.** None of these three findings were bugs in the conventional sense -- the single-cline-pick version worked exactly as designed, and Direction's own sign math was applied exactly as written. What live use surfaced was that the design itself needed to change (single point -> two points, for predictability) and that a control's presence was actively misleading even though its underlying code executed without error. Each was found, explained clearly, and fixed at its actual source in the same session it was raised -- not deferred, not patched superficially at only the visible layer.
+
+# Session 96: the menu swap -- Create/Modify replaces Create 3D and Modify Active Part, old code removed by the roots
+
+The "crystal ball" end state from Doug's own Pull_Dialog_Specification.pdf, deferred since Session 93 until Pull was genuinely feature-complete: Angular landing solidly in Session 95 was the trigger. This session did the actual swap, and removed everything Pull now supersedes -- deliberately, thoroughly, not just unreferenced from the menu.
+
+## The menu itself, and the name
+
+`Create 3D` and `Modify Active Part` are gone. One menu now: `Create/Modify` -- Pull, Fillet, Shell together, matching the spec's own original 3-item structure. The name itself was Doug's own late decision, made while picturing the actual menu bar rather than the spec text: drop the "3D" that the interim `Create/Modify 3D` label carried, since every other item on the bar (File, Edit, Workplane, Position, Utility) is one word, and "3D" wasn't resolving any genuine ambiguity -- there's no 2D-creation menu item anywhere on this bar to confuse it with, and the workflow already establishes what's being modified before this menu is ever opened (RMB-activate a part in the tree first, per the spec's own instructions).
+
+## Removed by the roots, not just unreferenced
+
+Doug's own explicit call: rather than leave `extrude()`, the old `mill()`/`pull()`, `revolve()`, and `mill_pull_dialog.py` as orphaned, unreferenced code once their menu entries were gone, they were deleted outright -- "there is no loss in getting rid of unused code... if we ever want it back again, it's easy to find [via git]."
+
+Eight functions removed from kodacad.py: `extrude`, `extrudeC`, `revolve`, `revolveC`, `mill`, `millC`, `pull`, `pullC` -- 239 lines, confirmed exact against the sum of the three deleted ranges. `require_active_part` sits between two of the deleted blocks and was deliberately kept -- still genuinely used by `fillet()` and `shell()`, both staying; caught by checking its own call sites directly before cutting, rather than assumed safe to remove along with its neighbors.
+
+`revolve` was folded into this cleanup too, though Doug hadn't named it explicitly this time -- flagged directly rather than silently swept in, since the spec's own text only ever named Extrude and Mill/Pull as being replaced. The reasoning: Revolve lived in the same, now-removed `Create 3D` menu, and the spec's own words about it ("if it were actually working") already signal it was never a real, working feature -- Angular Pull is what it was meant to become, properly built and tested this time.
+
+Two stale section-header comments in kodacad.py were also cleaned up while in the area, not left behind as fresh cruft from this same session's own cut: a "3D Geometry creation functions" header that no longer accurately described what remained under it once extrude/revolve were gone, and a genuinely pre-existing, already-orphaned "3D Geometry positioning functons" header (typo included) that introduced an empty section -- nothing at all sat under it, even before this session's own changes. Noticed only because the cut boundaries ran directly past both.
+
+`mill_pull_dialog.py` is removed entirely -- not something deliverable as an edited file the way the others were; Doug needs to `rm` it from the local checkout directly, since removing it from the output folder has no effect on an actual repo.
+
+## Stale references cleaned up, not left dangling
+
+Every comment across the codebase that named a now-deleted function or file was found and fixed, not just the code paths that would actually break: three in mainwindow.py referencing `extrude()` as a live example (two repointed at a current, still-valid example; one marked explicitly historical -- "the old, now-removed extrude()"), one in xde_tree_dialog.py citing a bug "already caught once in mill_pull_dialog.py" (marked historical the same way), and pull_dialog.py's own module docstring, which was doubly stale -- still describing the old "added alongside, not replacing anything yet" interim state from Session 93, and still listing Direction under the Method section even though the Direction-inert-for-Angular fix (Session 95) had already moved it out. Rewritten to describe the actual, current, final state.
+
+## Verification discipline
+
+Every kept segment of kodacad.py was checked byte-for-byte identical to the original before finalizing -- not just spot-checked by eye -- using the same rigor established for the `save_step_doc()` unwrap removal (Session 92). All four touched files were syntax-checked individually before delivery. A final, repository-wide search for every removed function name and for "mill_pull_dialog" confirmed nothing remained beyond the intentional, historically-marked comments.
+
+### Lesson for future development
+
+**Deleting code cleanly means following every reference to it, not just the ones that would cause an error if left alone -- a stale comment doesn't crash, but it actively misleads the next person (or the next session) who reads it as current.** None of the seven comments fixed this session referenced code paths that still executed -- every one of them was purely explanatory prose, the kind of thing a mechanical "does it still import" check would never catch. Doug's own instruction to "rip it out by the roots" turned out to mean more than deleting function bodies: a module's own docstring describing a superseded design, or a neighboring file's comment citing a bug "caught once in" a file that no longer exists, are both roots too -- just ones a compiler can't see.

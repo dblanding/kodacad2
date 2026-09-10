@@ -27,8 +27,8 @@ from PySide6.QtWidgets import QApplication
 
 # dm is created in mainwindow (module-global there), not docmodel
 # (docmodel.py only defines the DocModel class) -- same import bug
-# already caught once in mill_pull_dialog.py; fixed here before it
-# ever shipped.
+# already caught once in the old, now-removed mill_pull_dialog.py;
+# fixed here before it ever shipped.
 from mainwindow import dm
 
 
