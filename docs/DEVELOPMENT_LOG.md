@@ -5792,3 +5792,31 @@ Doug's own retest: two empty parts created in sequence via RMB `/` -> Create Emp
 ### Lesson for future development
 
 **A partial fix aimed at a real problem can become actively wrong once the real fix lands -- worth checking, not assuming the earlier attempt is simply superseded and harmless to leave in place.** Session 93's "suggest part_2" prompt logic was a reasonable, honest attempt at the problem with the tools available at the time (the actual naming convention hadn't been touched yet), explicitly flagged as producing the wrong result when it shipped. Once the real fix (this session) changed what `add_component()` itself does with a given base name, that same prompt logic silently flipped from "imperfect workaround" to "actively defeats the real fix" -- without any code *elsewhere* changing at all. Worth deliberately re-checking anything built as a stopgap once its real, underlying fix actually lands, rather than assuming it simply stops mattering.
+
+# Session 95: Angular axis-picking -- Step 3 of the integrated Create/Modify 3D plan, complete
+
+Step 3 of Doug's own staged plan (0-smoke test, 1-empty part, 2-Method section, 3-axis picking, 4-visual feedback): Angular mode's axis-picking, taking it from an honest stub (Session 93) to genuinely working, real-world-tested geometry.
+
+## First working version: single construction-line pick
+
+Built against the spec's own literal instruction ("select a construction line on the active workplane"). Confirmed working on the first real test -- Doug's own words, producing 90 degrees of a donut correctly on the first try. Reused m2d.py's own, proven nearest-construction-entity lookup (the same mechanism Delete Construction Element already uses to resolve a click to a specific cline), reimplemented locally and narrowed to clines only -- no live reference to the a2d toolset instance exists from a dialog, the same architectural constraint mill_pull_dialog.py already documents for itself. The picked line's own (a, b, c) coefficients got converted into a 3D gp_Ax1 via the workplane's own origin/uDir/vDir basis.
+
+## Redesigned to two points, after live testing found a real ambiguity
+
+Doug's own follow-up, after further live use: picking a single existing line gave no way to apply the right-hand rule in advance -- the axis's own direction sign came from the line's coefficients, arbitrary from the user's own point of view, not something the user actually chose. Requested instead: pick two points, first the tail, second toward the intended head, giving explicit, predictable control over which way a positive angle rotates.
+
+Redesigned to reuse position_dialog.py's own proven "2 Points" pattern directly (`_point_pick_callback`'s own engine-path-first logic: a workplane catch -- endpoint, intersection, Ctrl+Shift center -- becomes a world point via uv_to_world; a genuine 3D vertex is the fallback), rather than invent a new picking mechanism. The axis itself uses the exact formula the old, unrelated revolveC() already established: `gp_Ax1(p1, gp_Dir(gp_Vec(p1, p2)))`. The single-cline-pick code (and its own cline-to-axis conversion math) was removed entirely rather than left dormant, once genuinely superseded.
+
+## Hover feedback, reusing an existing mainwindow-native mechanism
+
+Doug's own further request: the "usual hover feedback" as points are picked, matching the snap-engine catch glyph already familiar from ordinary sketch-tool use elsewhere. Checked before building anything new: `_preview_start_meas`/`_preview_move_meas`/`_pick_marker` turned out to already be mainwindow-native (not a2d-toolset-only), already used by radMeasC/angMeasC for their own hover feedback on radius and angle measurement. The dialog now calls this directly -- no reimplementation needed for this part at all, just wiring into what already existed.
+
+## Direction found to be inert for Angular, removed rather than left as a confusing no-op
+
+A third finding from Doug's own continued testing: a deliberate 180-degree pull into the -W half-plane, with Direction left set to +W, proved Direction had no effect on Angular's own result -- not merely redundant, genuinely inert. The reasoning holds up: once the axis has an explicit, user-picked direction (tail -> head), the right-hand rule already fully determines which way a positive angle rotates. There's no second, independent "+W/-W" choice left to make the way there is for Linear, where the same axis vector can push material two genuinely different directions. This also matches Creo's own reference screenshot directly -- its Angular configuration shows no Direction row at all, a correct omission on their part, not an oversight this project had been missing.
+
+Fixed at both levels, not just visually: Direction moved out of the shared Method section entirely and into the Linear page of the Lower Middle section specifically (Angular's own page has no Direction control at all), and the `sign` multiplication was removed from `_on_done`'s angular branch, not merely hidden behind a UI change while the underlying computation kept silently applying it.
+
+### Lesson for future development
+
+**Live testing against real geometry surfaces genuinely different classes of feedback than code review ever can -- an ambiguous design choice, a missing affordance, and a control that silently does nothing all showed up here, each only visible once the feature was actually in front of a person clicking through it.** None of these three findings were bugs in the conventional sense -- the single-cline-pick version worked exactly as designed, and Direction's own sign math was applied exactly as written. What live use surfaced was that the design itself needed to change (single point -> two points, for predictability) and that a control's presence was actively misleading even though its underlying code executed without error. Each was found, explained clearly, and fixed at its actual source in the same session it was raised -- not deferred, not patched superficially at only the visible layer.

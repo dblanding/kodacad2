@@ -18,17 +18,25 @@ the same, already-verified fix from the Session 90/91 empty-part
 investigation, carried into the dialog meant to be its permanent home
 rather than re-proven from scratch.
 
-Angular mode is deliberately a stub, per Doug's own instruction --
-selectable, its own section of the dialog fully laid out, but Done
-refuses it with a plain, honest status message rather than attempt a
-half-built operation. Axis-picking (Step 3) is what turns this from a
-stub into a real, working mode.
+Angular mode (Step 3) is now real, not a stub. "Select Axis" picks two
+points -- tail, then head -- reusing position_dialog.py's own proven
+"2 Points" pattern exactly (engine-path-first: a workplane catch
+becomes a world point; a genuine 3D vertex is the fallback). The
+second point gives the user explicit control over which way a
+positive angle rotates (the right-hand rule), rather than an implicit
+sign derived from a single picked line -- an earlier, single-cline-
+pick design was tried and replaced after Doug's own live testing
+found exactly this ambiguity. Hover feedback on both picks reuses
+mainwindow's own _preview_start_meas/_pick_marker mechanism directly
+(already used by radMeasC/angMeasC for the same purpose) -- confirmed
+mainwindow-native, not a2d-toolset-only, so no reimplementation was
+needed for this part at all.
 
 Layout follows the spec's own 4-section structure exactly:
     Top:           Active Part / Active Workplane (bold, read-only)
     Upper Middle:  "Method" -- Operation / Direction / Mode
-    Lower Middle:  unlabeled, swaps with Mode (Distance, or the
-                   Angular stub)
+    Lower Middle:  unlabeled, swaps with Mode (Distance, or Angle +
+                   Select Axis)
     Bottom:        one '\u2705 Done' button only -- no Reverse/Back,
                    no Keep WP/Keep Prof (Doug: shortcuts, not needed
                    yet)
@@ -40,10 +48,13 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
                                QStackedWidget, QWidget)
 from PySide6.QtGui import QFont
 
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+import math
+
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
+from OCP.gp import gp_Ax1, gp_Dir, gp_Vec
 
 import docmodel
 # dm is created in mainwindow (module-global there); importing it at
@@ -88,20 +99,23 @@ class PullDialog(QDialog):
         row_op.addWidget(self.op_combo)
         lay.addLayout(row_op)
 
-        row_dir = QHBoxLayout()
-        row_dir.addWidget(QLabel("Direction:"))
+        # Direction lives on the Linear page only, in the Lower
+        # Middle section below -- NOT here. Doug's own live test:
+        # once the axis has an explicit, user-picked direction (tail
+        # -> head), the right-hand rule already fully determines
+        # which way a positive angle rotates. There's no second,
+        # independent "+W/-W" choice left to make the way there is
+        # for Linear, where the same axis vector can push material
+        # two genuinely different ways. Confirmed directly -- a
+        # 180-degree pull swept into the -W half-plane with Direction
+        # still set to +W, proving it was inert for Angular, not
+        # merely redundant. Matches Creo's own reference screenshot:
+        # its Angular configuration shows no Direction row at all.
         self.dir_combo = QComboBox()
         self.dir_combo.addItems(["+W", "-W"])
-        # Same smart default as the proven mill_pull_dialog.py: +W for
-        # Add, -W for Remove, until the user touches Direction
-        # themselves. Add Material is index 0 here (spec's own
-        # default), unlike the old dialog's ordering -- matched by
-        # combo TEXT, not index, to avoid an ordering mixup.
         self._dir_touched = False
         self.dir_combo.activated.connect(self._mark_dir_touched)
         self.op_combo.currentIndexChanged.connect(self._op_changed)
-        row_dir.addWidget(self.dir_combo)
-        lay.addLayout(row_dir)
 
         row_mode = QHBoxLayout()
         row_mode.addWidget(QLabel("Mode:"))
@@ -119,20 +133,27 @@ class PullDialog(QDialog):
         # --- Lower middle section: unlabeled, swaps with Mode ---
         self.mode_stack = QStackedWidget()
 
-        # Page 0: Linear -- Distance
+        # Page 0: Linear -- Direction, then Distance
         linear_page = QWidget()
-        linear_lay = QHBoxLayout(linear_page)
+        linear_lay = QVBoxLayout(linear_page)
         linear_lay.setContentsMargins(0, 0, 0, 0)
+        row_dir = QHBoxLayout()
+        row_dir.addWidget(QLabel("Direction:"))
+        row_dir.addWidget(self.dir_combo)
+        linear_lay.addLayout(row_dir)
+        dist_row = QHBoxLayout()
         self.dist_units_label = QLabel(
             f"Distance ({getattr(main_win, 'units', 'mm')}):")
-        linear_lay.addWidget(self.dist_units_label)
+        dist_row.addWidget(self.dist_units_label)
         self.dist_edit = QLineEdit()
         self.dist_edit.setPlaceholderText("e.g. 12.0")
         self.dist_edit.textChanged.connect(self._dist_changed)
-        linear_lay.addWidget(self.dist_edit)
+        dist_row.addWidget(self.dist_edit)
+        linear_lay.addLayout(dist_row)
         self.mode_stack.addWidget(linear_page)
 
-        # Page 1: Angular -- STUB (Step 3 makes this real)
+        # Page 1: Angular -- real (Step 3). No Direction control here
+        # at all -- see the note above self.dir_combo's construction.
         angular_page = QWidget()
         angular_lay = QVBoxLayout(angular_page)
         angular_lay.setContentsMargins(0, 0, 0, 0)
@@ -140,15 +161,13 @@ class PullDialog(QDialog):
         angle_row.addWidget(QLabel("Angle (Degrees):"))
         self.angle_edit = QLineEdit()
         self.angle_edit.setPlaceholderText("e.g. 90")
-        self.angle_edit.setEnabled(False)
         angle_row.addWidget(self.angle_edit)
         angular_lay.addLayout(angle_row)
         self.select_axis_btn = QPushButton("Select Axis")
-        self.select_axis_btn.setEnabled(False)
+        self.select_axis_btn.clicked.connect(self._start_axis_pick)
         angular_lay.addWidget(self.select_axis_btn)
-        angular_lay.addWidget(QLabel(
-            "Angular pull is under construction -- coming in a "
-            "future step."))
+        self.axis_status_label = QLabel("No axis selected.")
+        angular_lay.addWidget(self.axis_status_label)
         self.mode_stack.addWidget(angular_page)
 
         lay.addWidget(self.mode_stack)
@@ -163,6 +182,8 @@ class PullDialog(QDialog):
         self.done_btn.clicked.connect(self._on_done)
         lay.addWidget(self.done_btn)
 
+        self._picked_axis = None  # gp_Ax1, set once both points picked
+        self._axis_pt1 = None  # gp_Pnt, set after the first pick
         self._refresh_labels()
         self.dist_edit.setFocus()
 
@@ -182,7 +203,7 @@ class PullDialog(QDialog):
             0 if self.linear_radio.isChecked() else 1)
         if self.angular_radio.isChecked():
             self.main_win.statusBar().showMessage(
-                "Angular pull is under construction.", 5000)
+                "Enter an angle, then click Select Axis.", 5000)
 
     def _dist_changed(self, text):
         # Spec: "acknowledge value entered, prompt user to click
@@ -228,6 +249,123 @@ class PullDialog(QDialog):
         self.main_win.statusBar().showMessage(text, 5000)
 
     # ------------------------------------------------------------------
+    # Angular axis picking (Step 3) -- two points, tail then head
+    # ------------------------------------------------------------------
+    #
+    # Redesigned from an initial single-cline-pick version (Doug,
+    # after live testing): picking one existing construction line
+    # gave no way to apply the right-hand rule in advance -- the
+    # axis's own direction sign came from the line's coefficients,
+    # arbitrary from the user's own point of view. Two points, with
+    # the second toward the intended "head", gives the user explicit,
+    # predictable control over which way a positive angle rotates --
+    # the same "two points define an axis" formula the old, unrelated
+    # revolveC() already used: gp_Ax1(p1, gp_Dir(gp_Vec(p1, p2))).
+    #
+    # Point-picking itself reuses position_dialog.py's own proven
+    # "2 Points" pattern exactly (_point_pick_callback): engine path
+    # first (a workplane catch -- endpoint, intersection, Ctrl+Shift
+    # center -- becomes a world point via uv_to_world), a genuine 3D
+    # vertex pick as fallback. Hover feedback (Doug's own follow-up
+    # request) reuses mainwindow's own _preview_start_meas/_pick_
+    # marker mechanism directly -- confirmed mainwindow-native, not
+    # a2d-toolset-only (radMeasC/angMeasC already use it the same
+    # way), so no reimplementation needed here at all.
+
+    def _start_axis_pick(self):
+        wp = self.main_win.activeWp
+        if wp is None:
+            self._say("No active workplane.")
+            return
+        self._axis_pt1 = None
+        self.main_win.registerCallback(self._axis_pick_callback)
+        self.main_win._preview_start_meas(
+            self._axis_pick_callback, self._axis_marker_builder,
+            style="geom")
+        self.main_win.statusBar().showMessage(
+            "Pick point 1 -- the axis's tail (need not be on "
+            "the part).")
+
+    def _axis_pick_callback(self, shapeList, *args):
+        """Same engine-path-first, 3D-vertex-fallback logic as
+        position_dialog.py's own _point_pick_callback -- a workplane
+        catch (endpoint, intersection, Ctrl+Shift center/midpoint)
+        or a genuine 3D vertex, used interchangeably as either point.
+        """
+        from OCP.BRep import BRep_Tool
+        from OCP.TopoDS import TopoDS
+        win = self.main_win
+        wp = win.activeWp
+        if wp is None:
+            self._say("No active workplane.")
+            win.clearCallback()
+            return
+        pt = None
+        try:
+            click_xy = args[1] if len(args) > 1 else None
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import (screen_to_uv, find_snap,
+                                         uv_to_world, SNAP_PIXELS,
+                                         current_snap_mode)
+                uv = screen_to_uv(win.canvas.view, click_xy[0],
+                                  click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
+                    snap = find_snap(wp, uv, tol, current_snap_mode())
+                    if snap is not None:
+                        pt = uv_to_world(wp.gpPlane, snap[1][0],
+                                         snap[1][1])
+        except Exception as se:
+            self._say(f"Pick failed: {se}")
+        if pt is None:
+            for shape in shapeList:
+                if shape is None:
+                    continue
+                try:
+                    vrtx = TopoDS.Vertex_s(shape)
+                    pt = BRep_Tool.Pnt_s(vrtx)
+                    break
+                except Exception:
+                    continue
+        if pt is None:
+            self._say("No catch or vertex there -- click a "
+                      "workplane catch or a part vertex.")
+            return
+        if self._axis_pt1 is None:
+            self._axis_pt1 = pt
+            self.axis_status_label.setText(
+                "Point 1 picked -- pick point 2 (the axis's head).")
+            self._say("Point 1 picked. Pick point 2 (the axis's "
+                      "head).")
+        else:
+            self._picked_axis = gp_Ax1(
+                self._axis_pt1, gp_Dir(gp_Vec(self._axis_pt1, pt)))
+            win.clearCallback()
+            win._preview_stop_meas()
+            self.axis_status_label.setText("Axis selected.")
+            self._say("Axis selected -- click Done.")
+
+    def _axis_marker_builder(self, wp, uv):
+        """Hover-feedback builder for _preview_start_meas -- a marker
+        at the nearest snap catch, same structure as mainwindow's own
+        _marker_straight_meas/_marker_circle_meas (radMeasC/angMeasC's
+        own hover feedback), just for a POINT catch instead of a line
+        or circle.
+        """
+        try:
+            from snap_engine import find_snap, current_snap_mode, \
+                SNAP_PIXELS
+            tol = abs(self.main_win.canvas.view.Convert(SNAP_PIXELS))
+            snap = find_snap(wp, uv, tol, current_snap_mode())
+        except Exception:
+            return None
+        if snap is None:
+            return None
+        mk = self.main_win._pick_marker(wp, snap[1])
+        return (mk, "geom") if mk is not None else None
+
+    # ------------------------------------------------------------------
 
     def _on_done(self):
         win = self.main_win
@@ -244,38 +382,59 @@ class PullDialog(QDialog):
             self._say("No active workplane.")
             return
 
-        if self.angular_radio.isChecked():
-            # Stub (Step 3 makes this real) -- refuse plainly rather
-            # than attempt a half-built operation.
-            self._say("Angular pull isn't implemented yet -- use "
-                      "Linear mode for now.")
-            return
-
-        try:
-            dist = float(self.dist_edit.text())
-        except ValueError:
-            self._say("Enter a numeric distance.")
-            return
-        if dist <= 0.0:
-            self._say("Distance must be positive (choose -W for the "
-                      "other direction).")
-            return
+        adding = (self.op_combo.currentText() == "Add Material")
+        angular = self.angular_radio.isChecked()
 
         faces, err = wp.make_faces()
         if err is not None:
             self._say(f"Profile problem: {err}")
             return
 
-        adding = (self.op_combo.currentText() == "Add Material")
-        sign = 1.0 if self.dir_combo.currentText() == "+W" else -1.0
-        vec = wp.wVec * (sign * dist * win.unitscale)
+        if angular:
+            if self._picked_axis is None:
+                self._say("Select an axis first (click Select Axis).")
+                return
+            try:
+                angle_deg = float(self.angle_edit.text())
+            except ValueError:
+                self._say("Enter a numeric angle.")
+                return
+            if angle_deg <= 0.0:
+                self._say("Angle must be positive -- pick the axis "
+                          "points in the other order for the "
+                          "opposite rotation.")
+                return
+            # No Direction/sign here -- see the note where
+            # self.dir_combo is built. The picked axis's own
+            # direction (tail -> head) already fully determines
+            # rotation via the right-hand rule.
+            angle_rad = math.radians(angle_deg)
+            summary = f"{angle_deg:g} degrees"
+        else:
+            sign = 1.0 if self.dir_combo.currentText() == "+W" else -1.0
+            try:
+                dist = float(self.dist_edit.text())
+            except ValueError:
+                self._say("Enter a numeric distance.")
+                return
+            if dist <= 0.0:
+                self._say("Distance must be positive (choose -W for "
+                          "the other direction).")
+                return
+            vec = wp.wVec * (sign * dist * win.unitscale)
+            summary = (f"{dist:g} {getattr(win, 'units', 'mm')} "
+                      f"{self.dir_combo.currentText()}")
 
         try:
             tool = None
             for f in faces:
-                prism = BRepPrimAPI_MakePrism(f, vec).Shape()
-                tool = prism if tool is None else \
-                    BRepAlgoAPI_Fuse(tool, prism).Shape()
+                if angular:
+                    piece = BRepPrimAPI_MakeRevol(
+                        f, self._picked_axis, angle_rad).Shape()
+                else:
+                    piece = BRepPrimAPI_MakePrism(f, vec).Shape()
+                tool = piece if tool is None else \
+                    BRepAlgoAPI_Fuse(tool, piece).Shape()
 
             # Session 90/91's own, verified fix: createEmptyPart()
             # means a part routinely starts genuinely empty (zero
@@ -284,7 +443,8 @@ class PullDialog(QDialog):
             # instead of Solid) rather than failing outright. Check
             # emptiness BEFORE reaching for the boolean, same as the
             # verified-working test utility this dialog is the real,
-            # permanent replacement for.
+            # permanent replacement for. Shared between Linear and
+            # Angular -- only how 'tool' itself gets built differs.
             n_faces = 0
             exp = TopExp_Explorer(part, TopAbs_FACE)
             while exp.More():
@@ -315,9 +475,14 @@ class PullDialog(QDialog):
         n_prof = len(faces)
         verb = "Added" if adding else "Removed"
         win.statusBar().showMessage(
-            f"{verb} material, {n_prof} profile(s), {dist:g} "
-            f"{getattr(win, 'units', 'mm')} "
-            f"{self.dir_combo.currentText()} (Ctrl+Z undoes).", 6000)
+            f"{verb} material, {n_prof} profile(s), {summary} "
+            f"(Ctrl+Z undoes).", 6000)
+        # Reset axis state -- a stale axis (or a mid-pick point 1)
+        # from a prior Angular operation shouldn't silently carry
+        # into the next one.
+        self._picked_axis = None
+        self._axis_pt1 = None
+        self.axis_status_label.setText("No axis selected.")
         self.close()
 
 
