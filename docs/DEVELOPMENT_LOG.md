@@ -5760,3 +5760,35 @@ Confirmed working well in Doug's own retest (Add and Remove material both exerci
 ### Lesson for future development
 
 **A user quietly working around a rough edge for multiple sessions, rather than mentioning it, is a real signal worth drawing out deliberately -- "keep the focus on core function" is a reasonable instinct that can also hide a cost that's been accumulating the whole time.** Doug's own words once asked directly: "I have been amending those names in order to get incremental ones, but have resisted mentioning anything up until now in order to keep our focus on base function rather than on superficial cosmetics." That's a genuinely good instinct in general, but it meant a real, recurring tax was being paid silently, session after session, never surfaced until a smaller, adjacent feature (the naming suggestion) happened to touch the same nerve directly. Worth periodically asking "is there anything you've been quietly working around" rather than only ever reacting to what gets volunteered.
+
+# Session 94: collision-aware sibling naming -- the "part_2_1" annoyance, fixed at its actual source
+
+Scheduled directly out of Session 93's own retest: Doug's own goal, stated plainly -- "part-or-assy-name_2" when a sibling named "part-or-assy-name_1" already exists, not "part-or-assy-name_2_1". A real, recurring annoyance he'd been quietly hand-correcting for a while rather than raise as its own distraction from core function.
+
+## Root cause and fix
+
+`add_component()` and `create_new_assembly()` both unconditionally appended `_1` to whatever base name they were given, regardless of what already existed as a sibling under the same parent -- confirmed identical in both functions, the same underlying pattern Session 92's `/` guarantee work already established a precedent for handling: fix the one, shared source, not each call site separately.
+
+New, shared helper: `next_sibling_name(shape_tool, parent_label, base_name)`, in `docmodel.py` alongside the existing `get_label_name`/`set_label_name` naming helpers. Walks `parent_label`'s own existing components, collects which `base_name_N` suffixes are already taken, and returns the lowest available `N`. Deliberately checks siblings under the specific parent only, not the whole document -- two different parents can each have their own `part_1` without colliding, matching ordinary naming expectations.
+
+Both `add_component()` and `create_new_assembly()` now call this instead of hardcoding `_1`, in both cases computed *before* the new component is actually added -- avoiding any risk of the new, still-unnamed label being counted among its own siblings during the check.
+
+## Session 93's own naming-suggestion attempt, removed as now-counterproductive
+
+Session 93's `createEmptyPart()` had already added a "suggest `part_2`" default to the naming prompt, as a first, partial attempt at this same problem from the prompt side alone -- flagged at the time as producing `"part_2_1"` rather than `"part_2"`, precisely because of the bug this session actually fixes. With `add_component()` now computing the correct suffix itself, that suggestion logic became not just unnecessary but actively wrong: accepting `"part_2"` as a *base name* would have made `add_component()` look for existing `part_2_N` siblings, find none, and still produce `"part_2_1"` -- the same bug, one level removed. Removed; the prompt now always suggests the plain base name, and the real fix underneath handles the numbering.
+
+## Confirmed not the same bug, checked directly rather than assumed safe
+
+Before considering this complete, searched the rest of `docmodel.py` for the same unconditional-suffix pattern, per Session 92's own lesson (a pattern found twice is a signal to look for more, not just fix the two already found). Four more `_1` occurrences turned up; all confirmed genuinely different on inspection, not left unchecked:
+
+- Three implement a separate, real rule (Session 17): an occurrence's name must never exactly match its own referred prototype's name, or STEPCAFControl_Writer writes the NAUO's name field blank on export. Different problem, different fix, correctly unrelated to sibling-collision naming.
+- One is STEP-import fallback naming, giving a component a real name when the STEP reader only supplied a meaningless auto-generated placeholder ("NAUO1" etc.) -- also unrelated.
+- `create_shared_instance()` was checked specifically, given Doug's own lathe-tutorial precedent (`bearing-block-asy_3`) suggested it might already work correctly -- confirmed it does: `f"{ref_name}_{n_users + 1}"` genuinely counts real, existing instances already, not the same unconditional-`_1` bug at all.
+
+## Verified
+
+Doug's own retest: two empty parts created in sequence via RMB `/` -> Create Empty Part, named `part_1` and `part_2` directly, each auto-activated correctly on creation (Session 93's own fix, unaffected by this session's changes). Importing `as1-oc-214.stp` and creating a shared instance of `l-bracket-assembly_2` produced `l-bracket-assembly_3` -- confirming the fix didn't disturb `create_shared_instance()`'s own, separately-correct counting logic.
+
+### Lesson for future development
+
+**A partial fix aimed at a real problem can become actively wrong once the real fix lands -- worth checking, not assuming the earlier attempt is simply superseded and harmless to leave in place.** Session 93's "suggest part_2" prompt logic was a reasonable, honest attempt at the problem with the tools available at the time (the actual naming convention hadn't been touched yet), explicitly flagged as producing the wrong result when it shipped. Once the real fix (this session) changed what `add_component()` itself does with a given base name, that same prompt logic silently flipped from "imperfect workaround" to "actively defeats the real fix" -- without any code *elsewhere* changing at all. Worth deliberately re-checking anything built as a stopgap once its real, underlying fix actually lands, rather than assuming it simply stops mattering.

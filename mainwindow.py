@@ -1200,17 +1200,18 @@ class MainWindow(QMainWindow):
         doesn't exist yet (the same mechanism extrude() has always
         relied on), so there's no equivalent gap to work around.
 
-        Session 92 update: auto-activates the new part (matching
+        Session 93 update: auto-activates the new part (matching
         get_wp_uid()'s own workplane-activation convention) using
-        add_component()'s own return value directly -- safe now that
+        add_component()'s own return value directly -- safe since
         Session 92 fixed it to actually match what's stored in
         label_dict, which is exactly the use case that fix was for.
-        Also suggests a smart default name (part_2, part_3, ...)
-        instead of always "part", matching workplane auto-naming in
-        spirit -- one real difference worth knowing: add_component()
-        always appends "_1" to whatever base name it's given, so
-        accepting a suggested "part_2" produces the visible occurrence
-        name "part_2_1", not "part_2" exactly.
+
+        Session 94: the name prompt always suggests the plain base
+        name ("part") -- add_component() itself now computes the
+        correct, collision-aware suffix (see next_sibling_name() in
+        docmodel.py), so a second "part" sibling becomes "part_2"
+        directly, not "part_2_1" (Session 93's own attempt at solving
+        this from the prompt side alone).
         """
         item = self._get_clicked_or_current_item()
         if not item:
@@ -1222,23 +1223,17 @@ class MainWindow(QMainWindow):
                  f"RMB click '/' instead.")
             self.itemClicked = None
             return
-        # Smart default name (Doug: "just like we do with
-        # workplanes") -- find the highest existing 'part_N' and
-        # suggest the next one, falling back to plain "part" if none
-        # exist yet.
-        existing_n = [0]
-        for v in dm.label_dict.values():
-            nm = v.get('name', '')
-            if nm.startswith('part_'):
-                try:
-                    existing_n.append(int(nm[len('part_'):]))
-                except ValueError:
-                    pass
-        default_name = (f"part_{max(existing_n) + 1}"
-                        if max(existing_n) else "part")
+        # Session 94: the prompt itself always suggests the plain
+        # base name now -- add_component()'s own next_sibling_name()
+        # computes the correct, collision-aware suffix automatically.
+        # (Session 93's own "suggest part_2 here" attempt is gone:
+        # accepting that suggestion as a BASE name would have made
+        # add_component() look for existing 'part_2_N' siblings,
+        # find none, and still produce 'part_2_1' -- the exact bug
+        # being fixed this session, just one level removed.)
         name, OK = QInputDialog.getText(
             self, "Create Empty Part",
-            "Enter a name for the new part:", text=default_name)
+            "Enter a name for the new part:", text="part")
         if OK and name:
             from OCP.TopoDS import TopoDS_Solid
             from OCP.BRep import BRep_Builder

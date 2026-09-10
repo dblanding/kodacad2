@@ -1301,11 +1301,17 @@ class DocModel:
         BRep_Builder().MakeCompound(new_shape)
         new_label = shape_tool.AddShape(new_shape, True)
         set_label_name(new_label, name)
+        # Session 94: computed BEFORE AddComponent, so the check never
+        # risks counting the new, still-unnamed component among its
+        # own siblings.
+        comp_name = next_sibling_name(shape_tool, target_assy, name)
         comp = shape_tool.AddComponent(target_assy, new_label,
                                        TopLoc_Location())
         # Suffix convention (Session 17 guard: identical occurrence/
-        # product names get blanked by the STEP writer)
-        set_label_name(comp, f"{name}_1")
+        # product names get blanked by the STEP writer). Session 94:
+        # collision-aware suffix instead of unconditional _1 -- see
+        # next_sibling_name's own docstring.
+        set_label_name(comp, comp_name)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
         print(f"[create_new_assembly] '{name}' created under "
@@ -1752,6 +1758,11 @@ class DocModel:
             shape_tool.GetFreeShapes(free_labels)
         root_label = free_labels.Value(1)
 
+        # Session 94: computed BEFORE AddComponent, so the check never
+        # risks counting the new, still-unnamed component among its
+        # own siblings. Matches create_new_assembly's own ordering.
+        comp_name = next_sibling_name(shape_tool, root_label, name)
+
         # Add as component under '/' root
         component_label = shape_tool.AddComponent(root_label, shape, True)
         entry = get_label_entry(component_label)
@@ -1768,7 +1779,9 @@ class DocModel:
         # Kodacad still showed them (the reader back-fills occurrence
         # names from the product when the NAUO is blank). Session 57.
         # Matches create_new_assembly's convention and as1's own file.
-        set_label_name(component_label, f"{name}_1")
+        # Session 94: collision-aware suffix instead of unconditional
+        # _1 -- see next_sibling_name's own docstring.
+        set_label_name(component_label, comp_name)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
         # FIX (bug found Session 90, fixed Session 92): this used to
@@ -2010,6 +2023,43 @@ class DocModel:
 
 def set_label_name(label, name):
     TDataStd_Name.Set_s(label, TCollection_ExtendedString(name))
+
+
+def next_sibling_name(shape_tool, parent_label, base_name):
+    """Find the next available 'base_name_N' among parent_label's own
+    existing components, starting at 1 -- so a second 'part' sibling
+    under the same parent becomes 'part_2' directly, not 'part_2_1'.
+
+    Session 94 (Doug: "I have been amending those names... in order
+    to get incremental ones"). The bug this fixes: add_component()
+    and create_new_assembly() both used to append '_1' unconditionally
+    to whatever base name they were given, regardless of what already
+    existed -- a real, recurring annoyance Doug had been silently
+    working around by hand. Fixed at the one, shared source both
+    functions call into, rather than patched separately in each (the
+    same lesson Session 92's '/' guarantee work already established
+    for this codebase: when the same pattern is needed in more than
+    one place, share the fix, don't duplicate it).
+
+    Deliberately checks existing SIBLINGS under parent_label
+    specifically, not every label in the whole document -- two
+    different parents can each have their own 'part_1' without
+    colliding, matching ordinary, expected naming behavior.
+    """
+    existing = TDF_LabelSequence()
+    shape_tool.GetComponents_s(parent_label, existing, False)
+    taken = set()
+    prefix = base_name + "_"
+    for i in range(1, existing.Length() + 1):
+        child_name = get_label_name(existing.Value(i))
+        if child_name.startswith(prefix):
+            suffix = child_name[len(prefix):]
+            if suffix.isdigit():
+                taken.add(int(suffix))
+    n = 1
+    while n in taken:
+        n += 1
+    return f"{base_name}_{n}"
 
 
 def get_name_from_uid(doc, uid):
