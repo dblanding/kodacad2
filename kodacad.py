@@ -1072,6 +1072,16 @@ if __name__ == "__main__":
         lambda: show_mill_pull_dialog(win))
     win.add_function_to_menu("Modify Active Part", "Fillet", fillet)
     win.add_function_to_menu("Modify Active Part", "Shell", shell)
+    # Step 2 of the integrated create/modify dialog plan (Doug's
+    # Pull_Dialog_Specification.pdf): added ALONGSIDE the existing
+    # Create 3D / Modify Active Part menus, not replacing them --
+    # Doug's own explicit call, "crystal ball" end state deferred
+    # until Pull is genuinely feature-complete. Linear mode fully
+    # functional; Angular is a deliberate stub (Step 3 makes it real).
+    win.add_menu("Create/Modify 3D")
+    from pull_dialog import show_pull_dialog
+    win.add_function_to_menu(
+        "Create/Modify 3D", "Pull", lambda: show_pull_dialog(win))
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")

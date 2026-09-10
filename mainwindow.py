@@ -1199,6 +1199,18 @@ class MainWindow(QMainWindow):
         the root directly and already bootstraps it internally if it
         doesn't exist yet (the same mechanism extrude() has always
         relied on), so there's no equivalent gap to work around.
+
+        Session 92 update: auto-activates the new part (matching
+        get_wp_uid()'s own workplane-activation convention) using
+        add_component()'s own return value directly -- safe now that
+        Session 92 fixed it to actually match what's stored in
+        label_dict, which is exactly the use case that fix was for.
+        Also suggests a smart default name (part_2, part_3, ...)
+        instead of always "part", matching workplane auto-naming in
+        spirit -- one real difference worth knowing: add_component()
+        always appends "_1" to whatever base name it's given, so
+        accepting a suggested "part_2" produces the visible occurrence
+        name "part_2_1", not "part_2" exactly.
         """
         item = self._get_clicked_or_current_item()
         if not item:
@@ -1210,9 +1222,23 @@ class MainWindow(QMainWindow):
                  f"RMB click '/' instead.")
             self.itemClicked = None
             return
+        # Smart default name (Doug: "just like we do with
+        # workplanes") -- find the highest existing 'part_N' and
+        # suggest the next one, falling back to plain "part" if none
+        # exist yet.
+        existing_n = [0]
+        for v in dm.label_dict.values():
+            nm = v.get('name', '')
+            if nm.startswith('part_'):
+                try:
+                    existing_n.append(int(nm[len('part_'):]))
+                except ValueError:
+                    pass
+        default_name = (f"part_{max(existing_n) + 1}"
+                        if max(existing_n) else "part")
         name, OK = QInputDialog.getText(
             self, "Create Empty Part",
-            "Enter a name for the new part:", text="part")
+            "Enter a name for the new part:", text=default_name)
         if OK and name:
             from OCP.TopoDS import TopoDS_Solid
             from OCP.BRep import BRep_Builder
@@ -1220,7 +1246,7 @@ class MainWindow(QMainWindow):
             empty_shape = TopoDS_Solid()
             BRep_Builder().MakeSolid(empty_shape)
             with undo_transaction(dm):
-                dm.add_component(empty_shape, name, DEFAULT_COLOR)
+                new_uid = dm.add_component(empty_shape, name, DEFAULT_COLOR)
             # Same full-refresh rationale as createNewAssembly just
             # above (Session 60 fix, re-confirmed there): a structure
             # change leaves stale AIS objects that display but aren't
@@ -1228,6 +1254,10 @@ class MainWindow(QMainWindow):
             self.ais_shape_dict.clear()
             self.build_tree()
             self.redraw()
+            # Auto-activate (Doug: "like a new workplane") -- Session
+            # 92's add_component() fix is what makes trusting this
+            # return value safe.
+            self.setActivePart(new_uid)
         self.treeView.clearSelection()
         self.itemClicked = None
 
