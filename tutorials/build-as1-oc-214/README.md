@@ -61,7 +61,7 @@ nested into each other.*
 ## Step 3 -- Add and position the L-bracket
 
 * Drag `l-bracket` into `L-brkt-asy` in the tree.
-* Select it, then **Position -> Position Selected**.
+* Select l-bracket in the tree, then **Position -> Position Selected**.
   * Choose method **Mate Align**.
     1. Constraint **Mate** -- click the bottom face of the bracket,
        then the top face of the plate.
@@ -89,9 +89,11 @@ never the last of the three).*
        L-bracket.
     2. Constraint **Mate** -- click the underside of the bolt head,
        then the top face of the plate.
+    3. Click Done.
+
 * Position the nut in two stages -- first out of the way, then
   precisely:
-  * Select `nut`, then **Position -> Position Selected**.
+  * Select `nut` in the tree, then **Position -> Position Selected**.
   * Stage 1, method **Dynamic** -- drag the nut a short distance away
     from the plate using the gizmo's handles, just far enough to make
     picking easier.
@@ -101,6 +103,7 @@ never the last of the three).*
        edge finds its center, not a point on the edge itself.)
     2. Second point: hold **Ctrl+Shift** and click the edge of the
        matching hole in the underside of the plate.
+    3. Click Done.
 
 ![Bolt & Nut Positioned](imgs/b4.png)
 
@@ -148,8 +151,9 @@ instance rather than a single component.*
 * This one needs a 180-degree rotation about a Z axis through the
   center of the plate -- so first, build a workplane there:
   **Workplane -> On Face**, click the plate's top face, then one of
-  its side faces. (Picking the face first, then a side, places the
-  workplane's own origin at that face's geometric center.)
+  its side faces. (Picking the first face places the workplane's own
+  origin at that face's geometric center. The second face determines
+  the workplane's +U direction.)
 
 ![Workplane placed on the plate](imgs/b8.png)
 
@@ -185,7 +189,7 @@ dropped into a new assembly -- in either order.
   * Constraint **Align** -- click an end face of the rod, then the
     corresponding end face of the plate.
   * **Done**.
-* At this point the rod isn't quite centered -- it extends further
+* At this point the rod isn't quite centered -- it extends farther
   past one L-bracket than the other. **Utility -> Calculator**, use
   **Dist** to measure exactly how far the rod needs to move in X to be
   centered on the assembly.
@@ -212,12 +216,6 @@ positioned independently.*
 - If any menu label, dialog control name, or button text has drifted
   from what's written here, that's worth fixing in this document
   directly.
-- The screenshots for Steps 5-6 show the intermediate assembly named
-  `bot-nut-asy` rather than `bolt-nut-asy` -- a naming slip made while
-  building this tutorial's own working session, not a KodaCAD
-  behavior. The written instructions above use the intended spelling
-  throughout; worth knowing if you're comparing your own screen
-  against the images and see the shorter name.
 - See the [Assembly Structure tutorial](../as1-oc-214/README.md) for
   loading and exploring the *original* `as1-oc-214.stp` -- a natural
   point of comparison once this one is finished, to confirm the

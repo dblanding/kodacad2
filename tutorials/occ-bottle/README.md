@@ -5,8 +5,8 @@ This walks through building the classic [OCC Bottle](https://occt3d.com/dev/doc/
 tutorial -- entirely with KodaCAD's own tools. It's meant to double as
 onboarding material for a new user and as a regression test: each step
 is annotated with what it exercises, and the whole sequence is worth
-re-running after any change that touches sketching, 3D creation,
-Modify Active Part, or Undo/Redo.
+re-running after any change that touches sketching, Create/Modify,
+or Undo/Redo.
 
 ## What you'll need
 
@@ -17,10 +17,11 @@ built entirely from scratch.
 
 Workplane creation, the AIS ViewCube, the RPN calculator's
 send-to-KodaCAD workflow, H/V construction lines, sketch geometry
-(line, arc, construction circle), Extrude, Fillet (including its
-edge-ownership resolution and the sample-and-verify fallback for
-non-analytic circular edges), Mill/Pull, Shell, workplane visibility
-surviving a modification, Undo/Redo across shape-replacing operations,
+(line, arc, construction circle), Create Empty Part, Pull,
+Fillet (including its edge-ownership resolution and the
+sample-and-verify fallback for non-analytic circular edges),
+Shell, workplane visibility surviving a modification,
+Undo/Redo across shape-replacing operations,
 and STEP save/reload (file size, geometry round-trip).
 
 ---
@@ -29,7 +30,7 @@ and STEP save/reload (file size, geometry round-trip).
 
 **Workplane -> At Origin, XY Plane**
 
-A workplane appears in the X/Y plane, with Horizontal and Vertical
+* A workplane appears in the X/Y plane, with Horizontal and Vertical
 construction lines intersecting at the origin, ready to sketch on.
 
 *Exercises: workplane creation, the auto-fit border/label cosmetics.*
@@ -43,7 +44,7 @@ workplane -- the natural orientation for sketching its profile.
 ![workplane](imgs/workplane.png)
 
 *Exercises: ViewCube face-click animation.*
-
+h-clines
 ## Step 3 -- Lay out reference construction lines with the calculator
 
 This is a fast way to place a set of related H (horizontal)
@@ -109,7 +110,7 @@ these two lines, clicking the **Arc by 3 Points** tool automatically
 ends the Line operation and begins the new one, ready to sketch the
 two arcs. Again, follow the status bar's guidance -- click the arc's
 end points, then a point on the arc. These four elements form a
-**closed profile** of geometry-type lines, which will be extruded into
+**closed profile** of geometry-type lines, which will be pulled into
 the 3D shape in the next step.
 
 ![Profile](imgs/profile.png)
@@ -117,17 +118,22 @@ the 3D shape in the next step.
 *Exercises: Line and Arc sketch tools; snap-to-construction-line
 catching.*
 
-## Step 5 -- Extrude the profile
+## Step 5 -- Create the Bottle from the profile
 
-**Create 3D -> Extrude**. Following the status bar's guidance, enter
-`70` (the bottle's height) in the input field, then enter the name
-`Bottle`. The bottle is added to the tree view as a child of `/`.
-Clicking a corner of the ViewCube in the viewport switches to an
+* RMB click on the '/' and select **Create Empty Part**, name it 'Bottle'
+    * The empty part is created in the tree as a child of '/'
+    * It is highlighted in yellow, signifying that it has ben set **Active**
+* **Create/Modify -> Pull**. The Pull dialog is displayed. Set the parameters as follows:
+    * Operation: Add Material
+    * Mode: Linear
+    * Distance (mm): 70
+* Click Done
+* Clicking a corner of the ViewCube in the viewport switches to an
 isometric view.
 
-![Extrusion](imgs/extrusion.png)
+![Profile Pulled Linearly](imgs/extrusion.png)
 
-*Exercises: profile-to-solid extrusion, multi-loop face building.*
+*Exercises: Pulling a profile linearly into a solid.*
 
 ## Step 6 -- Fillet the edges
 
@@ -148,7 +154,7 @@ A few ways to adjust the viewport at any point:
 Then:
 
 * Set the new part active by RMB clicking it in the tree.
-* **Modify Active Part -> Fillet**.
+* **Create/Modify -> Fillet**.
 * Select all 12 edges of the bottle, one at a time -- the status bar
   acknowledges each one.
 * Enter `3` as the radius.
@@ -184,16 +190,17 @@ modification triggers.*
 * Click the intersection of the H and V construction lines.
 * Enter `7.5` as the radius.
 
-**Extrude it upward**, with the bottle still active (highlighted in
+**Pull the profile upward**, with the bottle still active (highlighted in
 the tree):
 
-* **Modify Active Part -> Mill/Pull**.
-* In the dialog: choose **Pull**, direction **+W**, distance `7` mm.
+* **Create/Modify -> Pull**.
+* In the dialog: choose **Add Material**, **Linear**, direction **+W**, Distance **7**
+* Click Done
 
 ![Mill/Pull Dialog](imgs/pull.png)
 
 *Exercises: workplane-based circle sketching feeding directly into
-Mill/Pull; a second, feature-adding operation on an already-filleted
+Pull; a second, feature-adding operation on an already-filleted
 part.*
 
 ## Step 9 -- Fillet the neck / top face
@@ -214,7 +221,7 @@ modification, now with two hidden workplanes at once rather than one.*
 The final step is to shell the bottle, leaving the top open. With the
 bottle still active:
 
-* **Modify Active Part -> Shell**.
+* **Create/Modify -> Shell**.
 * Select the top face of the neck (the opening the bottle should
   keep).
 * Enter `1` as the wall thickness.
@@ -264,6 +271,6 @@ save/reload fidelity.*
   the Position dialog at all.
 - See the [Jack-o'-Lantern tutorial](../jack/README.md) for a fuller
   workout of the 2D sketch toolbar, and for this same
-  extrude-then-heavily-fillet technique reused to build a pumpkin,
-  followed by a real, multi-profile Mill/Pull operation this
+  pull-then-heavily-fillet technique reused to build a pumpkin,
+  followed by a real, multi-profile Pull operation this
   tutorial's own single-profile neck-pull doesn't demonstrate.
