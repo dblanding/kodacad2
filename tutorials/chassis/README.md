@@ -31,7 +31,7 @@ KodaCAD session -- no file needed for those.
 
 Measuring 3D geometry from an imported STEP file with the calculator's
 Ctrl+Shift circle-center picking; native part creation via sketching
-and Extrude; sibling-assembly creation; drag-reparenting parts into an
+and Pull; sibling-assembly creation; drag-reparenting parts into an
 assembly; shared-instance creation; most of the Position dialog's
 surface (Dynamic, Nudge, Mate Align, 2 Points) for positioning both a
 shared part and a shared assembly; STEP save; and Undo/Redo across a
@@ -68,18 +68,24 @@ circle-center picking against real, imported 3D geometry.*
 * Use the **Circle** tool to draw a circle at the origin with the
   axle radius.
 * Draw a second, concentric circle with the wheel radius.
-  * Extrude this to the wheel's length and name it "wheel". (A hole
-    for the axle is a deliberate design choice here, not required.)
+* RMB click on '/' and select **Create Empty Part**
+  * Name the part 'wheel'
+  * **Create/Modify -> Pull**, Complete the dialog:
+    * Operation: Add Material
+    * Mode: Linear
+    * Direction: +W
+    * Distance 10
+  * The wheel is created (A hole for the axle is a deliberate design choice here, not required.)
 * Temporarily hide the wheel so only the workplane is displayed.
 * Use the **Delete Geometry Element** tool to delete the outer circle.
-  * Extrude this to the axle's length and name it "axle".
+* Now create an axle using the same process used to create the wheel
 * Clicking the ViewCube's top-left-front corner gives this view:
 
 ![Wheel & Axle](imgs/wheel&axle.png)
 
 *Exercises: workplane creation, concentric circle sketching, hiding a
 part mid-workflow, Delete Geometry Element, and two independent
-Extrude operations from the same sketch.*
+Pull operations from the same sketch.*
 
 ## Step 3 -- Create the assembly structure
 
