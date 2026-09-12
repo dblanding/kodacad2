@@ -2405,6 +2405,28 @@ class MainWindow(QMainWindow):
                                       f"may reappear on reloaded curved "
                                       f"faces): {ce}")
                                 self._nurbs_warned = True
+                    else:
+                        # Doug's own report: a part built through
+                        # several successive operations can qualify
+                        # for the workaround at one point in its
+                        # construction (some curved geometry present)
+                        # and stop qualifying later (that geometry
+                        # since removed or replaced, e.g. down to a
+                        # plain box) -- with nothing here to say so,
+                        # a STALE _face_prep_map[uid] entry from the
+                        # earlier state survived indefinitely, and
+                        # fillet()/shell() would trust it completely,
+                        # matching picked edges/faces against geometry
+                        # that had nothing to do with the current
+                        # part. Confirmed directly: a diagnostic showed
+                        # _needs_analytic_workaround flipping from True
+                        # to False across two draw_shape calls for the
+                        # SAME uid, with the stale map's own
+                        # analytic_shape reporting zero edges at all.
+                        # Clearing it the moment it's no longer needed
+                        # is the actual fix -- not a mapping-logic
+                        # problem, a cache-invalidation one.
+                        self._face_prep_map.pop(uid, None)
                     try:
                         from OCP.BRepMesh import BRepMesh_IncrementalMesh
                         BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5,

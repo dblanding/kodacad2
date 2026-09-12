@@ -23,6 +23,8 @@ from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Face, TopoDS_Vertex
 from OCP.TopTools import TopTools_ListOfShape
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QTreeWidgetItemIterator
@@ -324,6 +326,40 @@ def _redraw_after_shape_replace(ref_entry, old_uids):
     win._incremental_reconcile(old_uids, force_redraw_uids=force)
 
 
+def _match_analytic_subshape(picked, analytic_shape, pairs, shape_type):
+    """Match a picked (surrogate) face or edge back to its analytic
+    counterpart -- the mapping fillet()/shell() both need to operate
+    on genuinely analytic geometry rather than the NurbsConvert
+    surrogate (Session 91).
+
+    Tries the Modified()-based pairs first (built in mainwindow's own
+    draw_shape, covering every sub-shape NurbsConvert actually
+    changed). Falls back to a direct IsSame() check against
+    analytic_shape's own sub-shapes for the case Session 91's own fix
+    missed: BRepBuilderAPI_MakeShape's own Modified() only reports
+    sub-shapes that were actually altered -- a straight edge or
+    planar face NurbsConvert leaves completely untouched is never
+    reported at all, so it has no entry in `pairs`, even though it
+    persists as the SAME object in the surrogate and can be matched
+    directly. Confirmed as the real cause of Doug's own report: every
+    one of 12 picked edges on the pumpkin's base block failed to
+    match anything in edge_pairs, consistent with all 12 being
+    straight edges NurbsConvert never touched, on a part that
+    qualified for the workaround because of curved geometry
+    elsewhere.
+    """
+    for analytic_sub, surrogate_sub in pairs:
+        if picked.IsSame(surrogate_sub):
+            return analytic_sub
+    exp = TopExp_Explorer(analytic_shape, shape_type)
+    while exp.More():
+        candidate = exp.Current()
+        if picked.IsSame(candidate):
+            return candidate
+        exp.Next()
+    return None
+
+
 def fillet(event=None):
     """Fillet (blend) edges of active part"""
 
@@ -364,17 +400,14 @@ def fillet(event=None):
             workPart = analytic_shape
             mapped_edges = []
             for picked_edge in edges:
-                matched = None
-                for analytic_edge, surrogate_edge in edge_pairs:
-                    if picked_edge.IsSame(surrogate_edge):
-                        matched = analytic_edge
-                        break
+                matched = _match_analytic_subshape(
+                    picked_edge, analytic_shape, edge_pairs, TopAbs_EDGE)
                 if matched is not None:
-                    mapped_edges.append(matched)
+                    mapped_edges.append(TopoDS.Edge_s(matched))
                 else:
                     print(f"[fillet] picked edge has no analytic "
-                         f"counterpart in the face-prep map -- "
-                         f"skipping it rather than risk a mismatch")
+                         f"counterpart at all -- skipping it rather "
+                         f"than risk a mismatch")
             edges = mapped_edges
         else:
             # No face-prep map -- this part never needed the Session
@@ -486,54 +519,27 @@ def shell(event=None):
         if face_prep is not None:
             analytic_shape, face_pairs, _edge_pairs = face_prep
             workPart = analytic_shape
-            # DIAGNOSTIC (Doug: fillet worked, shell reported success
-            # but produced no opening -- the picked face matched
-            # nothing in face_pairs at all). Checking two things
-            # directly: is face_pairs genuinely empty, or does it have
-            # entries that just don't match? And is analytic_shape
-            # ITSELF still genuinely analytic, or could fillet()'s own
-            # use of cached[1] (the surrogate, not the analytic shape)
-            # as its input mean the post-fillet shape handed back into
-            # the document is already surrogate-derived -- testing
-            # the hypothesis directly rather than guessing further.
-            from OCP.BRepAdaptor import BRepAdaptor_Surface
-            print(f"[shell] face_pairs has {len(face_pairs)} entries")
-            for i, picked_face in enumerate(win.faceStack):
-                pf_surf = BRepAdaptor_Surface(picked_face)
-                print(f"[shell] picked face {i}: surface type="
-                     f"{pf_surf.GetType()}")
-            for i, (analytic_face, surrogate_face) in enumerate(face_pairs):
-                af_surf = BRepAdaptor_Surface(analytic_face)
-                print(f"[shell] face_pairs[{i}]: analytic surface type="
-                     f"{af_surf.GetType()}")
             for picked_face in win.faceStack:
-                matched = None
-                for analytic_face, surrogate_face in face_pairs:
-                    if picked_face.IsSame(surrogate_face):
-                        matched = analytic_face
-                        break
+                matched = _match_analytic_subshape(
+                    picked_face, analytic_shape, face_pairs, TopAbs_FACE)
                 if matched is not None:
                     faces.Append(matched)
                 else:
                     # Genuinely unexpected (every analytic face should
-                    # have at least one surrogate counterpart) -- loud
-                    # rather than silently appending a face that
-                    # doesn't belong to workPart's own topology, which
-                    # would just recreate the original Session 79 bug.
+                    # match, whether via face_pairs or the fallback
+                    # direct check) -- loud rather than silently
+                    # appending a face that doesn't belong to
+                    # workPart's own topology, which would just
+                    # recreate the original Session 79 bug.
                     print(f"[shell] picked face has no analytic "
-                         f"counterpart in the face-prep map -- "
-                         f"skipping it rather than risk a mismatch")
+                         f"counterpart at all -- skipping it rather "
+                         f"than risk a mismatch")
         else:
-            # No face-prep map -- either this part never needed the
-            # Session 60 workaround, OR (Doug's STEP-import report)
-            # the map exists under a DIFFERENT uid than the one being
-            # looked up right now -- uids aren't guaranteed stable
-            # across a re-parse, and STEP import triggers several.
-            # This distinguishes the two rather than guessing further.
-            print(f"[shell] no face-prep map for uid="
-                 f"{win.activePartUID!r}. Map currently has "
-                 f"{len(win._face_prep_map)} entries, keys="
-                 f"{list(win._face_prep_map.keys())}")
+            # No face-prep map -- this part never needed the Session
+            # 60 workaround (never NurbsConverted). A prior investigation
+            # (Doug's STEP-import report) traced an apparent map-miss
+            # here to a corrupt test file, not a real gap in this
+            # branch -- confirmed and resolved.
             cached = win._display_prep_cache.get(win.activePartUID)
             workPart = cached[1] if cached is not None else win.activePart
             for face in win.faceStack:
