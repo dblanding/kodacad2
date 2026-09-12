@@ -21,10 +21,10 @@ Polyline, Arc by 3 Points, Arc: Center + 2 Points, and both Delete
 Construction Element and Delete Geometry Element -- deliberately using
 more than one tool to build equivalent geometry (the two eyes), so the
 same result is reachable more than one way. The second half builds on
-the Bottle tutorial's own extrude-then-heavily-fillet technique for a
-rounded, non-Revolve form, and demonstrates Mill/Pull's multi-profile
+the Bottle tutorial's own pull-then-heavily-fillet technique for a
+rounded, non-revolved form, and demonstrates Pull's multi-profile
 capability for real -- three separate closed profiles (nose, two eyes,
-mouth) all milled into the pumpkin in a single Apply, rather than one
+mouth) all carved into the pumpkin in a single Apply, rather than one
 hole at a time.
 
 We'll be drawing with two kinds of lines throughout:
@@ -35,7 +35,7 @@ We'll be drawing with two kinds of lines throughout:
 
 The goal of every profile below is a simple, closed loop of geometry
 lines -- nothing extraneous, no open gaps. Get that right and the CAD
-kernel turns it into a **wire**, ready to extrude, mill, or pull. Get
+kernel turns it into a **wire**, ready to be pulled. Get
 it wrong and the kernel won't accept it.
 
 ---
@@ -58,11 +58,13 @@ mistakes and try out both the construction and geometry tools freely.
 
 ![Slot](imgs/j1.png)
 
-* Add a couple more grid lines above and to the right of the slot.
+* Add some more grid lines above and to the right of the slot.
 * Finish the nose with the **Polyline** tool: two diagonal lines
   meeting at a point above the slot, as shown below. Then use
   **Delete Geometry Element** to remove the slot's own upper straight
   edge, since the two new diagonals replace it.
+
+![Nose](imgs/nose.png)
 
 *Exercises: Parallel Construction Line for a symmetric grid; Slot;
 Polyline; Delete Geometry Element -- and, implicitly, that a profile
@@ -122,7 +124,7 @@ correcting mistakes along the way.*
 
 ## Step 3 -- Make the mouth
 
-* Expand the grid below the nose to make room.
+* Expand the grid below the nose in preparation for the mouth.
 * Use **Polyline** to click through every point of the mouth in
   sequence.
 
@@ -138,38 +140,43 @@ the nose's simpler one.*
 The face is done. From here, we build an actual pumpkin and carve
 this same face into it.
 
-## Step 4 -- Extrude a rounded form
+## Step 4 -- Pull a square profile
 
 * Create a new workplane at the origin, on the XY plane.
-* Use the **Rectangle** tool to sketch a 300 mm square centered on the
-  origin: enter `-150, -150`, then `150, 150`.
+* Create a square profile centered on the origin
+    * Use the **Rectangle** tool to sketch a 300 mm square
+        *Eenter `-150, -150`, then `150, 150`.
 
-![Extrusion Profile](imgs/j10.png)
+![Square Profile](imgs/j10.png)
 
-* **Create 3D -> Extrude**, length `380`, name `jack`.
+* RMB click on '/' and select **Create Empty Part**, name it 'pumpkin'.
+* Pull the profile: **Create/Modify -> Pull**
+    * Operation: Add Material
+    * Mode: Linear
+    * Direction: +W
+    * Distance: 380
+    * Click Done
+* Pumpkin has taken the form of a large block and has been set **Active**.
 
-![Extrusion](imgs/j11.png)
+![Block](imgs/j11.png)
 
-* RMB click `jack_1` in the tree and select **Set Active**.
 * Hide (or delete) the workplane -- it's no longer needed, and its
   own lines could interfere with picking edges in the next step.
-* **Modify Active Part -> Fillet**, select all 12 edges, radius `130`.
+* Pumpkin should still be active.
+* Fillet all of its edges: **Create/Modify -> Fillet**
+    * Select all 12 edges
+    * Enter radius value: 130
 
-This is the same extrude-then-heavily-fillet technique the OCC Bottle
-tutorial uses for its own rounded body -- a large enough fillet
-radius, relative to the box it starts from, turns sharp corners into
-a genuinely convincing rounded form without needing Revolve at all.
+![Apply Fillets & Shell](imgs/j12.png)
 
-*Exercises: Rectangle-based extrusion into a simple box, then a single
-large fillet operation turning that box into a rounded, pumpkin-like
-solid.*
+*Exercises: Rectangle-based pull into a simple box, then a large fillet
+operation turns that box into a rounded, pumpkin-like solid.*
 
 ## Step 5 -- Shell the pumpkin
 
 * **Modify Active Part -> Shell**: click the small square top face,
   enter `20` for the shell thickness.
 
-![Apply Fillets & Shell](imgs/j12.png)
 
 Worth knowing going in: that top face is entirely bounded by tangent
 fillets rather than genuine sharp edges shared with other faces, so
@@ -179,7 +186,7 @@ produces. That's expected, not a bug: it's a known OCCT limitation
 around tangent (not sharp) face boundaries, confirmed independently
 in this project against both this pumpkin shape and a plain filleted
 bottle. It's also not a problem for this particular build, since the
-face will be milled through entirely in the next step regardless.
+face will be cut through entirely in the next step regardless.
 
 *Exercises: Shell on a form whose only candidate open face is entirely
 tangent-bounded -- a deliberate, known limitation to work around
@@ -201,23 +208,23 @@ here.*
 sketch pass, and reusing everything from Steps 1-3 in a real,
 practical context rather than just as a standalone practice exercise.*
 
-## Step 7 -- Mill the face into the pumpkin
+## Step 7 -- Cut the face into the pumpkin
 
-* Confirm `jack_1` is set active in the tree, and that the workplane
+* Confirm the pumpkin part is set active in the tree, and that the workplane
   holding the face profiles is the active workplane.
-* **Modify Active Part -> Mill / Pull...**
-  * Operation: **Remove material (Mill)**
+* **Create/Modify -> Pull**
+  * Operation: **Remove Material**
+  * Mode: Linear
   * Direction: **-W**
-  * Distance: `150`
+  * Distance: 150
   * Click **✅ Done**
 * Hide (or delete) the workplane.
 
 ![Jack-o'-Lantern Complete](imgs/j14.png)
 
-*Exercises: Mill/Pull's multi-profile capability for real -- three
+*Exercises: Pull's multi-profile capability for real -- four
 separate closed profiles (the nose, both eyes, the mouth) all cut
-into the pumpkin in a single Apply, rather than milling one hole at a
-time.*
+into the pumpkin in a single Apply, rather than one hole at a time.*
 
 ---
 
@@ -228,6 +235,6 @@ time.*
   directly -- catching that drift is exactly what this tutorial is
   for.
 - See the [OCC Bottle tutorial](../occ-bottle/README.md) for the
-  extrude-then-heavily-fillet technique this tutorial's own pumpkin
-  body is built on, and for Mill/Pull's single-profile use as a point
+  pull-then-fillet technique this tutorial's own pumpkin
+  body is built on, and for Pull's single-profile use as a point
   of comparison against this tutorial's multi-profile one.
