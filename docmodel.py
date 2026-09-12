@@ -742,10 +742,25 @@ class DocModel:
         new_comp = shape_tool.AddComponent(target_label, ref_label, new_local)
         part_name = self.label_dict[uid]['name']
         set_label_name(new_comp, part_name)
-        # Also name the referred shape so it shows correctly in all viewers
+        # Only name the referred shape (the PROTOTYPE) if it doesn't
+        # already have one -- Session 98 fix (Doug: dragging "wheel"
+        # into a new assembly left the prototype itself renamed from
+        # "wheel" to "wheel_1", so a later shared instance produced
+        # "wheel_1_2" instead of "wheel_2"). This used to set the
+        # prototype's own name to part_name unconditionally --
+        # part_name is the OCCURRENCE's own name (uid's own
+        # label_dict entry), correct for the new occurrence itself,
+        # but wrong for the prototype, whose name should stay
+        # whatever it already, correctly was. The original intent
+        # (comment: "so it shows correctly in all viewers") was
+        # almost certainly a genuinely blank-name fallback -- e.g. a
+        # free root shape being dragged, where ref_label IS comp_label
+        # and might never have gotten its own name set -- not a
+        # reason to clobber a real, existing prototype name.
         new_ref = TDF_Label()
         if shape_tool.GetReferredShape_s(new_comp, new_ref):
-            set_label_name(new_ref, part_name)
+            if not get_label_name(new_ref):
+                set_label_name(new_ref, part_name)
 
         # Set color on the new component's referred label (label-based
         # SetColor overload -- ref_shape is no longer fetched here)

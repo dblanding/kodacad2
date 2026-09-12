@@ -5882,3 +5882,29 @@ Confirmed fixed directly by Doug's own retest, with a third `draw_shape` diagnos
 ### Lesson for future development
 
 **A failure that looks like a matching-logic problem can be a caching problem instead -- and two well-reasoned, individually correct fixes for the wrong layer of the problem will both fail identically, for reasons that have nothing to do with either fix's own logic.** Both of this session's early attempts were grounded in real, accurate facts about how `BRepBuilderAPI_NurbsConvert` and `TShape` identity actually behave -- neither was a careless guess. What made both wrong was an unstated assumption underneath: that whatever `_face_prep_map` held was necessarily an accurate, current answer for the part being operated on. The diagnostic that actually found the bug didn't test either hypothesis directly -- it stepped back and asked a more basic question (is this map even about the right shape at all) before trusting either theory further. Worth reaching for that kind of check earlier when a second attempt at the same class of fix fails the same way the first one did.
+
+# Session 98: shared instance names colliding after a drag -- reparent_component() was overwriting the prototype's own name
+
+Found the same day as Session 97, in the same tutorial-review pass: a shared instance of "wheel" produced "wheel_1_2" instead of "wheel_2" -- but only after a specific sequence (create wheel, create axle, create a new "wheel-axle-asy" assembly, drag both wheel and axle into it, *then* create the shared instance). A direct retest with no drag involved (create wheel, immediately shared-instance it) worked correctly, which was the first sign the bug lived in the drag step itself, not in the naming logic Session 94 had already fixed.
+
+## Diagnosis
+
+A diagnostic added to `create_shared_instance()` confirmed it directly: `ref_name` -- meant to be the prototype's own name -- came back as `'wheel_1'`, not `'wheel'`. `create_shared_instance()` itself was correct the entire time; it was faithfully reporting a name that had already been corrupted one step earlier.
+
+Traced to `reparent_component()` -- the function behind dragging a part onto a different assembly in the tree. After adding the new component under its new parent, it read `part_name` (correctly, the *occurrence's* own name -- e.g. "wheel_1") and used it twice: once, correctly, to name the new occurrence, and a second time to *also* rename the referred shape -- the prototype itself -- unconditionally, every time, regardless of whether the prototype already had a real, correct name. Dragging "wheel_1" into a new assembly silently renamed the shared prototype from "wheel" to "wheel_1" in the process. The original comment ("so it shows correctly in all viewers") pointed at a real, narrower case worth guarding -- a free root shape being dragged, where the component label and the shape label are literally the same thing and might never have gotten a name of its own -- but the unconditional version clobbered the ordinary, common case right along with it.
+
+## Fix
+
+Narrowed to only set the prototype's own name when it doesn't already have one (`if not get_label_name(new_ref):`), preserving the original defensive intent without destroying an existing, correct name on every reparent.
+
+## Verified
+
+Doug's own retest, twice: the exact failing sequence (wheel, axle, new assembly, drag both in, shared-instance the wheel) now produces "wheel_2" correctly. The chassis tutorial overall confirmed resolved.
+
+## Known, separate, lower priority: a related but distinct naming gap in the lathe tutorial
+
+A different scenario surfaced in the same pass: renaming two sibling occurrences of one shared, pre-existing prototype to the same name (both to "bearing-block-asy") produced the same collided name twice ("bearing-block-asy_1" both times), rather than "_1" then "_2". Traced to a second, independent gap -- `change_label_name()` (the rename function) had its own unconditional `f"{base}_1"` suffix, with no collision check at all, never touched by Session 94's own fix since that only covered `add_component()`/`create_new_assembly()`. Fixed the same way, reusing the same `next_sibling_name()` helper. A further, related oddity Doug noticed -- creating a shared instance afterward produced "_2" again instead of the expected "_3" -- was not chased further this session; explicitly called non-critical ("if it's easy to solve, let's fix it, if not, I can live with it"), and pinning it down further would need a live diagnostic rather than reasoning from the code alone. This fix, along with a new drag-and-drop safeguard (reparenting onto a plain part is now rejected outright, matching a "more serious" issue Doug raised in the same conversation) and folder/file icons distinguishing assemblies from parts in the tree, are staged as Session 99, not yet installed as of this entry.
+
+### Lesson for future development
+
+**A name traveling correctly through one function can still be corrupted by a completely different one earlier in the chain -- the function that reports a wrong answer isn't always the function with the bug.** `create_shared_instance()` had no defect at all; every part of its own logic, checked line by line, did exactly what it was supposed to. The actual bug was in a function with no obvious connection to shared-instance naming at all -- reparenting -- and only became visible because Doug happened to test the exact sequence (create, then drag, then instance) rather than a simpler one (create, then instance) that never touched the broken code path. Worth remembering when a diagnostic clears the function that's actually reporting the symptom: the next question is what else touched the data before it got there.
