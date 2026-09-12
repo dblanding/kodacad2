@@ -68,14 +68,14 @@ being worked on -- keeps things responsive as the model grows.
 
 1. Collapse the top assembly's children in the tree. This collapsed
    state should persist for the rest of the session.
-2. RMB click the top assembly and select **Create New Assembly**.
+2. RMB click the top assembly (manual-lathe) and select **Create New Assembly**.
    Name it `stator-asy`.
    * Notice how long this takes to complete.
    * Uncheck the top assembly to hide it, then continue.
-3. RMB click the top assembly again and select **Create New
+3. RMB click manual-lathe again and select **Create New
    Assembly**. Name it `rotor-asy`.
    * This one completes noticeably faster -- with the top assembly
-     hidden, there's far less to redraw.
+     hidden, there's nothing to redraw.
 
 The two new assemblies appear as siblings under the top assembly. The
 collapsed state from step 1 persists, as expected. But the checkbox
