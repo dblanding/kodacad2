@@ -1382,6 +1382,23 @@ class DocModel:
         loc = shape_tool.GetShape_s(comp_label).Location()
         users = TDF_LabelSequence()
         n_users = shape_tool.GetUsers_s(ref_label, users, False)
+        # DIAGNOSTIC (Doug: two existing occurrences of one shared
+        # prototype -- "bearing-block-asy_1" and "_2" -- but creating
+        # a THIRD shared instance still produced "_2" again instead
+        # of "_3", meaning n_users came back 1, not 2). Printing
+        # exactly what GetUsers_s actually found, by name and entry,
+        # rather than guessing further at why the count is short.
+        print(f"[create_shared_instance] ref_label entry="
+             f"{get_label_entry(ref_label)!r} "
+             f"name={get_label_name(ref_label)!r}")
+        print(f"[create_shared_instance] GetUsers_s found {n_users} "
+             f"user(s):")
+        for i in range(1, users.Length() + 1):
+            u = users.Value(i)
+            print(f"[create_shared_instance]   user {i}: "
+                 f"name={get_label_name(u)!r} "
+                 f"entry={get_label_entry(u)!r} "
+                 f"is_this_comp={u.IsEqual(comp_label)}")
         new_comp = shape_tool.AddComponent(parent_assy, ref_label, loc)
         ref_name = get_label_name(ref_label)
         set_label_name(new_comp, f"{ref_name}_{n_users + 1}")
@@ -2024,7 +2041,22 @@ class DocModel:
         ref_label = TDF_Label()
         if shape_tool.GetReferredShape_s(target_label, ref_label):
             base = re.sub(r"(_\d+)+$", "", name) or name
-            occ_name = name if name != base else f"{base}_1"
+            if name != base:
+                occ_name = name
+            else:
+                # Session 99 fix (Doug: renaming two sibling
+                # occurrences of the same shared prototype to the
+                # same base name -- e.g. two "bearing-block-asy"
+                # renames -- both produced "bearing-block-asy_1",
+                # colliding). This used to always produce "{base}_1"
+                # unconditionally, with no check for what else already
+                # existed. Same collision-aware helper Session 94
+                # already established for add_component() and
+                # create_new_assembly() -- checked against the
+                # occurrence's own actual parent, the same sibling
+                # scope those two functions already use.
+                occ_name = next_sibling_name(
+                    shape_tool, target_label.Father(), base)
             set_label_name(ref_label, base)
             set_label_name(target_label, occ_name)
             print(f"Renamed: product={base!r}, occurrence={occ_name!r} "

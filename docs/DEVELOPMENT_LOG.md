@@ -5908,3 +5908,33 @@ A different scenario surfaced in the same pass: renaming two sibling occurrences
 ### Lesson for future development
 
 **A name traveling correctly through one function can still be corrupted by a completely different one earlier in the chain -- the function that reports a wrong answer isn't always the function with the bug.** `create_shared_instance()` had no defect at all; every part of its own logic, checked line by line, did exactly what it was supposed to. The actual bug was in a function with no obvious connection to shared-instance naming at all -- reparenting -- and only became visible because Doug happened to test the exact sequence (create, then drag, then instance) rather than a simpler one (create, then instance) that never touched the broken code path. Worth remembering when a diagnostic clears the function that's actually reporting the symptom: the next question is what else touched the data before it got there.
+
+# Session 99: drag-onto-a-part safeguard, folder/file icons, and a naming fix that turned out to be chasing a pathological test file
+
+Three pieces, of very different weight.
+
+## Reparent-target safeguard (mainwindow.py)
+
+Doug's own report, called the more serious of two issues raised together: he had accidentally reparented a part or assembly onto a plain PART (rather than an assembly) when meaning to drop it elsewhere -- recoverable only via Undo, with no safeguard in place to prevent it happening at all. Checked directly: `moveSelection()`'s own drop handler validated only that the drop target's uid existed at all, never that it was actually capable of holding children.
+
+Fixed by rejecting the whole drop, before any tree-widget manipulation happens, when the target isn't a genuine assembly (or the tree's own synthetic root). Deliberately validated *before* the visual tree move rather than after -- the old code physically moved the tree items first and only checked validity at the XDE level afterward, which would have left the visible tree out of sync with the underlying document on any rejected drop. A status-bar message explains why when a drop is refused.
+
+Confirmed working directly by Doug.
+
+## Assembly/part icons in the tree (mainwindow.py)
+
+A second, related, smaller ask from the same conversation: assemblies and parts look identical in the tree today, and a visual distinction (Doug's own suggestion: something like a folder icon) would help at a glance -- particularly relevant given the safeguard above depends on the user correctly identifying which items *are* assemblies in the first place. Implemented with Qt's own built-in standard icons (`QStyle.StandardPixmap.SP_DirIcon` for assemblies, `SP_FileIcon` for parts) -- no new image assets needed, so no risk of a missing-file lookup failing silently.
+
+Confirmed working directly by Doug ("I love the little folder icons!").
+
+## Shared-instance naming: real causes found and fixed, but not fully resolved -- and rightly abandoned
+
+A different naming collision surfaced in the lathe tutorial, distinct from Session 98's own reparent bug: renaming two sibling occurrences of what Doug believed was one shared prototype to the same name ("bearing-blk-asy") both produced "_1" -- fixed cleanly (`change_label_name()` had its own, separate, unconditional `f"{base}_1"` suffix, never touched by Session 94's fix since that only covered `add_component()`/`create_new_assembly()`; fixed the same way, reusing `next_sibling_name()`).
+
+A second issue on top of that -- creating a *shared instance* afterward produced "_2" again rather than the expected "_3" -- was harder, and the real cause only became clear once Doug shared the actual XDE hierarchy dump: `bearing-blk-asy_1` and `bearing-blk-asy_2` were never occurrences of one shared prototype at all. They pointed at two *separate* prototypes (`0:1:1:5` and `0:1:1:10`) -- independently modeled in Onshape (Doug's own file, built in July) and never deduplicated on export, coincidentally similar enough in structure and naming to look shared. `create_shared_instance()`'s own naming used `GetUsers_s`'s count of users of one specific prototype -- correctly 1, since only `bearing-blk-asy_1` actually pointed at `0:1:1:5` -- producing "_2", which collided with the *other*, structurally unrelated prototype's own occurrence, already separately named "_2" for its own, different reason. Fixed by switching the naming to the same sibling-scoped `next_sibling_name()` helper everything else already uses, checking actual sibling names under the real parent rather than a prototype-specific reference count.
+
+Retested by Doug directly: the fix did not fully resolve what he was seeing -- the third instance still landed as "_2". The reasoning behind the fix is sound and the change is real and correct on its own terms (it does check actual sibling names, not a prototype-scoped count), but something about this specific, pathological file structure -- two independently-authored assemblies with shuffled, non-corresponding component ordering underneath their own coincidentally-matching names -- continues to produce a result neither of us fully traced to the end. Doug's own call, made deliberately rather than reluctantly: further chasing this is diminishing returns on an issue that only exists in a hand-built file that was never meant to model genuine sharing in the first place, not a real KodaCAD bug worth further investigation right now. Left in the codebase as-is -- a real improvement over the prior behavior, not a regression, just not a complete fix for this one file's own particular pathology.
+
+### Lesson for future development
+
+**Not every bug is worth chasing to full resolution, and recognizing that in the moment is as much a skill as finding the bug in the first place.** Two of the three findings in this session were clean, complete, verified fixes. The third had a genuinely correct diagnosis (two separate, non-shared prototypes, confirmed directly from the hierarchy dump) and a genuinely reasonable fix (sibling-scoped naming instead of a prototype-scoped count) that still didn't fully resolve the observed symptom in practice. Doug's own choice to stop there, rather than push for a fully-explained resolution, was the right call given the source: a file whose own structure -- authored outside KodaCAD, never intended to model true sharing -- was actively working against the very abstraction (one shared prototype, cleanly named siblings) the fix was trying to reason about. Diminishing returns are a real, legitimate stopping condition, not a failure to finish.

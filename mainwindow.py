@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QTreeWidget,
     QMenu,
     QDockWidget,
+    QStyle,
     QToolButton,
     QTreeWidgetItem,
     QFrame,
@@ -116,10 +117,33 @@ class TreeView(QTreeWidget):
         parent_index = self.indexFromItem(parent)
         if parent_index in selection:
             return False
+        new_parent_uid = parent.text(1) if parent else None
+        # Session 99 safeguard (Doug: has accidentally reparented onto
+        # a plain PART when meaning to drop onto an assembly, only
+        # recoverable via Undo -- nothing here ever checked the
+        # target's own type at all). Only a genuine assembly, or the
+        # tree's own synthetic root scaffolding ('0'), can hold
+        # children -- reject the WHOLE drop before any tree widget
+        # manipulation happens, rather than after, so a rejected drop
+        # never leaves the visual tree out of sync with the
+        # underlying document (the XDE-level reparent used to be the
+        # only thing checked, well after the tree items had already
+        # been physically moved).
+        if new_parent_uid and new_parent_uid != "0":
+            if not dm.label_dict.get(new_parent_uid, {}).get('is_assy'):
+                target_name = parent.text(0) if parent else "?"
+                main_win = self.parent()
+                while (main_win is not None
+                       and not hasattr(main_win, "ais_shape_dict")):
+                    main_win = main_win.parent()
+                if main_win is not None:
+                    main_win.statusBar().showMessage(
+                        f"Can't drop onto '{target_name}' -- only "
+                        f"assemblies can hold children.", 5000)
+                return False
         # Capture uid and new parent uid for XDE reparenting after visual move
         # Use both selectedIndexes() and currentItem() to catch the dragged item
         drag_items = []
-        new_parent_uid = parent.text(1) if parent else None
         # First try selectedIndexes
         for index in selection:
             item = self.itemFromIndex(QModelIndex(index))
@@ -677,6 +701,16 @@ class MainWindow(QMainWindow):
             item_name = [str(name) if name else "", str(uid)]
             item = QTreeWidgetItem(parent_item, item_name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            # Session 99 (Doug: wants assemblies to visually stand out
+            # from parts in the tree, at a glance). Qt's own built-in
+            # standard icons -- no new image assets needed, and no
+            # risk of a missing-file lookup failing silently.
+            if dic["is_assy"]:
+                item.setIcon(0, self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_DirIcon))
+            else:
+                item.setIcon(0, self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_FileIcon))
             if uid in self.hide_list:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
             else:
