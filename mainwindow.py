@@ -1195,20 +1195,27 @@ class MainWindow(QMainWindow):
             self, "Create New Assembly",
             "Enter a name for the new assembly:", text="assembly")
         if OK and name:
+            old_uids = set(dm.part_dict.keys())
             with undo_transaction(dm):
                 created = dm.create_new_assembly(target_uid, name)
             if created:
-                # Full refresh -- not just build_tree(). Matching
-                # createSharedInstance (Session 60 fix): a structure
-                # change leaves stale AIS objects in the context that
-                # are displayed but NOT re-activated for selection, so
-                # affected parts (Doug's 'button') stopped hover-
-                # highlighting and couldn't be picked, while tree->
-                # viewport SetSelected still worked on them. redraw()
-                # re-displays with SetAutoActivateSelection(True).
-                self.ais_shape_dict.clear()
+                # Session 100 (Doug's own report: creating one empty
+                # assembly redrew the ENTIRE document -- confirmed,
+                # this used to call self.redraw() unconditionally,
+                # "erase & redraw ALL parts & workplanes", regardless
+                # of the fact that only one, genuinely new, empty
+                # assembly was actually added). Switched to the same
+                # targeted _incremental_reconcile pattern
+                # createSharedInstance already proved safe for this
+                # exact case (Session 77): adding exactly one
+                # genuinely new component while everything else stays
+                # untouched -- the new assembly's uid is genuinely
+                # new, so it gets drawn; nothing else does. The old
+                # comment here ("matching createSharedInstance") was
+                # itself stale -- createSharedInstance had already
+                # moved on to this same fix, never reflected here.
                 self.build_tree()
-                self.redraw()
+                self._incremental_reconcile(old_uids)
         self.treeView.clearSelection()
         self.itemClicked = None
 
@@ -1275,15 +1282,20 @@ class MainWindow(QMainWindow):
             from kodacad import DEFAULT_COLOR
             empty_shape = TopoDS_Solid()
             BRep_Builder().MakeSolid(empty_shape)
+            old_uids = set(dm.part_dict.keys())
             with undo_transaction(dm):
                 new_uid = dm.add_component(empty_shape, name, DEFAULT_COLOR)
-            # Same full-refresh rationale as createNewAssembly just
-            # above (Session 60 fix, re-confirmed there): a structure
-            # change leaves stale AIS objects that display but aren't
-            # re-activated for selection.
-            self.ais_shape_dict.clear()
+            # Session 100 -- same fix as createNewAssembly just above,
+            # and the same reasoning createSharedInstance already
+            # established (Session 77): adding exactly one genuinely
+            # new component, everything else untouched, is precisely
+            # what _incremental_reconcile's own default handles
+            # correctly. The old comment here ("Same full-refresh
+            # rationale as createNewAssembly") was itself stale in
+            # the same way -- pointing at a pattern that's now fixed
+            # rather than the reasoning that replaced it.
             self.build_tree()
-            self.redraw()
+            self._incremental_reconcile(old_uids)
             # Auto-activate (Doug: "like a new workplane") -- Session
             # 92's add_component() fix is what makes trusting this
             # return value safe.
@@ -1723,13 +1735,22 @@ class MainWindow(QMainWindow):
         new_uids = set(dm.part_dict.keys())
         survivors = old_uids & new_uids
         changed_survivors = set()
+        # Session 100 (Doug's own question: why do so many seemingly-
+        # unrelated parts get redrawn together on one undo/redo?) --
+        # tagging each uid with its OWN, specific reason as it's
+        # added, rather than merging everything into one opaque set,
+        # so _incremental_reconcile's own summary can report real,
+        # printed evidence instead of anyone guessing at it.
+        redraw_reasons = {}
         for uid in survivors:
             old_loc = old_locs.get(uid)
             new_loc = dm.part_dict.get(uid, {}).get('loc')
             if old_loc is None or new_loc is None:
                 changed_survivors.add(uid)  # can't prove unchanged
+                redraw_reasons[uid] = "loc_missing (can't prove unchanged)"
             elif self._loc_differs(old_loc, new_loc):
                 changed_survivors.add(uid)
+                redraw_reasons[uid] = "loc_differs (genuine move)"
         # Session 78, Doug: the KNOWN boundary above -- fillet/shell
         # replacing a shape without moving it -- is now closed, not
         # just documented. replace_shape (docmodel.py) records the
@@ -1771,12 +1792,16 @@ class MainWindow(QMainWindow):
         # strings even across a long session -- not a real cost.
         replaced_entries = getattr(dm, '_shape_replaced_entries', [])
         for entry in replaced_entries:
-            changed_survivors |= {
+            newly_tagged = {
                 u for u, info in dm.label_dict.items()
                 if info.get('ref_entry') == entry
-                and u in dm.part_dict}
+                and u in dm.part_dict} - changed_survivors
+            changed_survivors |= newly_tagged
+            for u in newly_tagged:
+                redraw_reasons[u] = "shape_replaced (fillet/shell)"
         self._incremental_reconcile(old_uids,
-                                    force_redraw_uids=changed_survivors)
+                                    force_redraw_uids=changed_survivors,
+                                    reason_map=redraw_reasons)
         n_undo = dm.doc.GetAvailableUndos()
         n_redo = dm.doc.GetAvailableRedos()
         self.statusBar().showMessage(
@@ -1818,7 +1843,7 @@ class MainWindow(QMainWindow):
         self.canvas._display.FitAll()
 
     def _incremental_reconcile(self, old_uids, redraw_all_survivors=False,
-                               force_redraw_uids=None):
+                               force_redraw_uids=None, reason_map=None):
         """Reconciles the viewer against dm.part_dict AFTER an
         operation that already called dm.parse_doc() (delete and
         undo/redo both do) -- diffing old_uids (captured by the
@@ -1893,7 +1918,18 @@ class MainWindow(QMainWindow):
         across undo/redo with nothing ever pruning it, causing tree/
         viewport checkbox desync. Folded in here since it's the same
         underlying problem: state keyed by uid, unrefreshed when the
-        uid space changes.)"""
+        uid space changes.)
+
+        reason_map (Session 100, Doug's own two questions -- a timing
+        tally for the worst offenders, and understanding why so many
+        seemingly-unrelated parts get redrawn together on a single
+        structural operation): an optional {uid: reason_string} dict
+        a caller can supply alongside force_redraw_uids, so the
+        summary below can report WHY each uid was redrawn -- genuinely
+        new, a real location change, a location that couldn't be
+        compared at all (conservative "redraw it" fallback), or a
+        shape-replacement (fillet/shell) -- real, printed evidence
+        instead of reasoning about it blind."""
         import time as _time
         _t0 = _time.monotonic()
         context = self.canvas._display.Context
@@ -1921,6 +1957,7 @@ class MainWindow(QMainWindow):
         _n_skipped = 0
         _n_redrawn = 0
         _redrawn_uids = []
+        _draw_timings = []  # (elapsed_seconds, uid, name)
         genuinely_new = new_uids - old_uids
         if redraw_all_survivors:
             to_redraw = new_uids
@@ -1931,7 +1968,11 @@ class MainWindow(QMainWindow):
         for uid in to_redraw:
             if uid in self.hide_list:
                 continue
+            _t_draw0 = _time.monotonic()
             self.draw_shape(uid)
+            _dt_draw = _time.monotonic() - _t_draw0
+            name = dm.part_dict.get(uid, {}).get('name', '?')
+            _draw_timings.append((_dt_draw, uid, name))
             _n_redrawn += 1
             _redrawn_uids.append(uid)
         _n_skipped = len(new_uids) - len(to_redraw)
@@ -1945,7 +1986,18 @@ class MainWindow(QMainWindow):
             print(f"[reconcile] {len(removed)} removed, "
                  f"{len(stale)} stale hide_list entr"
                  f"{'y' if len(stale) == 1 else 'ies'} pruned")
-        if _dt_total > 0.5:
+        # Session 100 (Doug: "I didn't see the timing tally" -- a
+        # small sample file redrew its ENTIRE document fast enough
+        # that the time-only threshold below never fired at all,
+        # even though redrawing everything for a one-part change is
+        # exactly the wasteful behavior worth surfacing). Also fires
+        # on a suspiciously large FRACTION of the document redrawn,
+        # regardless of how fast it happened -- catches the same
+        # problem on small files, not just slow ones.
+        _wasteful_fraction = (_n_redrawn / len(new_uids)
+                              if new_uids else 0)
+        if _dt_total > 0.5 or (_n_redrawn > 5
+                               and _wasteful_fraction > 0.5):
             print(f"[reconcile] TIMING: total {_dt_total:.2f}s -- "
                  f"removed-loop {_dt_removed:.2f}s, "
                  f"survivor-loop {_dt_survivors:.2f}s "
@@ -1955,6 +2007,23 @@ class MainWindow(QMainWindow):
                 print(f"[reconcile]   redrawn (not just the deleted "
                      f"uid's siblings -- these should have been "
                      f"SKIPPED if truly unchanged): {_redrawn_uids}")
+            if _draw_timings:
+                _draw_timings.sort(reverse=True)
+                print(f"[reconcile] TIMING: top "
+                     f"{min(10, len(_draw_timings))} slowest "
+                     f"draw_shape calls this batch:")
+                for _dt_one, _uid, _name in _draw_timings[:10]:
+                    print(f"[reconcile]   {_dt_one:.2f}s -- "
+                         f"{_name!r} ({_uid})")
+            if reason_map:
+                _reason_counts = {}
+                for uid in _redrawn_uids:
+                    r = ("genuinely_new" if uid in genuinely_new
+                        else reason_map.get(uid, "force_redraw "
+                                            "(no reason given)"))
+                    _reason_counts[r] = _reason_counts.get(r, 0) + 1
+                print(f"[reconcile] TIMING: why each uid was "
+                     f"redrawn: {_reason_counts}")
 
     def redraw(self):
         """Erase & redraw all parts & workplanes except those in hide_list."""
@@ -2233,6 +2302,10 @@ class MainWindow(QMainWindow):
         """Draw the part (shape) with uid."""
         context = self.canvas._display.Context
         if uid:
+            import time as _time
+            _t0 = _time.monotonic()
+            _needs_wa = None  # stays None on the cache-hit path --
+            # only ever computed below, inside the cache-miss branch
             # ERASE-BEFORE-REDISPLAY (Session 70, Doug's fillet/undo
             # scars report). draw_shape has ALWAYS only ever ADDED --
             # it creates a fresh AIS_Shape and overwrites
@@ -2295,6 +2368,25 @@ class MainWindow(QMainWindow):
                 if cached is not None and cached[0].IsSame(shape):
                     shape = cached[1]
                 else:
+                    # DIAGNOSTIC (Doug: 0:1:1:6:15 took ~60s on
+                    # initial load AND ~60s again on a later show,
+                    # with no structural change or parse_doc() in
+                    # between -- the cache should have hit the second
+                    # time). Printed only on an actual miss (not the
+                    # common, working hit case), distinguishing
+                    # "never cached at all" from "was cached, but
+                    # IsSame() said no" -- real evidence for which of
+                    # the two before guessing why.
+                    if cached is None:
+                        print(f"[draw_shape] cache MISS for {uid!r} "
+                             f"-- nothing was ever cached for this "
+                             f"uid")
+                    else:
+                        print(f"[draw_shape] cache MISS for {uid!r} "
+                             f"-- was cached, but cached[0].IsSame"
+                             f"(current shape) was False "
+                             f"(id(cached[0])={id(cached[0])}, "
+                             f"id(shape)={id(shape)})")
                     # COPY BEFORE ANY DISPLAY-PREP MUTATION (the
                     # actual fix for Doug's 2.6x STEP-save point
                     # bloat). shape here is part_data["shape"] --
@@ -2341,8 +2433,6 @@ class MainWindow(QMainWindow):
                                  f"document")
                             self._copy_warned = True
                     _needs_wa = _needs_analytic_workaround(shape)
-                    print(f"[draw_shape] uid={uid!r} "
-                         f"_needs_analytic_workaround={_needs_wa}")
                     if _needs_wa:
                         analytic_shape = shape  # the copy, pre-conversion --
                         # this is what shell()/fillet() should operate on
@@ -2523,6 +2613,24 @@ class MainWindow(QMainWindow):
                 context.Redisplay(aisShape, False)
             except Exception as e:
                 print(f"draw_shape error for {uid}: {e}")
+            # Session 100 (Doug: wants the elapsed time as an added
+            # field on this same line, not only in an end-of-batch
+            # summary -- _incremental_reconcile's own top-10 tally
+            # only ever sees batches THAT function itself drives;
+            # the initial load of a large file never goes through it
+            # at all). Moved from mid-function (right after the
+            # decision, before any of the actual expensive work) to
+            # here, so the SAME line reports both the decision and
+            # how long the whole call actually took -- printed once
+            # the work is done, not when it started. _needs_wa stays
+            # None on the cache-hit path (fast; never recomputed).
+            _dt_shape = _time.monotonic() - _t0
+            if _dt_shape > 0.5:
+                _wa_str = ("cached" if _needs_wa is None
+                          else str(_needs_wa))
+                print(f"[draw_shape] uid={uid!r} "
+                     f"_needs_analytic_workaround={_wa_str} "
+                     f"elapsed={_dt_shape:.2f}s")
         context.UpdateCurrentViewer()
         self.canvas.update()
 

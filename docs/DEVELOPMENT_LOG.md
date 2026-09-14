@@ -5938,3 +5938,35 @@ Retested by Doug directly: the fix did not fully resolve what he was seeing -- t
 ### Lesson for future development
 
 **Not every bug is worth chasing to full resolution, and recognizing that in the moment is as much a skill as finding the bug in the first place.** Two of the three findings in this session were clean, complete, verified fixes. The third had a genuinely correct diagnosis (two separate, non-shared prototypes, confirmed directly from the hierarchy dump) and a genuinely reasonable fix (sibling-scoped naming instead of a prototype-scoped count) that still didn't fully resolve the observed symptom in practice. Doug's own choice to stop there, rather than push for a fully-explained resolution, was the right call given the source: a file whose own structure -- authored outside KodaCAD, never intended to model true sharing -- was actively working against the very abstraction (one shared prototype, cleanly named siblings) the fix was trying to reason about. Diminishing returns are a real, legitimate stopping condition, not a failure to finish.
+
+# Session 100: large-assembly redraw performance -- goBILDA/FTC files, diagnosed and substantially fixed
+
+Doug's own context: as a volunteer FTC robotics mentor, he works with goBILDA parts library files -- large, real-world STEP files (400MB+ for a starter robot) with exquisitely-detailed thread geometry (sometimes corrupt, producing multi-body STEP-reader artifacts), heavily pre-drilled structural parts, and a flat hierarchy he's been improving using the lathe tutorial's own sub-assembly techniques. Two questions, asked together: could the worst-offending parts be tallied by processing time, and could the whole redraw process be triggered less often in the first place.
+
+## Question 1: a timing tally
+
+`_incremental_reconcile` -- the single, shared mechanism behind delete, undo/redo, and (as this session found) some but not all structural create operations -- now times every individual `draw_shape` call within a batch and reports the ten slowest by name and uid. Straightforward, low-risk, additive.
+
+## Question 2: the real, structural answer -- two RMB handlers never adopted the targeted redraw mechanism at all
+
+Doug's own reproduction (creating one empty assembly in a real goBILDA file) showed the entire document being redrawn, not just the one new item -- confirmed directly: `createNewAssembly()` called `self.redraw()` unconditionally ("erase & redraw ALL parts & workplanes"), never `_incremental_reconcile()` at all. `createEmptyPart()` had the identical pattern. Both predate `_incremental_reconcile`'s own introduction and were simply never migrated -- `createSharedInstance()` had already made this exact switch, in Session 77, for the mechanically identical case (add one genuinely new item, everything else untouched), with a comment already explaining precisely why it's safe. Both stale comments (each claiming to "match createSharedInstance," a pattern that function itself had already moved past) were fixed alongside the code. Both handlers now use the same targeted path. Confirmed by Doug: one sweep on creation, not two.
+
+## The inline elapsed-time request, and a genuinely important second finding along the way
+
+Doug's follow-up: the elapsed time needed to appear directly on the same line as the existing `_needs_analytic_workaround` report, not only in an end-of-batch summary -- necessary because the worst stalls (60+ seconds on initial load) happen in `draw_shape` calls that never go through `_incremental_reconcile` at all. Moved the print from mid-function (right after the decision, before any of the actual expensive work) to the end, timing the whole call and reporting both pieces on one line. Then gated the print behind a 0.5s threshold on Doug's own request, so only genuinely slow calls surface at all.
+
+This surfaced something more important than expected: `0:1:1:6:15`, one part in a real goBILDA hardware sub-assembly, took ~60+ seconds on both an initial load and a subsequent, otherwise-unrelated show -- with `_needs_analytic_workaround=True` printed both times, meaning the expensive NurbsConvert/meshing work was being redone in full rather than reusing the display-prep cache, even though nothing structural had changed between the two calls. Added a targeted cache-miss diagnostic (distinguishing "never cached at all" from "was cached, but IsSame() said no") rather than guess at the cause.
+
+## Resolution: the cache is working correctly; the earlier miss did not reproduce
+
+A clean retest -- hide, then show, the same part directly -- showed the cache hitting correctly (`_needs_analytic_workaround=cached`), dropping from several seconds to roughly 1.25-1.4s (the real, remaining cost of building and displaying the AIS object for a mesh-heavy part, not the NurbsConvert/meshing work the cache is actually meant to avoid). A full hide/show of the entire top-level assembly afterward showed the SAME result across the whole subtree -- one part briefly over the 0.5s threshold, everything else silent, versus well over 130 seconds of uncached reprocessing beforehand.
+
+The original miss on `0:1:1:6:15` was not chased to a fully confirmed root cause -- it did not reproduce on a clean, isolated retest, and the earlier occurrence happened in a sequence that also included an unrelated rename action in between. Left as a known, no-longer-observed data point rather than a resolved mechanism: real at the time it was seen, not currently reproducible, and not blocking the substantial, confirmed improvement this session delivered.
+
+## Verified
+
+Doug's own final measurement: hiding and showing the entire top-level assembly of a real goBILDA file now costs on the order of one second total, down from well over two minutes before this session's fixes.
+
+### Lesson for future development
+
+**A user's two questions asked together are sometimes actually one question with two different-sized answers.** "Give me a tally of the slow parts" was answered with straightforward instrumentation. "Can we do this less often" turned out to have a real, structural answer -- two RMB handlers that had simply never been migrated to a fix proven safe for the exact same case three sessions earlier, sitting unnoticed because nothing had gone looking for it until a real, large file made the cost impossible to ignore. The smaller, more visible ask (a tally) led directly to the tool that found the bigger, more valuable one (uncached, full-document redraws on ordinary create operations) -- worth remembering that a request for better visibility into a problem is often also the fastest path to finding what's actually causing it.
