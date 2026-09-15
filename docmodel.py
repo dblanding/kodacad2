@@ -1382,32 +1382,34 @@ class DocModel:
         loc = shape_tool.GetShape_s(comp_label).Location()
         users = TDF_LabelSequence()
         n_users = shape_tool.GetUsers_s(ref_label, users, False)
-        # DIAGNOSTIC (Doug: two existing occurrences of one shared
-        # prototype -- "bearing-block-asy_1" and "_2" -- but creating
-        # a THIRD shared instance still produced "_2" again instead
-        # of "_3", meaning n_users came back 1, not 2). Printing
-        # exactly what GetUsers_s actually found, by name and entry,
-        # rather than guessing further at why the count is short.
-        print(f"[create_shared_instance] ref_label entry="
-             f"{get_label_entry(ref_label)!r} "
-             f"name={get_label_name(ref_label)!r}")
-        print(f"[create_shared_instance] GetUsers_s found {n_users} "
-             f"user(s):")
-        for i in range(1, users.Length() + 1):
-            u = users.Value(i)
-            print(f"[create_shared_instance]   user {i}: "
-                 f"name={get_label_name(u)!r} "
-                 f"entry={get_label_entry(u)!r} "
-                 f"is_this_comp={u.IsEqual(comp_label)}")
         new_comp = shape_tool.AddComponent(parent_assy, ref_label, loc)
         ref_name = get_label_name(ref_label)
-        set_label_name(new_comp, f"{ref_name}_{n_users + 1}")
+        # Session 99 fix (Doug: two SEPARATE, independently-imported
+        # prototypes -- e.g. two distinct bearing-block assemblies
+        # from the original STEP file -- had both been renamed to
+        # the same base name, "bearing-blk-asy", coincidentally, not
+        # because they were ever actually shared. Creating a shared
+        # instance of ONE of them used GetUsers_s's own count for
+        # THAT prototype specifically (correctly 1, since only its
+        # own occurrence pointed at it) to name the new occurrence
+        # "_2" -- which collided with the OTHER, unrelated
+        # prototype's own occurrence, already separately named
+        # "_2" for its own, different reason. GetUsers_s was never
+        # wrong; it answers "how many things use this ONE prototype",
+        # not "what names already exist as siblings here" -- the
+        # actual question a new sibling's own name needs answered.
+        # Uses the same sibling-scoped helper add_component(),
+        # create_new_assembly(), and change_label_name() already
+        # share, checking real sibling names under the actual parent,
+        # regardless of which prototype each one happens to point to.
+        occ_name = next_sibling_name(shape_tool, parent_assy, ref_name)
+        set_label_name(new_comp, occ_name)
         shape_tool.UpdateAssemblies()
         self.parse_doc()
-        print(f"[create_shared_instance] '{ref_name}_{n_users + 1}' "
-              f"created, superimposed on the original -- use the "
-              f"Position dialog to move it. ({n_users + 1} instances "
-              f"now share one underlying "
+        print(f"[create_shared_instance] '{occ_name}' created, "
+              f"superimposed on the original -- use the Position "
+              f"dialog to move it. ({n_users + 1} instances now "
+              f"share one underlying "
               f"{'assembly' if shape_tool.IsAssembly_s(ref_label) else 'part'}.)")
         return True
 
@@ -2061,11 +2063,28 @@ class DocModel:
             set_label_name(target_label, occ_name)
             print(f"Renamed: product={base!r}, occurrence={occ_name!r} "
                   f"(uid {uid})")
+            # Session 101 fix (Doug: diagnostic-confirmed -- EVERY
+            # rename was triggering a full parse_doc(), rebuilding
+            # part_dict for the WHOLE document and breaking shape
+            # identity for every unrelated part, explaining the long
+            # redraw delays after renaming during large-file
+            # navigation). A rename changes nothing structural at
+            # all -- no labels added or removed, no references
+            # changed, no locations moved -- only these two labels'
+            # own names. Updated in place instead of re-parsing the
+            # entire document for a change this narrow.
+            if uid in self.label_dict:
+                self.label_dict[uid]['name'] = occ_name
+            if uid in self.part_dict:
+                self.part_dict[uid]['name'] = occ_name
         else:
             set_label_name(target_label, name)
             print(f"Name {name} set for part with uid = {uid}.")
+            if uid in self.label_dict:
+                self.label_dict[uid]['name'] = name
+            if uid in self.part_dict:
+                self.part_dict[uid]['name'] = name
         shape_tool.UpdateAssemblies()
-        self.parse_doc()
 
 
 def set_label_name(label, name):

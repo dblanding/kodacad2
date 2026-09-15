@@ -189,18 +189,31 @@ class TreeView(QTreeWidget):
             if drag_uid and new_parent_uid and drag_uid in dm.label_dict:
                 if new_parent_uid in dm.label_dict:
                     try:
+                        old_uids = set(dm.part_dict.keys())
                         with undo_transaction(dm):
                             dm.reparent_component(drag_uid, new_parent_uid)
-                        # Full reset: clear all AIS shapes and redraw from scratch
-                        # Walk up parent chain to find MainWindow
+                        # Session 101 (Doug's own report: each reparent
+                        # made the app unresponsive for minutes, and
+                        # the timing summary never appeared at all).
+                        # This used to unconditionally clear the whole
+                        # AIS context and call redraw() -- "erase &
+                        # redraw ALL parts & workplanes" -- the same
+                        # blunt pattern createNewAssembly/
+                        # createEmptyPart had (fixed earlier this
+                        # session) and createSharedInstance had
+                        # already moved past in Session 77. The
+                        # reparented item's own uid is genuinely new
+                        # (a fresh label under its new parent); the
+                        # old one is genuinely gone -- exactly what
+                        # _incremental_reconcile's own default
+                        # handles correctly, without touching anything
+                        # else.
                         main_win = self.parent()
                         while main_win is not None and not hasattr(main_win, "ais_shape_dict"):
                             main_win = main_win.parent()
                         if main_win is not None and hasattr(main_win, "ais_shape_dict"):
-                            main_win.canvas._display.Context.RemoveAll(False)
-                            main_win.ais_shape_dict.clear()
                             main_win.build_tree()
-                            main_win.redraw()
+                            main_win._incremental_reconcile(old_uids)
 
                     except Exception as e:
                         import traceback
@@ -2368,25 +2381,6 @@ class MainWindow(QMainWindow):
                 if cached is not None and cached[0].IsSame(shape):
                     shape = cached[1]
                 else:
-                    # DIAGNOSTIC (Doug: 0:1:1:6:15 took ~60s on
-                    # initial load AND ~60s again on a later show,
-                    # with no structural change or parse_doc() in
-                    # between -- the cache should have hit the second
-                    # time). Printed only on an actual miss (not the
-                    # common, working hit case), distinguishing
-                    # "never cached at all" from "was cached, but
-                    # IsSame() said no" -- real evidence for which of
-                    # the two before guessing why.
-                    if cached is None:
-                        print(f"[draw_shape] cache MISS for {uid!r} "
-                             f"-- nothing was ever cached for this "
-                             f"uid")
-                    else:
-                        print(f"[draw_shape] cache MISS for {uid!r} "
-                             f"-- was cached, but cached[0].IsSame"
-                             f"(current shape) was False "
-                             f"(id(cached[0])={id(cached[0])}, "
-                             f"id(shape)={id(shape)})")
                     # COPY BEFORE ANY DISPLAY-PREP MUTATION (the
                     # actual fix for Doug's 2.6x STEP-save point
                     # bloat). shape here is part_data["shape"] --
