@@ -1084,23 +1084,86 @@ class WorkPlane():
         depth = [sum(1 for a in range(n_loops) if contains[a][b])
                  for b in range(n_loops)]
 
+        # DIAGNOSTIC (Doug: multiple separate rectangles imprint but
+        # remove no material, while multiple circles -- or one
+        # rectangle among circles -- work correctly). Testing the
+        # containment classification directly, which is the one place
+        # rectangles and circles are genuinely handled differently
+        # here (a circle short-circuits the chaining step entirely
+        # and can never be mis-associated with anything; multiple
+        # separate, non-nested rectangles all rely on this same
+        # ray-casting containment test to correctly conclude "none of
+        # these contain any other"). Printing exactly what it
+        # actually computed, rather than assuming the hypothesis is
+        # right before seeing real evidence.
+        print(f"[make_faces] {n_loops} loop(s), "
+             f"edges per loop={[len(c) for c in loops]}")
+        print(f"[make_faces] depth={depth}")
+
+        # Session 102 fix (Doug's own real-world evidence: identical
+        # profile, sketched clockwise -> invalid face, imprints but
+        # removes no material; sketched counter-clockwise -> valid,
+        # works correctly -- "I did deliberately click all my
+        # rectangles from lower left to upper right, not that this
+        # should matter" -- and Doug was right that it shouldn't).
+        # The old code only ever reversed HOLES, always, unconditionally,
+        # relative to whatever direction the OUTER boundary happened to
+        # be sketched in -- never checking or correcting the outer
+        # wire's own winding at all. BRepBuilderAPI_MakeFace needs the
+        # outer wire wound counter-clockwise relative to the plane's
+        # own normal for the face to come out right-side-up; reversing
+        # holes relative to an outer that's ALREADY wound backwards
+        # just makes the holes consistent with an already-wrong
+        # starting point, not genuinely correct. Fixed by computing
+        # each loop's own actual, as-sketched winding (via signed
+        # area) and normalizing BOTH the outer (always ends up CCW)
+        # and each hole (always ends up CW, opposite the now-correct
+        # outer) -- regardless of which direction the user happened
+        # to click, exactly Doug's own point: not something a user
+        # should ever be responsible for.
+        signed_areas = []
+        for pts in polys:
+            signed_areas.append(0.5 * sum(
+                pts[i][0] * pts[(i+1) % len(pts)][1]
+                - pts[(i+1) % len(pts)][0] * pts[i][1]
+                for i in range(len(pts))))
+        print(f"[make_faces] winding as-sketched="
+             f"{['CCW' if a > 0 else 'CW' for a in signed_areas]}")
+
         # --- 3. faces: even-depth outers, their depth+1 loops as
         # holes ---
         faces = []
         for b in range(n_loops):
             if depth[b] % 2 != 0:
                 continue
-            mkf = BRepBuilderAPI_MakeFace(self.gpPlane, wires[b])
+            from OCP.TopoDS import TopoDS
+            # Outer wire: normalize to CCW (signed_areas[b] > 0),
+            # matching the plane's own normal -- BRepBuilderAPI_
+            # MakeFace's own convention for a right-side-up face.
+            outer_wire = (wires[b] if signed_areas[b] > 0
+                         else TopoDS.Wire_s(wires[b].Reversed()))
+            mkf = BRepBuilderAPI_MakeFace(self.gpPlane, outer_wire)
             for h in range(n_loops):
                 if (depth[h] == depth[b] + 1 and contains[b][h]):
-                    # Reversed() returns generic TopoDS_Shape;
-                    # MakeFace.Add demands the downcast Wire (same
-                    # pybind strictness as the projection Edge_s fix)
-                    from OCP.TopoDS import TopoDS
-                    mkf.Add(TopoDS.Wire_s(wires[h].Reversed()))
+                    # Hole wire: normalize to CW, opposite the now-
+                    # guaranteed-CCW outer -- regardless of which
+                    # direction it was actually sketched in.
+                    hole_wire = (wires[h] if signed_areas[h] < 0
+                                else TopoDS.Wire_s(wires[h].Reversed()))
+                    mkf.Add(hole_wire)
             if not mkf.IsDone():
                 return [], "face construction failed"
-            faces.append(mkf.Face())
+            face = mkf.Face()
+            from OCP.BRepCheck import BRepCheck_Analyzer
+            from OCP.BRepGProp import BRepGProp
+            from OCP.GProp import GProp_GProps
+            valid = BRepCheck_Analyzer(face).IsValid()
+            gprops = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(face, gprops)
+            print(f"[make_faces] face for loop {b}: IsValid={valid} "
+                 f"area={gprops.Mass():.3f} holes_added="
+                 f"{[h for h in range(n_loops) if depth[h] == depth[b]+1 and contains[b][h]]}")
+            faces.append(face)
         if not faces:
             return [], "no closed outer profile found"
         return faces, None
