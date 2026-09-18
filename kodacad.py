@@ -13,12 +13,15 @@ import pprint
 import sys
 
 from OCP.BRep import BRep_Tool
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.GeomAbs import GeomAbs_Cylinder
+from OCP.BRepAlgoAPI import (BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse,
+                             BRepAlgoAPI_Defeaturing)
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
-from OCP.gp import gp_Ax1, gp_Ax3, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax3, gp_Dir, gp_Lin, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Face, TopoDS_Vertex
@@ -614,6 +617,200 @@ def shellC(shapeList, *args):
         shell()
 
 
+def removeHole(event=None):
+    """Remove a simple cylindrical hole (blind or through) from the
+    active part, healing the surrounding geometry, via OCP's
+    BRepAlgoAPI_Defeaturing.
+
+    Deliberately scoped narrow for now (Doug's own step-at-a-time
+    preference): one simple cylindrical hole per operation. Confirmed
+    working via the Utility menu smoke tests that preceded this --
+    both on synthetic geometry and on a real, imported goBILDA part --
+    including the discovery that a hole's cylindrical surface can be
+    split into multiple face patches (picking captures only one; the
+    algorithm needs the complete set), and that a blind hole's own
+    bottom cap is healed automatically once the cylindrical wall is
+    removed, with no separate cap handling needed.
+    """
+    if not require_active_part("Remove Hole"):
+        return
+    win.registerCallback(removeHoleC)
+    display.SetSelectionModeFace()
+    win.statusBar().showMessage(
+        "Select a cylindrical face (a hole) to remove.")
+
+
+def removeHoleC(shapeList, *args):
+    """Callback (collector) for removeHole."""
+    if not shapeList:
+        return
+    try:
+        picked_face = TopoDS.Face_s(shapeList[0])
+    except Exception:
+        win.statusBar().showMessage(
+            "Pick a face (not an edge or vertex).")
+        return
+
+    # Ownership check -- same pattern fillet()/shell() already use:
+    # compare against the part's own DISPLAYED reference shape (which
+    # may be NurbsConverted), not win.activePart directly.
+    uid = win.activePartUID
+    cached = win._display_prep_cache.get(uid)
+    ref_shape = cached[1] if cached is not None else win.activePart
+    ref_faces = list(Topology.Topo(ref_shape).faces()) \
+        if ref_shape is not None else []
+    if not any(picked_face.IsSame(f) for f in ref_faces):
+        win.statusBar().showMessage(
+            "Selected face must be in Active Part.")
+        return
+
+    surf = BRepAdaptor_Surface(picked_face)
+    if surf.GetType() != GeomAbs_Cylinder:
+        win.statusBar().showMessage(
+            "Pick a cylindrical face (a hole) -- other feature "
+            "types aren't supported yet.")
+        return
+    win.clearCallback()
+
+    # Same analytic-mapping pattern as fillet()/shell() (Session 91):
+    # a picked face may come from a NurbsConverted display surrogate
+    # rather than the part's own real geometry.
+    face_prep = win._face_prep_map.get(uid)
+    if face_prep is not None:
+        analytic_shape, face_pairs, _edge_pairs = face_prep
+        matched = _match_analytic_subshape(
+            picked_face, analytic_shape, face_pairs, TopAbs_FACE)
+        workPart = analytic_shape
+        work_face = matched if matched is not None else picked_face
+    else:
+        workPart = ref_shape
+        work_face = picked_face
+
+    # Multi-patch collection: find every face sharing the SAME
+    # underlying cylinder (same axis, same radius) as the picked one,
+    # rather than pass only the single patch that was clicked.
+    picked_surf = BRepAdaptor_Surface(work_face)
+    matching_faces = [work_face]
+    try:
+        cyl1 = picked_surf.Cylinder()
+        ax1 = cyl1.Axis()
+        r1 = cyl1.Radius()
+        line1 = gp_Lin(ax1)
+        exp = TopExp_Explorer(workPart, TopAbs_FACE)
+        while exp.More():
+            f = TopoDS.Face_s(exp.Current())
+            if not f.IsSame(work_face):
+                surf2 = BRepAdaptor_Surface(f)
+                if surf2.GetType() == GeomAbs_Cylinder:
+                    cyl2 = surf2.Cylinder()
+                    same_radius = abs(cyl2.Radius() - r1) < 1e-4
+                    ax2 = cyl2.Axis()
+                    same_axis = (
+                        ax1.IsParallel(ax2, 1e-4)
+                        and line1.Distance(ax2.Location()) < 1e-4)
+                    if same_radius and same_axis:
+                        matching_faces.append(f)
+            exp.Next()
+    except Exception as e:
+        print(f"[removeHole] multi-patch detection failed ({e}) -- "
+             f"falling back to the single picked face")
+        matching_faces = [work_face]
+
+    print(f"[removeHole] {len(matching_faces)} cylindrical face(s) "
+         f"share the picked face's own surface")
+
+    # Doug's own finding (re-watching the source video): a blind hole
+    # built this way (sketch + prism + cut, not a native cylinder
+    # primitive) needs its BOTTOM CAP explicitly added too, not just
+    # the cylindrical wall -- confirmed directly by a synthetic test
+    # mirroring the real construction path, which failed identically
+    # to Doug's own part until the cap was included. Found by
+    # adjacency: any face sharing an edge with a collected cylindrical
+    # face. Restricted to faces bounded by exactly one edge (a simple,
+    # fully-closed cap) to avoid also picking up the block's own top
+    # face, which is ALSO adjacent to the cylinder's top edge but is
+    # part of the surrounding geometry, not the feature -- adding
+    # that one would be a genuine mistake, not just a missed one.
+    try:
+        cap_faces = []
+        for cyl_f in list(matching_faces):
+            cyl_edges = []
+            eexp = TopExp_Explorer(cyl_f, TopAbs_EDGE)
+            while eexp.More():
+                cyl_edges.append(TopoDS.Edge_s(eexp.Current()))
+                eexp.Next()
+            exp3 = TopExp_Explorer(workPart, TopAbs_FACE)
+            while exp3.More():
+                f = TopoDS.Face_s(exp3.Current())
+                already = (any(f.IsSame(m) for m in matching_faces)
+                          or any(f.IsSame(c) for c in cap_faces))
+                if not already:
+                    f_edges = []
+                    fe = TopExp_Explorer(f, TopAbs_EDGE)
+                    while fe.More():
+                        f_edges.append(TopoDS.Edge_s(fe.Current()))
+                        fe.Next()
+                    adjacent = any(
+                        ce.IsSame(fe2)
+                        for ce in cyl_edges for fe2 in f_edges)
+                    if adjacent and len(f_edges) == 1:
+                        cap_faces.append(f)
+                exp3.Next()
+        if cap_faces:
+            print(f"[removeHole] {len(cap_faces)} cap face(s) found "
+                 f"adjacent to the cylindrical wall -- adding them "
+                 f"too")
+            matching_faces.extend(cap_faces)
+    except Exception as e:
+        print(f"[removeHole] cap-face detection failed ({e}) -- "
+             f"proceeding with cylindrical face(s) only")
+
+    dfr = BRepAlgoAPI_Defeaturing()
+    dfr.SetShape(workPart)
+    for f in matching_faces:
+        dfr.AddFaceToRemove(f)
+    dfr.Build()
+    print(f"[removeHole] IsDone={dfr.IsDone()}")
+    if not dfr.IsDone():
+        win.statusBar().showMessage(
+            "Unable to remove this hole -- the surrounding geometry "
+            "couldn't be healed.")
+        return
+    newPart = dfr.Shape()
+
+    # Doug's own report: IsDone=True on both the through hole AND the
+    # blind hole, but only the through hole was actually removed --
+    # a claimed success that doesn't match what's on screen. Checking
+    # the actual result shape directly, before it's ever written back
+    # to the document, rather than trust IsDone=True at face value a
+    # second time: does the face count genuinely reflect a removal,
+    # or is IsDone=True trivially true without one?
+    n_before = 0
+    exp_before = TopExp_Explorer(workPart, TopAbs_FACE)
+    while exp_before.More():
+        n_before += 1
+        exp_before.Next()
+    n_after = 0
+    exp_after = TopExp_Explorer(newPart, TopAbs_FACE)
+    while exp_after.More():
+        n_after += 1
+        exp_after.Next()
+    print(f"[removeHole] faces before={n_before}, after={n_after}")
+
+    try:
+        win.erase_shape(uid)
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+        old_uids = set(dm.part_dict.keys())
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
+        _redraw_after_shape_replace(ref_entry, old_uids)
+        win.statusBar().showMessage("Hole removed.")
+    except Exception as e:
+        print(f"Unable to replace/draw shape. {e}")
+        win.redraw()
+    win.setActivePart(uid)
+
+
 #############################################
 #
 #  Save / Open / Load functions
@@ -845,6 +1042,7 @@ if __name__ == "__main__":
         "Create/Modify", "Pull", lambda: show_pull_dialog(win))
     win.add_function_to_menu("Create/Modify", "Fillet", fillet)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
+    win.add_function_to_menu("Create/Modify", "Remove Hole", removeHole)
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")

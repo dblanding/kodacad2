@@ -8,6 +8,8 @@
 
 ## To Do (by priority):
 
+* Chamfer
+
 * RMB on part in tree to set/edit part color (color picker?)
 
 * Box-select edges for filleting (eg.: OCC bottle)
@@ -25,15 +27,13 @@
 
 * **Workplane → By 3 Points**: currently underused — no clear motivating use case yet. Possible future redesign, modeled on Creo's Pt-Pt-Pt method: 1st point = origin, 2nd point sets +U direction, 3rd point establishes the plane (+V direction). Not being touched until a real need for it turns up.
 
-* **Create 3D → Revolve**: carried over from the original KodaCAD, works in BasiCAD, rarely used here. Natural sibling of Extrude (angular vs. linear), and will likely eventually need "add/subtract" cousins living under Modify Active Part rather than Create 3D. Worth a look at why/how it works in BasiCAD before touching it. Not a current priority.
-
 * **Unshare** a part or assembly. Example: bearing-block_3 in lathe tutorial should be unshared prior to modifying it for a new purpose on the rotor-asy.
 
 ## Deferred (Not easily implemented)
 
-* View Cube is unresponsive when 2D drawing tools are in use
+* View Cube is unresponsive when other operations are in use
     * Claude: Annoying but cosmetic, and it touches the selection-mode plumbing that has historically been the riskiest code in the app to poke.
-    * Workaround: Just middle click to exit 2D tool and use the view cube
+    * Workaround: Just middle click to exit the current operation and use the view cube
 
 * Native save / load format
     * Claude:  Blocked, not hard: native `.xbf` save. Session 49 confirmed the OCP binding bug (CadQuery/OCP#182: `Open` returns an empty document while reporting success). No amount of effort on our side fixes that; the move is to re-run our existing smoke test whenever OCP ships a new version.
