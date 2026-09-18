@@ -18,7 +18,8 @@ from OCP.GeomAbs import GeomAbs_Cylinder
 from OCP.BRepAlgoAPI import (BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse,
                              BRepAlgoAPI_Defeaturing)
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+from OCP.BRepFilletAPI import (BRepFilletAPI_MakeFillet,
+                               BRepFilletAPI_MakeChamfer)
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.gp import gp_Ax1, gp_Ax3, gp_Dir, gp_Lin, gp_Pnt, gp_Trsf, gp_Vec
@@ -500,6 +501,113 @@ def filletC(shapeList, *args):
             f"Edge {count} selected. Add more edges or enter radius + Enter.")
     if win.edgeStack and win.lineEditStack:
         fillet()
+
+
+def chamfer(event=None):
+    """Chamfer edges of active part -- same UI/workflow as Fillet
+    (Doug's own explicit request). Confirmed directly (not assumed
+    from the C++ reference docs, which turned out not to match this
+    specific OCP binding): a symmetric chamfer's own Add(distance,
+    edge) needs no reference face at all, matching Fillet's own
+    Add(radius, edge) exactly -- so this mirrors fillet()/filletC()
+    closely, reusing win.edgeStack since only one of the two is ever
+    armed at a time."""
+
+    if win.lineEditStack and win.edgeStack:
+        text = win.lineEditStack.pop()
+        try:
+            chamfer_d = float(text) * win.unitscale
+        except ValueError:
+            print(f"Expected a number. You entered '{text}'")
+            win.clearCallback()
+            return
+        edges = list(win.edgeStack)
+        win.edgeStack = []
+        uid = win.activePartUID
+        # Same analytic-mapping pattern as fillet() (Session 91): a
+        # picked edge may come from a NurbsConverted display
+        # surrogate rather than the part's own real geometry.
+        face_prep = win._face_prep_map.get(uid)
+        if face_prep is not None:
+            analytic_shape, _face_pairs, edge_pairs = face_prep
+            workPart = analytic_shape
+            mapped_edges = []
+            for picked_edge in edges:
+                matched = _match_analytic_subshape(
+                    picked_edge, analytic_shape, edge_pairs, TopAbs_EDGE)
+                if matched is not None:
+                    mapped_edges.append(TopoDS.Edge_s(matched))
+                else:
+                    print(f"[chamfer] picked edge has no analytic "
+                         f"counterpart at all -- skipping it rather "
+                         f"than risk a mismatch")
+            edges = mapped_edges
+        else:
+            cached = win._display_prep_cache.get(uid)
+            workPart = cached[1] if cached is not None else win.activePart
+        mkChamfer = BRepFilletAPI_MakeChamfer(workPart)
+        for edge in edges:
+            mkChamfer.Add(chamfer_d, edge)
+        try:
+            newPart = mkChamfer.Shape()
+        except Exception as e:
+            print(f"Unable to make Chamfer shape. {e}")
+            win.clearCallback()
+            return
+        try:
+            win.erase_shape(uid)
+            ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+            old_uids = set(dm.part_dict.keys())
+            with docmodel.undo_transaction(dm):
+                dm.replace_shape(uid, newPart)
+            _redraw_after_shape_replace(ref_entry, old_uids)
+            win.statusBar().showMessage("Chamfer operation complete")
+        except Exception as e:
+            print(f"Unable to replace/draw shape. {e}")
+            win.redraw()
+        win.setActivePart(uid)
+        win.clearCallback()
+    elif not require_active_part("Chamfer"):
+        return
+    else:
+        win.registerCallback(chamferC)
+        display.SetSelectionModeEdge()
+        statusText = "Select edge(s) to chamfer then specify chamfer distance."
+        win.statusBar().showMessage(statusText)
+
+
+def chamferC(shapeList, *args):
+    """Callback (collector) for chamfer -- same ownership-check
+    pattern as filletC()."""
+
+    win.lineEdit.setFocus()
+    uid = win.activePartUID
+    cached = win._display_prep_cache.get(uid)
+    ref_shape = cached[1] if cached is not None else win.activePart
+    ref_edges = list(Topology.Topo(ref_shape).edges()) \
+        if ref_shape is not None else []
+    for shape in shapeList:
+        try:
+            edge = TopoDS.Edge_s(shape)
+        except Exception:
+            win.statusBar().showMessage(
+                "Pick an edge (not a face or vertex).")
+            return
+        if not any(edge.IsSame(e) for e in ref_edges):
+            win.statusBar().showMessage(
+                "Selected edge(s) must be in Active Part.")
+            return
+        try:
+            win.edgeStack.append(edge)
+        except Exception:
+            win.statusBar().showMessage("Pick an edge (not a face or vertex).")
+            return
+    count = len(win.edgeStack)
+    if count:
+        win.statusBar().showMessage(
+            f"Edge {count} selected. Add more edges or enter distance + Enter.")
+    if win.edgeStack and win.lineEditStack:
+        chamfer()
 
 
 def shell(event=None):
@@ -1041,6 +1149,7 @@ if __name__ == "__main__":
     win.add_function_to_menu(
         "Create/Modify", "Pull", lambda: show_pull_dialog(win))
     win.add_function_to_menu("Create/Modify", "Fillet", fillet)
+    win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
     win.add_function_to_menu("Create/Modify", "Remove Hole", removeHole)
     win.add_menu("Position")

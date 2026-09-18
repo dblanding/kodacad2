@@ -6053,3 +6053,27 @@ A genuine, confirmed built-in safety net survives in the shipped code: a before/
 ### Lesson for future development
 
 **"It reported success" and "it actually worked" turned out to be two different claims, and only one of them was being checked.** `BRepAlgoAPI_Defeaturing`'s own `IsDone()` returned `True` on a genuine no-op, twice, consistently, regardless of operation order -- not a crash, not an exception, not even an inconsistent result across retries. Nothing about that failure mode would have been visible without a direct, independent check on the actual output (a face count, computed before the result is trusted and written anywhere) -- the kind of check that's cheap to add and easy to skip, since the API's own success flag looks, on its face, like it should already be exactly that check. The person who found the actual root cause wasn't looking at a stack trace or a diagnostic dump at all; they went back and rewatched a demonstration video a second time, specifically because the first pass hadn't shown them what turned out to be the whole point.
+
+# Session 104: Chamfer -- a close mirror of Fillet, and a documentation surprise that made the real tool simpler than expected
+
+## The ask
+
+Doug's own request: a Chamfer tool matching Fillet's UI exactly -- pick edge(s), type a value, Enter -- prompted by working toward completing the goBILDA servo plate part.
+
+## A documented API assumption, checked and corrected before writing any real code
+
+The official C++ reference docs and a Java binding both describe `BRepFilletAPI_MakeChamfer.Add()` as needing a reference face alongside the edge and distance, even for a simple, symmetric chamfer -- `Add(distance, edge, face)` -- a real, meaningful difference from Fillet's own `Add(radius, edge)`, flagged to Doug honestly before writing anything, along with a plan to confirm it with a synthetic smoke test first rather than assume it either way.
+
+The smoke test's own error message corrected this directly: this specific OCP binding's actual overloads are `Add(E)`, `Add(Dis, E)`, and `Add(Dis1, Dis2, E, F)` -- the three-argument form is for two *different* distances (asymmetric chamfers), not a face requirement for the symmetric case. `Add(Dis, E)` matches Fillet's own signature exactly. The documented C++ API and this OCP binding's actual exposed surface didn't match -- consistent with this project's repeated experience of OCP not mirroring the underlying C++ API one-to-one -- but the outcome was good news for once: simpler than expected, not more complex, and it meant no face-adjacency logic was needed anywhere in the real tool.
+
+## The tool
+
+`chamfer()` / `chamferC()`, registered under Create/Modify beside Fillet. A close, direct mirror of `fillet()`/`filletC()` -- same analytic/surrogate mapping (Session 91's own pattern), same ownership check, same `win.edgeStack` (reused rather than duplicated, since only one edge-picking tool is ever armed at a time), same `dm.replace_shape()` + undo-transaction write-back. The API surprise being a simplification rather than a complication meant this came together as close to a direct copy as any tool has been in this project so far.
+
+## The real, open question -- settled visually, not by a diagnostic
+
+Doug's own prior CAD experience (SolidDesigner) raised something no print statement could answer: whether corner geometry comes out differently depending on how many of a vertex's own edges are chamfered together -- 1, 2, or 3 at a shared corner. This was deliberately left as a second-stage, visual test on a real part rather than guessed at either way. Confirmed directly by Doug, looking at the actual results: OCCT resolves 1, 2, and 3 edges at a corner correctly and distinctly, matching expected CAD-kernel behavior, with no special handling needed on KodaCAD's own side. Also confirmed working on a hole's own edge, and undo/redo held cleanly throughout.
+
+### Lesson for future development
+
+**A verified assumption that turns out wrong is still worth having checked, even when the correction makes the actual work easier rather than harder.** Flagging the reference-face requirement to Doug before writing any code, then finding out via a real error message that it wasn't true under this specific binding, cost one extra smoke-test round -- and saved what would otherwise have been unnecessary face-adjacency logic carried into the real tool for no reason, plus the confusion of code that "worked" while solving a problem that didn't exist. The other half of this session is its own reminder: some questions -- corner geometry, in this case -- were never going to be answered by a check that could pass or fail in a terminal. Knowing which kind of question is in front of you, verifiable-by-test versus verifiable-only-by-looking, decided both halves of how this session actually went.
