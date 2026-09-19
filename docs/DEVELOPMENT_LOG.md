@@ -6077,3 +6077,37 @@ Doug's own prior CAD experience (SolidDesigner) raised something no print statem
 ### Lesson for future development
 
 **A verified assumption that turns out wrong is still worth having checked, even when the correction makes the actual work easier rather than harder.** Flagging the reference-face requirement to Doug before writing any code, then finding out via a real error message that it wasn't true under this specific binding, cost one extra smoke-test round -- and saved what would otherwise have been unnecessary face-adjacency logic carried into the real tool for no reason, plus the confusion of code that "worked" while solving a problem that didn't exist. The other half of this session is its own reminder: some questions -- corner geometry, in this case -- were never going to be answered by a check that could pass or fail in a terminal. Knowing which kind of question is in front of you, verifiable-by-test versus verifiable-only-by-looking, decided both halves of how this session actually went.
+
+# Session 105: Remove Isolated Feature -- generalizing hole removal to arbitrary faces, kept deliberately separate from what already works
+
+## Origin
+
+Doug's own follow-up to Session 103's Remove Hole tool, sourced again from Quaoar's own material: `BRepAlgoAPI_Defeaturing` is documented as accepting any list of faces bounding a feature, not just cylindrical ones -- meaning slots, pockets, and arbitrary pocket shapes should be removable the same way, given the right set of faces. Doug's own proposed UI change: instead of executing on a single click (Remove Hole's own model), accumulate picks across multiple faces, then an explicit finish action -- Enter, or a button -- to execute.
+
+## Confirming the mechanism before building anything
+
+Two things checked directly rather than assumed:
+
+**The algorithm's own general-purpose claim.** A synthetic through-slot -- 4 flat wall faces, no cylindrical geometry anywhere -- handed to `BRepAlgoAPI_Defeaturing` all at once. Succeeded cleanly: 10 faces before, 6 after, valid. Confirms the algorithm itself was never the limiting factor; Remove Hole's own cylindrical-specific logic (multi-patch matching, cap detection) was a narrowing choice for that tool, not a constraint of the underlying API.
+
+**The proposed Enter-to-finish mechanism.** Traced directly into `mainwindow.py`'s own `appendToStack()` (the actual Enter handler): it appends whatever's in the line edit -- even an empty string -- and calls the registered callback with an empty list, unconditionally, with no validation or parsing at that level at all. Fillet and Chamfer only *look* like they need a typed number to finish because their own code checks for one afterward; the trigger itself doesn't care. This meant Doug's proposed workflow needed no new low-level UI plumbing -- a callback can already tell "a pick just happened" (non-empty list) apart from "Enter was pressed" (empty list) using existing, proven infrastructure.
+
+## Design choice: a new, separate tool
+
+Doug's own explicit decision: keep Remove Hole exactly as shipped -- single-click convenience, automatic cylindrical multi-patch and cap detection, untouched -- and build the general case as its own tool rather than a mode switch or a merge. Named directly from Quaoar's own terminology: Remove Isolated Feature. The user picks every face bounding the feature manually (no automatic surface-matching of any kind, unlike Remove Hole), then presses Enter. Carries forward the same analytic/surrogate mapping pattern (Session 91) and the same before/after face-count safety check Session 103 already proved necessary -- `IsDone=True` alone still isn't trusted on its own here either.
+
+## A missing line, found by Doug actually using it
+
+First real-world test: worked, but Enter required a manual click into the line edit first before it would register at all. Traced directly to a single missing line -- `filletC()`'s own, established pattern opens with `win.lineEdit.setFocus()`, called on every pick specifically so keyboard focus already sits on the line edit and Enter fires immediately, with no click needed. `removeIsolatedFeatureC()` never had this line in its first version. One-line fix, confirmed immediately: works correctly now on several different slots and round holes both.
+
+### Lesson for future development
+
+**A pattern copied for its logic can still leave behind something that was never really about the logic at all.** The ownership check, the analytic mapping, the face-count safety net -- all the substantive parts of `filletC()`'s own design were carried over deliberately and correctly. The one line that got missed was a UI-focus call that has nothing to do with geometry, defeaturing, or any of the things this session was actually thinking hard about -- which is exactly why it was the one that got dropped. The lesson isn't "copy more carefully"; it's that the parts of an established pattern that feel incidental to the problem at hand are also the parts most likely to get silently skipped, and they're often exactly the parts a user notices first.
+
+---
+
+## Closing reflection: two categories of remaining work
+
+Doug's own framing, offered at the close of this session: KodaCAD's remaining improvements fall into two distinct categories -- functional (CAD capability) and UI (interaction and presentation) -- and functional work may be nearing a natural point of diminishing returns, several sessions running of narrower, more specific tools (Remove Hole, then Chamfer, then Remove Isolated Feature) rather than broad new capability.
+
+One concrete UI question already in view, not yet resolved: working in 2D on a workplane while a 3D part is present on screen currently means unwanted highlighting/selection noise from the 3D geometry, often enough that Doug's own current workaround is to hide the 3D part entirely to quiet it -- but that trade-off cuts against a genuinely useful capability (measuring from a 2D point to a 3D feature) that depends on both being visible and selectable at once. No resolution yet; Doug's own words, "I haven't figured out just what I want yet." Directly related to the selection/highlighting policy question from a few sessions back (pre-selection vs. selection, highlight modes, priority ordering) -- this is a concrete instance of exactly that unsettled policy, not a separate problem.

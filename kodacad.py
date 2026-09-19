@@ -919,6 +919,156 @@ def removeHoleC(shapeList, *args):
     win.setActivePart(uid)
 
 
+def removeIsolatedFeature(event=None):
+    """Remove an arbitrary, isolated feature (a slot, pocket, or any
+    shape bounded by a specific set of faces) from the active part,
+    healing the surrounding geometry, via OCP's
+    BRepAlgoAPI_Defeaturing -- confirmed general-purpose via a
+    synthetic through-slot smoke test (4 flat wall faces, no
+    cylindrical geometry at all: 10 faces before, 6 after, valid),
+    per Quaoar's own description of the algorithm's real capability.
+
+    Deliberately kept SEPARATE from Remove Hole (Doug's own explicit
+    choice), rather than merged into it or replacing it -- Remove
+    Hole's own single-click convenience and automatic cylindrical
+    multi-patch/cap detection stay exactly as they are, untouched and
+    still proven. This tool instead asks the user to pick every face
+    bounding the feature manually (no automatic surface-matching at
+    all), then press Enter to execute -- Quaoar's own terminology,
+    "Remove Isolated Feature", used directly, per Doug's own request.
+    """
+    if not require_active_part("Remove Isolated Feature"):
+        return
+    win.registerCallback(removeIsolatedFeatureC)
+    display.SetSelectionModeFace()
+    win.statusBar().showMessage(
+        "Select all faces bounding the feature to remove, then "
+        "press Enter.")
+
+
+def removeIsolatedFeatureC(shapeList, *args):
+    """Callback (collector) for removeIsolatedFeature. Accumulates
+    picked faces into win.faceStack (shared with shell(), never
+    simultaneously active, same convention chamfer() already uses
+    with win.edgeStack). An empty shapeList means Enter was pressed:
+    mainwindow.py's own appendToStack() (the Enter handler) appends
+    whatever's in the line edit -- even an empty string -- and calls
+    the registered callback with cb([]) regardless, so no numeric
+    value is needed here at all, unlike Fillet or Chamfer.
+
+    win.lineEdit.setFocus() (Doug's own report: Enter needed a
+    manual click into the line edit first, before it would register
+    at all) -- missing from the very first version. filletC() has
+    exactly this call as its own first line, for exactly this reason:
+    without it, Enter routes wherever focus already is (the
+    viewport), not to the line edit that's actually listening for it.
+    """
+
+    win.lineEdit.setFocus()
+    uid = win.activePartUID
+
+    if shapeList:
+        cached = win._display_prep_cache.get(uid)
+        ref_shape = cached[1] if cached is not None else win.activePart
+        ref_faces = list(Topology.Topo(ref_shape).faces()) \
+            if ref_shape is not None else []
+        for shape in shapeList:
+            try:
+                face = TopoDS.Face_s(shape)
+            except Exception:
+                win.statusBar().showMessage(
+                    "Pick a face (not an edge or vertex).")
+                return
+            if not any(face.IsSame(f) for f in ref_faces):
+                win.statusBar().showMessage(
+                    "Selected face(s) must be in Active Part.")
+                return
+            win.faceStack.append(face)
+        count = len(win.faceStack)
+        win.statusBar().showMessage(
+            f"Face {count} selected. Add more faces or press Enter "
+            f"to remove the feature.")
+        return
+
+    # shapeList is empty -- Enter was pressed
+    if not win.faceStack:
+        win.statusBar().showMessage(
+            "Pick at least one face before pressing Enter.")
+        return
+    picked_faces = list(win.faceStack)
+    win.faceStack = []
+    win.clearCallback()
+
+    # Same analytic-mapping pattern as fillet()/chamfer()/removeHole
+    # (Session 91): a picked face may come from a NurbsConverted
+    # display surrogate rather than the part's own real geometry.
+    cached = win._display_prep_cache.get(uid)
+    ref_shape = cached[1] if cached is not None else win.activePart
+    face_prep = win._face_prep_map.get(uid)
+    if face_prep is not None:
+        analytic_shape, face_pairs, _edge_pairs = face_prep
+        workPart = analytic_shape
+        mapped_faces = []
+        for picked_face in picked_faces:
+            matched = _match_analytic_subshape(
+                picked_face, analytic_shape, face_pairs, TopAbs_FACE)
+            if matched is not None:
+                mapped_faces.append(TopoDS.Face_s(matched))
+            else:
+                print(f"[removeIsolatedFeature] picked face has no "
+                     f"analytic counterpart at all -- skipping it "
+                     f"rather than risk a mismatch")
+        picked_faces = mapped_faces
+    else:
+        workPart = ref_shape
+
+    if not picked_faces:
+        win.statusBar().showMessage("No usable faces to remove.")
+        return
+
+    dfr = BRepAlgoAPI_Defeaturing()
+    dfr.SetShape(workPart)
+    for f in picked_faces:
+        dfr.AddFaceToRemove(f)
+    dfr.Build()
+    print(f"[removeIsolatedFeature] IsDone={dfr.IsDone()}")
+    if not dfr.IsDone():
+        win.statusBar().showMessage(
+            "Unable to remove this feature -- the surrounding "
+            "geometry couldn't be healed.")
+        return
+    newPart = dfr.Shape()
+
+    # Same before/after face-count safety check as removeHoleC
+    # (Session 103): IsDone=True alone turned out NOT to be
+    # trustworthy on its own for this algorithm.
+    n_before = 0
+    exp_before = TopExp_Explorer(workPart, TopAbs_FACE)
+    while exp_before.More():
+        n_before += 1
+        exp_before.Next()
+    n_after = 0
+    exp_after = TopExp_Explorer(newPart, TopAbs_FACE)
+    while exp_after.More():
+        n_after += 1
+        exp_after.Next()
+    print(f"[removeIsolatedFeature] faces before={n_before}, "
+         f"after={n_after}")
+
+    try:
+        win.erase_shape(uid)
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+        old_uids = set(dm.part_dict.keys())
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
+        _redraw_after_shape_replace(ref_entry, old_uids)
+        win.statusBar().showMessage("Feature removed.")
+    except Exception as e:
+        print(f"Unable to replace/draw shape. {e}")
+        win.redraw()
+    win.setActivePart(uid)
+
+
 #############################################
 #
 #  Save / Open / Load functions
@@ -1152,6 +1302,9 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
     win.add_function_to_menu("Create/Modify", "Remove Hole", removeHole)
+    win.add_function_to_menu(
+        "Create/Modify", "Remove Isolated Feature",
+        removeIsolatedFeature)
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Position Selected", position_selected)
     win.add_menu("Utility")

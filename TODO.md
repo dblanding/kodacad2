@@ -8,8 +8,6 @@
 
 ## To Do (by priority):
 
-* Chamfer
-
 * RMB on part in tree to set/edit part color (color picker?)
 
 * Box-select edges for filleting (eg.: OCC bottle)
