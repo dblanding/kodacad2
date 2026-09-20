@@ -214,6 +214,7 @@ class KodaViewport(QWidget):
         self.view = None
         self._display = None
         self._vc = AIS_ViewController()
+        self._configure_navigation_gestures()
         self._press_pos = None
         self._drag_distance = 0.0
         # Hover-move callbacks (Session 62, snap engine step 1).
@@ -588,6 +589,115 @@ class KodaViewport(QWidget):
 
     # ── Mouse (AIS_ViewController -- crash safe) ────────────────────────
 
+    def _configure_navigation_gestures(self):
+        """Doug's own navigation policy, made permanent (Session 106):
+        MMB controls all navigation, LMB is reserved for selection
+        and the position/move manipulator. Confirmed via live smoke
+        testing before landing here -- AIS_ViewController's own
+        gesture map, reconfigured via ChangeMouseGestureMap(), not a
+        hand-rolled reimplementation, per Doug's own stated
+        preference to let OCCT do as much of this as possible.
+
+        Two things learned the hard way during that testing, both
+        accounted for here:
+        - The map's own key type is a plain unsigned int, not the
+          Aspect_VKeyMouse enum directly -- passing the raw enum
+          caused a hard, native crash, not a catchable Python
+          exception. Every key here is explicitly int()-converted.
+        - AIS_ViewController keeps a SEPARATE gesture map specifically
+          for object-dragging, bound to LMB by its own constructor,
+          untouched by ChangeMouseGestureMap() -- a documented OCCT-
+          forum conflict where a rejected drag gesture fell back into
+          broken, partial rotation, matching what Doug saw directly
+          (LMB snapping to top view, then wiggling) before this was
+          found. KodaCAD's own manipulator/gizmo is already handled
+          entirely outside this controller (first refusal on LMB in
+          mousePressEvent, before anything reaches _vc), so
+          AIS_ViewController's own built-in object-drag was never
+          doing real work here -- SetAllowDragging(False) turns it
+          off globally, confirmed by Doug to remove the conflict:
+          LMB does nothing at all now, click or drag, while
+          selection (handled entirely outside this controller) and
+          the manipulator both still work normally.
+
+        Built defensively: each bind is independent and wrapped, so
+        a wrong guess on one gesture's exact name fails with a
+        printed warning rather than breaking startup or leaving
+        navigation silently, partially configured.
+
+        Requires _qt_modifiers_to_occt() (below) to actually be wired
+        into the mouse handlers for Ctrl+MMB/Shift+MMB to ever be
+        told apart from plain MMB during a live drag -- confirmed by
+        Doug's own testing that without it, every MMB+modifier
+        combination silently behaved identically to plain MMB.
+        """
+        from OCP.Aspect import (Aspect_VKeyMouse_LeftButton,
+                                Aspect_VKeyMouse_MiddleButton,
+                                Aspect_VKeyFlags_CTRL,
+                                Aspect_VKeyFlags_SHIFT)
+        key_lmb = int(Aspect_VKeyMouse_LeftButton)
+        key_mmb = int(Aspect_VKeyMouse_MiddleButton)
+        key_mmb_ctrl = key_mmb | int(Aspect_VKeyFlags_CTRL)
+        key_mmb_shift = key_mmb | int(Aspect_VKeyFlags_SHIFT)
+
+        gmap = self._vc.ChangeMouseGestureMap()
+
+        try:
+            rotate_gesture = gmap.Find(key_lmb)
+            pan_gesture = gmap.Find(key_mmb)
+        except Exception as e:
+            print(f"[nav-gestures] couldn't read default bindings: "
+                 f"{e} -- leaving navigation at stock defaults")
+            return
+
+        try:
+            gmap.UnBind(key_lmb)
+            gmap.Bind(key_mmb, rotate_gesture)
+            print(f"[nav-gestures] MMB -> rotate ({rotate_gesture})")
+        except Exception as e:
+            print(f"[nav-gestures] MMB rotate bind failed: {e}")
+
+        try:
+            gmap.Bind(key_mmb_ctrl, pan_gesture)
+            print(f"[nav-gestures] Ctrl+MMB -> pan ({pan_gesture})")
+        except Exception as e:
+            print(f"[nav-gestures] Ctrl+MMB pan bind failed: {e}")
+
+        try:
+            from OCP.AIS import AIS_MouseGesture_Zoom
+            gmap.Bind(key_mmb_shift, AIS_MouseGesture_Zoom)
+            print("[nav-gestures] Shift+MMB -> zoom")
+        except Exception as e:
+            print(f"[nav-gestures] Shift+MMB zoom bind failed: {e} "
+                 f"-- Shift+MMB will behave like plain MMB (rotate) "
+                 f"until this is revisited")
+
+        try:
+            self._vc.SetAllowDragging(False)
+            print("[nav-gestures] object-drag gesture disabled")
+        except Exception as e:
+            print(f"[nav-gestures] SetAllowDragging(False) failed: "
+                 f"{e}")
+
+    def _qt_modifiers_to_occt(self, qt_modifiers):
+        """Convert Qt keyboard modifiers to OCCT's Aspect_VKeyFlags
+        (Session 106, Doug's own navigation policy: Ctrl+MMB pans,
+        Shift+MMB zooms). Before this existed, mousePressEvent/
+        mouseMoveEvent/mouseReleaseEvent all hardcoded this argument
+        to 0 -- AIS_ViewController never learned a modifier was held,
+        regardless of what was actually true, confirmed directly by
+        Doug's own testing: Ctrl+MMB and Shift+MMB both behaved
+        identically to plain MMB (rotate), neither panned nor zoomed,
+        until this was wired in."""
+        from OCP.Aspect import (Aspect_VKeyFlags_CTRL,
+                                Aspect_VKeyFlags_SHIFT)
+        result = 0
+        if qt_modifiers & Qt.KeyboardModifier.ControlModifier:
+            result |= int(Aspect_VKeyFlags_CTRL)
+        if qt_modifiers & Qt.KeyboardModifier.ShiftModifier:
+            result |= int(Aspect_VKeyFlags_SHIFT)
+        return result
+
     def _qt_buttons_to_occt(self, qt_buttons):
         """Convert Qt mouse buttons to OCCT flags -- LMB/MMB only.
 
@@ -654,7 +764,7 @@ class KodaViewport(QWidget):
             self._manip_dragging = False
 
         pt = self._vec2i(event.position())
-        self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
+        self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
 
     def mouseMoveEvent(self, event):
@@ -715,7 +825,7 @@ class KodaViewport(QWidget):
                 self._manip_dragging = False
 
         pt = self._vec2i(event.position())
-        self._vc.UpdateMousePosition(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
+        self._vc.UpdateMousePosition(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
 
     def mouseReleaseEvent(self, event):
@@ -751,7 +861,7 @@ class KodaViewport(QWidget):
             return  # suppress the normal LMB click/selection handling
 
         pt = self._vec2i(event.position())
-        self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), 0, False)
+        self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
         if event.button() == Qt.MouseButton.LeftButton:
             if (self._press_pos is not None and
