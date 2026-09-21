@@ -172,13 +172,15 @@ def position_selected():
     """Open the Position dialog on the currently selected part/assembly.
 
     Pre-select an item in the tree first (same convention as the rest
-    of the tree-item action methods), then choose Position -> Position
-    Selected. See position_dialog.py for the dialog itself; this is
-    just the tree-selection -> dialog-launch glue, matching the
-    pattern the design PDF described (pre-select, then a single
-    dropdown menu item opens the dialog).
+    of the tree-item action methods), then choose Position -> Part/Asy
+    (formerly named "Position Selected" -- renamed, not moved, when
+    Workplane joined it as the Position menu's new first item). See
+    position_dialog.py for the dialog itself; this is just the
+    tree-selection -> dialog-launch glue, matching the pattern the
+    design PDF described (pre-select, then a single dropdown menu
+    item opens the dialog).
     """
-    item = win.itemClicked or win.treeView.currentItem()
+    item = win.treeView.currentItem() or win.itemClicked
     if not item:
         win.statusBar().showMessage(
             "Select a part or assembly in the tree, then choose Position.", 5000)
@@ -193,6 +195,39 @@ def position_selected():
     dlg = PositionDialog(win, dm, uid, name)
     dlg.show()
     win._position_dialog = dlg  # keep a reference so it isn't garbage collected
+
+
+def position_selected_wp():
+    """Open the Workplane Position dialog on the currently selected
+    workplane -- Position -> Workplane, the new first item, per
+    Doug's own wp-position.md proposal. Same tree-selection -> dialog-
+    launch pattern as position_selected() (Part/Asy), adapted for
+    workplanes: validated against win.wp_dict, a plain {uid: WorkPlane
+    object} dict, rather than dm.label_dict, since a workplane isn't
+    an OCAF label at all.
+    """
+    # currentItem() checked FIRST (Doug's own report, confirmed
+    # directly): win.itemClicked gets unconditionally overwritten by
+    # ANY tree click, including an unrelated item's visibility
+    # checkbox -- selecting the workplane, then toggling a part's
+    # show/hide, left itemClicked on the part while currentItem()
+    # correctly stayed on the workplane. Same fix applied to
+    # position_selected() (Part/Asy) below, same latent bug there too.
+    item = win.treeView.currentItem() or win.itemClicked
+    if not item:
+        win.statusBar().showMessage(
+            "Select a workplane in the tree, then choose Position.", 5000)
+        return
+    uid = item.text(1)
+    name = item.text(0)
+    if uid not in win.wp_dict:
+        win.statusBar().showMessage(f"'{name}' cannot be positioned.", 5000)
+        return
+
+    from wp_position_dialog import WpPositionDialog
+    dlg = WpPositionDialog(win, uid, name)
+    dlg.show()
+    win._wp_position_dialog = dlg  # keep a reference so it isn't garbage collected
 
 
 def wpOnFace(*args):
@@ -1306,7 +1341,8 @@ if __name__ == "__main__":
         "Create/Modify", "Remove Isolated Feature",
         removeIsolatedFeature)
     win.add_menu("Position")
-    win.add_function_to_menu("Position", "Position Selected", position_selected)
+    win.add_function_to_menu("Position", "Workplane", position_selected_wp)
+    win.add_function_to_menu("Position", "Part/Asy", position_selected)
     win.add_menu("Utility")
     win.add_function_to_menu(
         "Utility", "Undo/Redo count", show_undo_redo_count)

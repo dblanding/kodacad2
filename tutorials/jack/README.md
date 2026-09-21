@@ -3,7 +3,7 @@
 This one is primarily about the 2D sketch toolbar -- construction
 lines, construction circles, and the geometry tools that turn a
 layout into a real profile. We'll draw a jack-o'-lantern face on a
-practice workplane, one feature at a time, then -- as a bonus, once
+workplane, one feature at a time, then -- as a bonus, once
 the sketching itself is solid -- use that same face to carve an
 actual pumpkin.
 
@@ -22,10 +22,9 @@ Construction Element and Delete Geometry Element -- deliberately using
 more than one tool to build equivalent geometry (the two eyes), so the
 same result is reachable more than one way. The second half builds on
 the Bottle tutorial's own pull-then-heavily-fillet technique for a
-rounded, non-revolved form, and demonstrates Pull's multi-profile
-capability for real -- three separate closed profiles (nose, two eyes,
-mouth) all carved into the pumpkin in a single Apply, rather than one
-hole at a time.
+rounded, non-revolved form, then moves the workplane with the face
+features into position on the front of the pumpkin to demonstrate
+Pull's multi-profile capability to remove material from the pumkin.
 
 We'll be drawing with two kinds of lines throughout:
 * **Construction lines** -- the dotted magenta lines used to lay out
@@ -138,18 +137,19 @@ the nose's simpler one.*
 ## Building the pumpkin
 
 The face is done. From here, we build an actual pumpkin and carve
-this same face into it.
+the face into it.
 
 ## Step 4 -- Pull a square profile
 
+* Hide wp1. We'll use it later.
 * Create a new workplane at the origin, on the XY plane.
 * Create a square profile centered on the origin
     * Use the **Rectangle** tool to sketch a 300 mm square
-        *Eenter `-150, -150`, then `150, 150`.
+        * Enter `-150, -150`, then `150, 150`.
 
 ![Square Profile](imgs/j10.png)
 
-* RMB click on '/' and select **Create Empty Part**, name it 'pumpkin'.
+* RMB click on '/' in the tree and select **Create Empty Part**, name it 'pumpkin'.
 * Pull the profile: **Create/Modify -> Pull**
     * Operation: Add Material
     * Mode: Linear
@@ -193,38 +193,33 @@ tangent-bounded -- a deliberate, known limitation to work around
 rather than something the operation should be expected to succeed at
 here.*
 
-## Step 6 -- Sketch the face on the pumpkin itself
+## Step 6 -- Move workplane wp1 onto the front of the pumpkin
 
-* **Workplane -> On Face**: click the front rectangular face (the
-  workplane's own origin lands at that face's geometric center), then
-  the right rectangular face for the +U direction.
-* Rebuild the face profiles from Steps 1-3 on this new workplane,
-  starting with the nose's slot centered on the workplane's own
-  origin.
+* Click on wp1 (with the face features) to select it, so that it is highlighted in blue.
+    * In the menubar, click **Position -> Workplane**:
+    * Click the front rectangular face (the workplane's origin will land at that face's geometric center)
+    * Then click the right rectangular face for the +U direction.
+* wp1 should now be positioned on the front face of the pumpkin.
 
 ![Face Profiles Ready to Mill](imgs/j13.png)
 
-*Exercises: Workplane -> On Face as the anchor for a second full
-sketch pass, and reusing everything from Steps 1-3 in a real,
-practical context rather than just as a standalone practice exercise.*
+*Exercises: Position -> Workplane -> On Face to move the workplane created in Steps 1-3, into position to carve the Jack-O-Lantern.*
 
 ## Step 7 -- Cut the face into the pumpkin
 
-* Confirm the pumpkin part is set active in the tree, and that the workplane
-  holding the face profiles is the active workplane.
+* Right click on wp1 in the tree and set it active. It will now be highlighted in green.
+* Confirm the pumpkin part is set active (yellow) in the tree, and that the workplane with the face profiles is set active (green).
 * **Create/Modify -> Pull**
   * Operation: **Remove Material**
   * Mode: Linear
   * Direction: **-W**
   * Distance: 150
   * Click **✅ Done**
-* Hide (or delete) the workplane.
+* You can now hide (or delete) the workplane.
 
 ![Jack-o'-Lantern Complete](imgs/j14.png)
 
-*Exercises: Pull's multi-profile capability for real -- four
-separate closed profiles (the nose, both eyes, the mouth) all cut
-into the pumpkin in a single Apply, rather than one hole at a time.*
+*Exercises: Pull's multi-profile capability to remove material using four separate closed profiles.*
 
 ---
 
