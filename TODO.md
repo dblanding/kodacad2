@@ -6,27 +6,6 @@
 
 ---
 
-## To Do (by priority):
-
-* RMB on part in tree to set/edit part color (color picker?)
-
-* Box-select edges for filleting (eg.: OCC bottle)
-    * Claude: box-select for fillet edges is real and feasible — OCCT has rubber-band selection machinery — moderate effort, worth banking near the top of Misc, because picking twelve bottle edges one at a time is exactly the kind of friction this project exists to remove.
-
-* Multi-item select (from tree) for delete (using ctrl or shift key?)
-
-* Booleans (fuse, subtract, intersect)
-
-* Heal scars in solids that have been built progressively
-    * Claude: OCCT has `ShapeUpgrade_UnifySameDomain`, which exists precisely to merge same-domain faces and erase those lines. A one-afternoon smoke test could tell us whether healing is nearly free.
-
-* Implement abilty to create and save a 1x scale drawing view in printable format (for checking feature alignment w/ real parts)
-    * Workaround: Export the part in Step format and create the dwg in another app.
-
-* **Workplane → By 3 Points**: currently underused — no clear motivating use case yet. Possible future redesign, modeled on Creo's Pt-Pt-Pt method: 1st point = origin, 2nd point sets +U direction, 3rd point establishes the plane (+V direction). Not being touched until a real need for it turns up.
-
-* **Unshare** a part or assembly. Example: bearing-block_3 in lathe tutorial should be unshared prior to modifying it for a new purpose on the rotor-asy.
-
 ## Deferred (Not easily implemented)
 
 * View Cube is unresponsive when other operations are in use
