@@ -1087,10 +1087,11 @@ class KodaViewport(QWidget):
     def _center_pick_hover(self, x, y):
         """Move callback (Session 63, Doug's reassurance request):
         while vertex-center-pick mode is active AND Ctrl+Shift is
-        held AND the cursor is over a circular edge, show a CYAN
-        marker at its center -- the 3D twin of the 2D engine's
-        center-mode square. Registered once, permanently; a no-op
-        the rest of the time."""
+        held AND the cursor is over a circular edge, show a bright
+        orange marker at its center (Session 109: changed from cyan,
+        too low-contrast against typical part colors to see reliably)
+        -- the 3D twin of the 2D engine's center-mode square.
+        Registered once, permanently; a no-op the rest of the time."""
         if not getattr(self, "_vertex_center_pick_active", False):
             self._show_center_marker(None)
             return
@@ -1132,15 +1133,18 @@ class KodaViewport(QWidget):
                                       Quantity_TypeOfColor)
             from OCP.Prs3d import Prs3d_PointAspect
             from OCP.Aspect import Aspect_TypeOfMarker
-            cyan = Quantity_Color(
-                0.0, 0.85, 0.9,
-                Quantity_TypeOfColor.Quantity_TOC_RGB)  # matches the
-            # 2D engine's center-mode cyan exactly
+            bright_orange = Quantity_Color(
+                1.0, 0.5, 0.0,
+                Quantity_TypeOfColor.Quantity_TOC_RGB)  # Doug's own
+            # request: the 3D marker used to match the 2D engine's own
+            # cyan center-mode indicator exactly, but was hard to see
+            # against typical part colors -- deliberately diverges
+            # from the 2D engine now, on the 3D side only.
             if getattr(self, "_center_marker", None) is None:
                 pnt_ais = AIS_Point(Geom_CartesianPoint(center_pnt))
                 drawer = pnt_ais.Attributes()
                 asp = Prs3d_PointAspect(
-                    Aspect_TypeOfMarker.Aspect_TOM_PLUS, cyan, 2.5)
+                    Aspect_TypeOfMarker.Aspect_TOM_PLUS, bright_orange, 2.5)
                 drawer.SetPointAspect(asp)
                 pnt_ais.SetAttributes(drawer)
                 context.Display(pnt_ais, False)
@@ -1190,6 +1194,27 @@ class KodaViewport(QWidget):
         # space, with no pre-built vertex required. 3D operation
         # callbacks and highlight sync ignore extras via *args.
         click_xy = (x, y) if x is not None else None
+        # Session 109 fix (Doug's own report: 2-Points positioning
+        # stopped resolving ANY sub-shape pick at all -- not just
+        # circle centers, genuine 3D vertex picks too -- always
+        # landing on the whole solid instead). Root cause: Session
+        # 108's box-select work bound AIS_MouseGesture_SelectRectangle
+        # to LMB, which silently displaced whatever implicit click-
+        # to-select behavior AIS_ViewController used to provide on a
+        # plain click. Confirmed directly: MoveTo's own hover
+        # detection (HasDetected()/DetectedShape(), the same call the
+        # orange center-pick glyph already relies on) correctly found
+        # the right edge/vertex at the exact cursor position, while
+        # the context's own selection state disagreed -- two separate
+        # OCCT mechanisms, silently out of step since SelectRectangle
+        # took over LMB. Fixed by never trusting whichever gesture
+        # happened to run; forcing an explicit select from the last
+        # detection instead, every time -- standard OCCT: Select()
+        # with no args selects everything found in the last MoveTo.
+        try:
+            self.context.Select(True)
+        except Exception as e:
+            print(f"[on-click] explicit Select() failed: {e}")
         self.context.InitSelected()
         if self.context.MoreSelected():
             shape = self.context.SelectedShape()
