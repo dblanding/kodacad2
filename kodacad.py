@@ -744,18 +744,34 @@ def shell(event=None):
 
 
 def shellC(shapeList, *args):
-    """Callback (collector) for shell"""
+    """Callback (collector) for shell -- same ownership-check pattern
+    as filletC()/chamferC(), previously missing here (flagged during
+    the UI Interaction Policy review as a live example of exactly the
+    copy-paste drift that document's "promote helper functions" goal
+    was meant to prevent)."""
 
     win.lineEdit.setFocus()
+    uid = win.activePartUID
+    cached = win._display_prep_cache.get(uid)
+    ref_shape = cached[1] if cached is not None else win.activePart
+    ref_faces = list(Topology.Topo(ref_shape).faces()) \
+        if ref_shape is not None else []
     for shape in shapeList:
         try:
             face = TopoDS.Face_s(shape)
-            win.faceStack.append(face)
-            count = len(win.faceStack)
+        except Exception:
             win.statusBar().showMessage(
-                f"Face {count} selected. Add more faces or enter thickness + Enter.")
-        except Exception as e:
-            print(f"[shellC] not a face: {e}")
+                "Pick a face (not an edge or vertex).")
+            return
+        if not any(face.IsSame(f) for f in ref_faces):
+            win.statusBar().showMessage(
+                "Selected face(s) must be in Active Part.")
+            return
+        win.faceStack.append(face)
+    count = len(win.faceStack)
+    if count:
+        win.statusBar().showMessage(
+            f"Face {count} selected. Add more faces or enter thickness + Enter.")
     if win.faceStack and win.lineEditStack:
         shell()
 
