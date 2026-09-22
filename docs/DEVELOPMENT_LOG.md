@@ -6179,3 +6179,41 @@ Validated on real, demanding use, not just a repeat of the original test: the Ja
 ### Lesson for future development
 
 **A fix that compiles cleanly and matches the plan on paper can still be wrong in a way only a real test surfaces -- and the person running that test caught something the code review alone had missed.** The first version of this feature reused proven math, followed an established pattern, and introduced no new geometric computation at all -- and it silently destroyed real, user-created content on its very first genuine use. The bug was found not by more careful code review but by someone actually sketching something and watching it vanish. The correction that followed was also worth its own notice: Doug's mid-explanation check-in wasn't a sign the reasoning was wrong, only a deliberate pause to confirm it before trusting it further -- and both parties being willing to slow down and verify a plan in these terms, before either commits to it in code, is a large part of why the eventual fix held up cleanly on a genuinely harder test the first time it was tried.
+
+# Session 108: box-select for LMB -- a feature that had been waiting on the mouse-policy work to make room for it
+
+## Origin
+
+Doug's own recollection of an earlier assessment -- box-select for fillet edges is "real and feasible... OCCT has rubber-band selection machinery -- moderate effort" -- revisited now that LMB is actually free to use for it, Session 106's own navigation work having moved all of rotate/pan/zoom onto MMB specifically to make this possible. Doug's own, precise specification going in: window selection (fully-contained entities only) on a left-to-right drag, crossing selection (any overlap) on a right-to-left drag -- a real, standard CAD convention, not an invented one.
+
+## Confirmed better than expected, not just as expected
+
+Checked directly against OCCT's own forum archives before writing anything: `AIS_ViewController` already sets `SelectMgr_ViewerSelector::AllowOverlapDetection()` automatically, based on which direction the rubber-band was dragged -- matching Doug's own window/crossing distinction exactly, as native, built-in behavior. Not something to build; something already there. The entry point, confirmed the same way: `AIS_InteractiveContext::SelectRectangle()`.
+
+The actual gesture name needed direct, live verification rather than a guess -- `AIS_MouseGesture_RotateView` having already proven once that a plausible-sounding name can still be the wrong one (Session 106). Inspecting `OCP.AIS` directly confirmed `AIS_MouseGesture_SelectRectangle` genuinely exists (with `AIS_MouseGesture_SelectLasso` turning up alongside it, unused for now but worth knowing about later), along with the full, real `AIS_SelectionScheme` set (`Add`/`Remove`/`Replace`/`XOR`/...).
+
+## The gap that would have made a correct-looking result silently useless
+
+Binding the gesture and dragging a box produced a visible rubber-band immediately, in both directions -- but an early test on a real part showed no visible selection result at all, and it wasn't obvious whether that meant nothing had been selected or just nothing was visible. Investigating directly, rather than assuming either way, found the real issue: `_on_click()` -- the one function every existing tool's own pick-callback ultimately depends on -- is gated specifically on `self._drag_distance < self._drag_threshold`. A box-select drag is, by definition, well past that threshold, so `_on_click()` would never fire for it at all, regardless of whether `AIS_InteractiveContext`'s own selection state was being set correctly underneath. Looking right in the viewport would never have been enough on its own to mean it was actually usable by fillet or anything else.
+
+A direct, standalone query of the context's own current selection (`InitSelected()`/`MoreSelected()`/`SelectedShape()`, the exact same pattern `_on_click()` already used internally) settled the open question cleanly: a window-mode drag around the lower half of a real part's edges correctly reported exactly the four edges that were fully inside the box, both as a raw count and by their own reported shape type.
+
+## The bridge, and why it needed almost no new code
+
+`call_select_callbacks()` was confirmed to take a single shape only, wrapping it into a one-item list internally before handing it to whichever callback is currently registered -- meaning box-select's own result set (several shapes at once) was never going to fit that contract directly. The fix wasn't to change that function at all, but to call it once per selected shape from a new branch in `mouseReleaseEvent` -- a completed LMB drag, past the manipulator's own separate early-exit, can only ever be a finished box-select, since nothing else lives on plain LMB anymore. Delivered this way, several box-selected edges look, to `filletC` and every other existing tool, exactly like several separate individual clicks -- no changes needed to any of their own code, and their own, already-existing status-bar count messages ("Edge N selected...") kept working correctly as a direct, unplanned consequence, rather than needing new status-bar logic built specifically for this.
+
+Confirmed on real, repeated use: whole-part and half-part selections, both drag directions, feeding correctly into Fillet's own existing, unmodified workflow.
+
+## A visual discrepancy, deliberately left alone
+
+Doug's own, precise observation: box-selected edges shaded to a pale beige -- the color of bi-directional tree-selection highlighting -- rather than the bright cyan a normal single-click edge selection produces, even though the underlying selection data itself was confirmed completely correct (real edges, not "the whole part"). Likely explained by `SelectRectangle` running through a different internal highlighting pathway than `Select()` does, though the exact mechanism was never chased down. Left alone deliberately, on Doug's own call -- "nice, but not essential" -- with the existing, per-callback status-bar count serving as the practical substitute for visual confirmation.
+
+## Also landed this session
+
+The status bar's own line-edit field was claiming roughly half the available width purely from `QLineEdit`'s own default size hint, leaving longer status messages truncated. Constrained to a fixed 90px (confirmed by Doug as comfortable for its actual real-world use -- placing a rectangle corner at a value like `-150, -150` still fits) -- `QStatusBar` has no real notion of a percentage split, so capping the one widget that didn't need the room it was taking was the direct equivalent.
+
+Box-select itself landed as permanent, startup-level configuration in the same `_configure_navigation_gestures()` method Session 106 built -- no menu item to trigger anymore, confirmed working before being made permanent, matching that same, now well-established two-stage discipline.
+
+### Lesson for future development
+
+**A rubber-band box appearing exactly where you dragged it is genuinely strong evidence the gesture layer works -- and genuinely no evidence at all about whether the result reaches anything downstream.** The gap here wasn't in OCCT, and it wasn't in the selection logic Doug specified; it was in a single, pre-existing conditional -- `_on_click()`'s own drag-distance gate -- that had every reason to exist for its original purpose (telling a click apart from a rotate) and no way of knowing a second, unrelated purpose would one day depend on it staying open for something that was, by its very nature, always going to be a drag. Confirming the visible result and confirming the functional one turned out to be two separate questions with two separate, necessary answers, and treating a correct-looking screen as proof of the second would have shipped something that looked finished while quietly doing nothing at all for the tool it existed to serve.

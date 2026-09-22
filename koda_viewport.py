@@ -592,11 +592,12 @@ class KodaViewport(QWidget):
     def _configure_navigation_gestures(self):
         """Doug's own navigation policy, made permanent (Session 106):
         MMB controls all navigation, LMB is reserved for selection
-        and the position/move manipulator. Confirmed via live smoke
-        testing before landing here -- AIS_ViewController's own
-        gesture map, reconfigured via ChangeMouseGestureMap(), not a
-        hand-rolled reimplementation, per Doug's own stated
-        preference to let OCCT do as much of this as possible.
+        (including box-select, added Session 108) and the
+        position/move manipulator. Confirmed via live smoke testing
+        before landing here -- AIS_ViewController's own gesture map,
+        reconfigured via ChangeMouseGestureMap(), not a hand-rolled
+        reimplementation, per Doug's own stated preference to let
+        OCCT do as much of this as possible.
 
         Two things learned the hard way during that testing, both
         accounted for here:
@@ -640,38 +641,90 @@ class KodaViewport(QWidget):
         key_mmb_ctrl = key_mmb | int(Aspect_VKeyFlags_CTRL)
         key_mmb_shift = key_mmb | int(Aspect_VKeyFlags_SHIFT)
 
-        gmap = self._vc.ChangeMouseGestureMap()
-
+        # Session 107 fix (Doug's own report: the app couldn't start
+        # at all under cadquery-ocp-novtk 8.0.1.0.0 -- "TypeError:
+        # Unregistered type: NCollection_DataMap<unsigned int,
+        # AIS_MouseGesture, ...>", thrown from THIS exact, previously
+        # unprotected call, unconditionally at startup. This one call
+        # had been proven safe through extensive testing under
+        # 7.9.3.1.1, which is exactly why it was never wrapped like
+        # everything after it -- "proven safe under one OCP version"
+        # turned out not to mean "safe forever." Now wrapped like
+        # everything else in this method.
         try:
-            rotate_gesture = gmap.Find(key_lmb)
-            pan_gesture = gmap.Find(key_mmb)
+            gmap = self._vc.ChangeMouseGestureMap()
         except Exception as e:
-            print(f"[nav-gestures] couldn't read default bindings: "
-                 f"{e} -- leaving navigation at stock defaults")
-            return
+            print(f"[nav-gestures] ChangeMouseGestureMap() failed: "
+                 f"{e} -- leaving navigation at stock defaults "
+                 f"entirely (this OCP version may not support "
+                 f"reconfiguring it)")
+            gmap = None
 
-        try:
-            gmap.UnBind(key_lmb)
-            gmap.Bind(key_mmb, rotate_gesture)
-            print(f"[nav-gestures] MMB -> rotate ({rotate_gesture})")
-        except Exception as e:
-            print(f"[nav-gestures] MMB rotate bind failed: {e}")
+        if gmap is not None:
+            try:
+                rotate_gesture = gmap.Find(key_lmb)
+                pan_gesture = gmap.Find(key_mmb)
+            except Exception as e:
+                print(f"[nav-gestures] couldn't read default "
+                     f"bindings: {e} -- leaving navigation at stock "
+                     f"defaults")
+                gmap = None
 
-        try:
-            gmap.Bind(key_mmb_ctrl, pan_gesture)
-            print(f"[nav-gestures] Ctrl+MMB -> pan ({pan_gesture})")
-        except Exception as e:
-            print(f"[nav-gestures] Ctrl+MMB pan bind failed: {e}")
+        if gmap is not None:
+            try:
+                gmap.UnBind(key_lmb)
+                gmap.Bind(key_mmb, rotate_gesture)
+                print(f"[nav-gestures] MMB -> rotate "
+                     f"({rotate_gesture})")
+            except Exception as e:
+                print(f"[nav-gestures] MMB rotate bind failed: {e}")
 
-        try:
-            from OCP.AIS import AIS_MouseGesture_Zoom
-            gmap.Bind(key_mmb_shift, AIS_MouseGesture_Zoom)
-            print("[nav-gestures] Shift+MMB -> zoom")
-        except Exception as e:
-            print(f"[nav-gestures] Shift+MMB zoom bind failed: {e} "
-                 f"-- Shift+MMB will behave like plain MMB (rotate) "
-                 f"until this is revisited")
+            # Session 108 (Doug's own idea, confirmed feasible via
+            # OCCT's own forum before building anything: AIS_
+            # ViewController already sets SelectMgr_ViewerSelector::
+            # AllowOverlapDetection() automatically from rubber-band
+            # drag direction, left-to-right vs right-to-left --
+            # matching Doug's own window/crossing distinction exactly,
+            # native behavior needing no separate handling here).
+            # Confirmed working end to end on real use, not just in
+            # isolation: box-selecting edges feeds correctly into
+            # filletC's own existing, unmodified callback -- the
+            # actual delivery bridge lives in mouseReleaseEvent
+            # (below __init__), walking the resulting selection after
+            # a completed LMB drag and calling call_select_callbacks()
+            # once per shape, exactly matching what several separate
+            # individual clicks already produce.
+            try:
+                from OCP.AIS import AIS_MouseGesture_SelectRectangle
+                gmap.Bind(key_lmb, AIS_MouseGesture_SelectRectangle)
+                print("[nav-gestures] LMB -> box-select "
+                     "(window/crossing per drag direction)")
+            except Exception as e:
+                print(f"[nav-gestures] LMB box-select bind failed: "
+                     f"{e} -- LMB will do nothing on a drag until "
+                     f"this is revisited")
 
+            try:
+                gmap.Bind(key_mmb_ctrl, pan_gesture)
+                print(f"[nav-gestures] Ctrl+MMB -> pan "
+                     f"({pan_gesture})")
+            except Exception as e:
+                print(f"[nav-gestures] Ctrl+MMB pan bind failed: "
+                     f"{e}")
+
+            try:
+                from OCP.AIS import AIS_MouseGesture_Zoom
+                gmap.Bind(key_mmb_shift, AIS_MouseGesture_Zoom)
+                print("[nav-gestures] Shift+MMB -> zoom")
+            except Exception as e:
+                print(f"[nav-gestures] Shift+MMB zoom bind failed: "
+                     f"{e} -- Shift+MMB will behave like plain MMB "
+                     f"(rotate) until this is revisited")
+
+        # Independent of the gesture map entirely -- still worth
+        # attempting even if ChangeMouseGestureMap() itself failed
+        # above, since this addresses a separate problem (the
+        # manipulator/drag conflict) via its own, unrelated method.
         try:
             self._vc.SetAllowDragging(False)
             print("[nav-gestures] object-drag gesture disabled")
@@ -864,9 +917,30 @@ class KodaViewport(QWidget):
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
         if event.button() == Qt.MouseButton.LeftButton:
-            if (self._press_pos is not None and
-                    self._drag_distance < self._drag_threshold):
-                self._on_click(event.position().x(), event.position().y())
+            if self._press_pos is not None:
+                if self._drag_distance < self._drag_threshold:
+                    self._on_click(event.position().x(), event.position().y())
+                else:
+                    # LMB is bound to SelectRectangle only (Session
+                    # 108) -- no other gesture lives on plain LMB, so
+                    # any LMB drag reaching here (past the
+                    # manipulator's own, separate early-exit above)
+                    # can only be a completed box-select. Same
+                    # InitSelected()/MoreSelected()/SelectedShape()
+                    # pattern _on_click() already uses; each shape
+                    # delivered through call_select_callbacks()
+                    # individually -- its own, unmodified, single-
+                    # shape contract -- matching what several
+                    # separate individual clicks would already
+                    # produce, so every existing tool's own callback
+                    # (filletC and the rest) needs no changes at all,
+                    # including their own, already-existing status
+                    # bar count messages.
+                    self.context.InitSelected()
+                    while self.context.MoreSelected():
+                        shape = self.context.SelectedShape()
+                        self._display.call_select_callbacks(shape)
+                        self.context.NextSelected()
         elif event.button() == Qt.MouseButton.MiddleButton:
             if (self._press_pos is not None and
                     self._drag_distance < self._drag_threshold and

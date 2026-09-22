@@ -528,6 +528,13 @@ class MainWindow(QMainWindow):
 
         self.lineEdit = QLineEdit()
         self.lineEdit.returnPressed.connect(self.appendToStack)
+        # Doug's own report: status bar and line edit were splitting
+        # roughly 50/50, purely from QLineEdit's own default size
+        # hint -- far more than a short numeric entry (a radius, a
+        # distance, an angle) ever needs, and not enough left for
+        # longer status messages to display in full. Constrained
+        # explicitly so the message area claims the rest.
+        self.lineEdit.setMaximumWidth(90)
 
         status = self.statusBar()
         status.setSizeGripEnabled(False)

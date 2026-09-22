@@ -155,8 +155,12 @@ Then:
 
 * Set the new part active by RMB clicking it in the tree.
 * **Create/Modify -> Fillet**.
-* Select all 12 edges of the bottle, one at a time -- the status bar
-  acknowledges each one.
+* Select all 12 edges of the bottle
+  * You can click them one at a time -- the status bar
+  acknowledges each one that is selected.
+  * Or alternatively, you can box select them all at once. KodaCAD recognizes two different **Box Selection Modes**.
+    * If the mouse gesture starts on the left and ends on the right, only edges that are completely contained in the box are selected. This is called **window selection**.
+    * On the other hand, it the box is drawn using a mouse gesture that starts on the right and finishes on the left, any edge which is even partly inside the box is selected. This is called **crossing selection**.
 * Enter `3` as the radius.
 * **Check the tree: confirm the first workplane is still hidden.**
   Any modification rebuilds the tree, which is exactly the moment a
@@ -165,7 +169,7 @@ Then:
 
 ![Fillets](imgs/fillets.png)
 
-*Exercises: fillet's edge-ownership resolution at pick time; the
+*Exercises: both individual selection and box selection of edges for filleting, fillet's edge-ownership resolution at pick time; the
 sample-and-verify circumcenter fallback if any of these edges aren't
 typed as an analytic circle/line after display prep; workplane
 visibility surviving a modification -- a hidden workplane used to
