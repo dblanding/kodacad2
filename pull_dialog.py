@@ -317,7 +317,9 @@ class PullDialog(QDialog):
                                   click_xy[1], wp.gpPlane)
                 if uv is not None:
                     tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
-                    snap = find_snap(wp, uv, tol, current_snap_mode())
+                    hidden = win.activeWpUID in win.hide_list
+                    snap = find_snap(wp, uv, tol, current_snap_mode(),
+                                     hidden=hidden)
                     if snap is not None:
                         pt = uv_to_world(wp.gpPlane, snap[1][0],
                                          snap[1][1])
@@ -362,7 +364,10 @@ class PullDialog(QDialog):
             from snap_engine import find_snap, current_snap_mode, \
                 SNAP_PIXELS
             tol = abs(self.main_win.canvas.view.Convert(SNAP_PIXELS))
-            snap = find_snap(wp, uv, tol, current_snap_mode())
+            hidden = (self.main_win.activeWpUID
+                     in self.main_win.hide_list)
+            snap = find_snap(wp, uv, tol, current_snap_mode(),
+                             hidden=hidden)
         except Exception:
             return None
         if snap is None:

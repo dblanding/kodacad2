@@ -56,7 +56,8 @@ class M2D:
             except Exception:
                 tol = 1.0
             from snap_engine import current_snap_mode
-            snap = find_snap(wp, uv, tol, current_snap_mode())
+            hidden = self.win.activeWpUID in self.win.hide_list
+            snap = find_snap(wp, uv, tol, current_snap_mode(), hidden=hidden)
             if snap is None:
                 # NO CATCH -> NO POINT (Session 62, Doug's design
                 # principle -- the drafter's #6-pencil layout method:

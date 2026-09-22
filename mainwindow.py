@@ -2918,7 +2918,9 @@ class MainWindow(QMainWindow):
                         tol = abs(self.canvas.view.Convert(SNAP_PIXELS))
                     except Exception:
                         tol = 1.0
-                    snap = find_snap(wp, uv, tol, current_snap_mode())
+                    hidden = self.activeWpUID in self.hide_list
+                    snap = find_snap(wp, uv, tol, current_snap_mode(),
+                                     hidden=hidden)
                     if snap is not None:
                         pt = uv_to_world(wp.gpPlane, snap[1][0],
                                          snap[1][1])

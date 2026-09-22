@@ -156,7 +156,7 @@ def _on_arc(p, cntr, a0, a1, eps=1.0e-3):
     return rel <= (a1 - a0) + eps
 
 
-def find_snap(wp, uv, tol, mode="normal"):
+def find_snap(wp, uv, tol, mode="normal", hidden=False):
     """Best snap candidate near cursor uv within tol. Returns
     (kind, (u, v)) or None. Guarded per pair -- one degenerate
     entity can't kill the sweep.
@@ -167,7 +167,20 @@ def find_snap(wp, uv, tol, mode="normal"):
       intersections of the layout, not 'somewhere along' a line.
     - 'center' (Ctrl+Shift held, the CoCreate override): centers of
       circles/arcs (construction AND geometry) and MIDPOINTS of
-      straight geometry edges, EXCLUSIVELY."""
+      straight geometry edges, EXCLUSIVELY.
+
+    hidden (Session 109, Doug's own report -- and his own principle:
+    "if a workplane is hidden, nothing on it should be detectable"):
+    every one of this function's six call sites already operates on
+    win.activeWp specifically, and all six already have win in hand
+    at the point they call this -- so the caller passes whether that
+    workplane is CURRENTLY hidden (its own uid in win.hide_list), and
+    this one, single, shared guard is what actually enforces the
+    principle, rather than six separate copies of the same check.
+    Defaults to False so nothing breaks for any caller that hasn't
+    been updated to pass it explicitly."""
+    if hidden:
+        return None
     cands = []
     clines = list(getattr(wp, "clines", ()) or ())
     ccircs = list(getattr(wp, "ccircs", ()) or ())
@@ -464,7 +477,8 @@ class SnapHover:
             except Exception:
                 tol = 1.0
             mode = current_snap_mode()
-            snap = find_snap(wp, uv, tol, mode)
+            hidden = self.win.activeWpUID in self.win.hide_list
+            snap = find_snap(wp, uv, tol, mode, hidden=hidden)
             if snap is None:
                 if self._last is not None:
                     self._hide()

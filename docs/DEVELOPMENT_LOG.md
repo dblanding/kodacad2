@@ -6217,3 +6217,46 @@ Box-select itself landed as permanent, startup-level configuration in the same `
 ### Lesson for future development
 
 **A rubber-band box appearing exactly where you dragged it is genuinely strong evidence the gesture layer works -- and genuinely no evidence at all about whether the result reaches anything downstream.** The gap here wasn't in OCCT, and it wasn't in the selection logic Doug specified; it was in a single, pre-existing conditional -- `_on_click()`'s own drag-distance gate -- that had every reason to exist for its original purpose (telling a click apart from a rotate) and no way of knowing a second, unrelated purpose would one day depend on it staying open for something that was, by its very nature, always going to be a drag. Confirming the visible result and confirming the functional one turned out to be two separate questions with two separate, necessary answers, and treating a correct-looking screen as proof of the second would have shipped something that looked finished while quietly doing nothing at all for the tool it existed to serve.
+
+# Session 109: a short list of minor fixes, one of which was a real regression from the session before
+
+## Origin
+
+Doug's own short list, all genuinely independent: shellC's missing ownership check (flagged during the UI Interaction Policy review, never fixed until asked for directly), the 3D center-pick glyph's own visibility, and a live report of Pull's Angular-mode axis-picking design (which Doug himself deferred, on reflection that his notes weren't fresh -- revisited nothing further this session). A fourth item emerged only through testing the third: 2-Points positioning silently broken for genuine 3D picks entirely.
+
+## Fix 1: shellC's missing ownership check
+
+The same inline pattern filletC/chamferC/removeHoleC/removeIsolatedFeatureC already use -- collect the active part's own faces via Topology.Topo(...).faces(), reject any picked face that isn't IsSame() as one of them. shellC never had this at all; a stray pick from any other visible part would have silently shelled the wrong geometry. Matched the existing, established pattern rather than extracting a new shared helper this session -- Doug asked for a fix, not a refactor, though the repetition across five near-identical copies is worth returning to deliberately at some point.
+
+## Fix 2: the center-pick glyph's own color
+
+Doug's own report: the 3D Ctrl+Shift circle/arc-center marker, cyan by original design (deliberately matching the 2D sketch engine's own center-mode indicator), was hard to see against typical part colors. Changed to bright orange (RGB 1.0, 0.5, 0.0), on Doug's own suggestion -- a small, deliberate divergence from the 2D engine now, on the 3D side only, confirmed by Doug as a clear improvement.
+
+## Fix 3, attempted: Pull's Angular-mode axis-picking redesign -- deferred, not fixed
+
+Doug's own recollection, from notes jotted down earlier: replace the current two-point axis pick with picking a single line on the workplane instead. Worth surfacing directly before building anything: the code's own comment records that this exact approach was already tried once, and specifically abandoned, because a construction line's own direction is genuinely, mathematically arbitrary -- stored as bare (a, b, c) coefficients, with no "which way it points" encoded at all. A profile edge is different (a real, directed TopoDS_Edge, built from an ordered start point to an end point matching how it was actually drawn), and Doug's own, separate remark -- he'd only ever use profile geometry for anything that needs to double as a real 3D reference, illustrated by a semicircle-plus-diameter-line revolve profile -- suggests that distinction may be exactly what resolves it. Doug's own call: revisit with fresh eyes rather than commit from notes that didn't feel current. No code changed for this item.
+
+## Fix 4 (unplanned): 2-Points positioning silently broken for every genuine 3D sub-shape pick
+
+Discovered only while live-testing fix 3's own axis-picking mechanics on a real assembly (as1-oc-214): Ctrl+Shift-clicking two adjacent bolt-head centers for a 2-Points move produced the orange glyph correctly, then failed outright -- "No catch or vertex there." Doug's own further testing narrowed this immediately and precisely: not circle-centers specifically, ANY genuine 3D vertex pick, at all.
+
+Diagnosed directly rather than guessed at, in stages:
+- First hypothesis (position_dialog.py's own vertex-resolution logic) ruled out cleanly: the code path that's SUPPOSED to synthesize a vertex at a circle's center was reached correctly, `_vertex_center_pick_active` was genuinely True, and the mechanism that produces the glyph was confirmed shared with (not separate from) the one meant to feed the actual pick.
+- The real finding: the shape actually delivered to `_on_click()` wasn't an edge at all -- it was the whole SOLID. Confirmed with a direct, side-by-side diagnostic: `context.DetectedShape()` (hover, the same call driving the glyph) correctly reported EDGE at the exact cursor position; `context.SelectedShape()` (the actual click result) reported SOLID, at the same instant.
+- Root cause: Session 108's own box-select work bound `AIS_MouseGesture_SelectRectangle` to plain LMB -- which, confirmed by testing an explicit `context.Select(True)` call directly, had silently displaced whatever implicit click-to-select behavior `AIS_ViewController` provided before that binding existed. A near-stationary click is, mechanically, still a (vanishingly small) rectangle; its own overlap-based selection logic was resolving differently against a solid than a precise, single-ray pick ever had.
+
+Fixed with one line, in one place: `_on_click()` -- the single handler every tool in the app already funnels plain-click picking through -- now calls `context.Select(True)` explicitly before ever reading the selection state, rather than trusting whichever gesture happened to run underneath it. One fix, landing everywhere plain-click picking is used at once, not just in "2 Points."
+
+Doug's own closing theory -- "I was trying to hold the mouse very very steady, maybe that was the difference" -- was worth correcting directly rather than letting stand: the fix was the explicit `Select()` call, not technique. No amount of steadiness would have helped before that line existed, since the underlying selection was already wrong regardless of how the click itself was performed.
+
+## Fix 5 (Doug's own follow-up, same session): hidden workplanes remained fully detectable
+
+Doug's own, separate, older memory resurfaced directly by this session's testing: catch points on a workplane stayed pickable even after hiding it -- construction-line intersections, circle centers, all of it -- and Doug recalled unexplained "wiggling" catch points from past sessions he was never able to reproduce, now suspected of sharing this same cause.
+
+Root cause, confirmed by reading the code directly rather than assumed: visibility (`hide_list`, checked only by display/redraw code) and snap-catching (`find_snap()`, which searches a workplane's own stored geometry directly, by object reference, with zero visibility awareness at all) were two entirely separate systems that had simply never been connected. Hiding a workplane only ever stopped it from being drawn; the geometry itself, and every catch point on it, remained fully live and searchable the entire time.
+
+Found to span six separate call sites across five files (the 2D sketch engine, general measurement tools, "2 Points" positioning, two spots inside Pull, and the generic hover-marker tracker that produces the catch glyph itself) -- exactly the shape of bug most likely to get a real fix in one place and an accidental gap in another. Fixed at the root instead: `find_snap()` itself gained one new, optional `hidden` parameter, checked first, before touching any stored geometry at all. Each of the six callers -- all of which already had direct access to `win` one way or another -- was given one small, mechanical, one-line addition (compute whether the active workplane's own uid is in `hide_list`, pass it in) rather than six separate copies of the real logic. Confirmed fixed by Doug directly, repeating his own original test.
+
+### Lesson for future development
+
+**The same session that fixes one thing can just as easily break another, and the two are often nowhere near each other in the code.** Session 108's box-select work was thoroughly tested on its own terms -- gesture binding confirmed, selection delivery confirmed, real use on a real part confirmed -- and every one of those confirmations was genuinely true. None of that testing ever happened to include a plain, ordinary click on a part's own sub-shape geometry, because nothing about that session's own goal pointed there. The regression this session found wasn't a gap in how carefully Session 108 was tested; it was a gap in what there was ever a reason to test, given what that session was actually about. Doug's own instinct to keep testing broadly, on unrelated real work, rather than narrowly re-confirming only what was just built, is what actually caught this -- not any specific test that was owed to box-select itself.
