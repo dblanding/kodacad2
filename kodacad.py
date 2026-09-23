@@ -139,23 +139,66 @@ def wpByPtDir(*args):
 
 def wpByPtDirC(shapeList, *args):
     """Callback (collector) for wpByPtDir -- mixed vertex/face pick,
-    switching selection mode itself between steps."""
+    switching selection mode itself between steps.
 
-    if not shapeList:
-        return
+    Step 1 (Doug's own report, Session 110): only ever accepted a
+    genuine 3D vertex, never a workplane catch (an intersection,
+    endpoint, etc.) -- unlike position_dialog.py's own
+    _point_pick_callback / pull_dialog.py's _axis_pick_callback,
+    which both try the engine path (a workplane catch) FIRST and
+    only fall back to a 3D vertex. This function predates that
+    established pattern (Session 63) and was simply never brought up
+    to match it -- not a regression, a pre-existing gap. Fixed to use
+    the same, now-standard order, including the hidden-workplane
+    check (Session 109)."""
+
     if not win.ptStack:
-        # step 1: a vertex
+        # step 1: engine path (a workplane catch) first, genuine 3D
+        # vertex as fallback -- same order as position_dialog.py /
+        # pull_dialog.py.
+        pt = None
         try:
-            vrtx = TopoDS.Vertex_s(shapeList[0])
-        except Exception:
+            click_xy = args[1] if len(args) > 1 else None
+            wp = win.activeWp
+            if (click_xy is not None and click_xy[0] is not None
+                    and wp is not None):
+                from snap_engine import (screen_to_uv, find_snap,
+                                         uv_to_world, SNAP_PIXELS,
+                                         current_snap_mode)
+                uv = screen_to_uv(win.canvas.view, click_xy[0],
+                                  click_xy[1], wp.gpPlane)
+                if uv is not None:
+                    try:
+                        tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
+                    except Exception:
+                        tol = 1.0
+                    hidden = win.activeWpUID in win.hide_list
+                    snap = find_snap(wp, uv, tol, current_snap_mode(),
+                                     hidden=hidden)
+                    if snap is not None:
+                        pt = uv_to_world(wp.gpPlane, snap[1][0],
+                                         snap[1][1])
+        except Exception as e:
+            print(f"[wpByPtDirC] engine path failed: {e}")
+        if pt is None and shapeList:
+            try:
+                vrtx = TopoDS.Vertex_s(shapeList[0])
+                pt = BRep_Tool.Pnt_s(vrtx)
+            except Exception:
+                pass
+        if pt is None:
+            win.statusBar().showMessage(
+                "No catch or vertex there -- click a workplane catch "
+                "or a part vertex.", 3000)
             return
-        gpPt = BRep_Tool.Pnt_s(vrtx)
-        win.ptStack.append(gpPt)
+        win.ptStack.append(pt)
         display.SetSelectionModeFace()
         win.statusBar().showMessage(
             "Click a face to set the +W direction.")
         return
     # steps 2 and 3: faces
+    if not shapeList:
+        return
     try:
         face = TopoDS.Face_s(shapeList[0])
     except Exception:
