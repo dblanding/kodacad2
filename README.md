@@ -54,17 +54,18 @@ same XDE root label.
 KodaCAD uses [uv](https://github.com/astral-sh/uv) for dependency
 management. No Conda required.
 
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Clone the repo
+* [Install uv](https://docs.astral.sh/uv/getting-started/installation) if you don't have it
+
+* Clone this repo
+```
 git clone https://github.com/dblanding/kodacad2
 cd kodacad2
-
-# Run directly -- uv handles all dependencies automatically
-uv run kodacad.py
 ```
+
+* Run directly -- uv handles all dependencies automatically
+`uv run kodacad.py`
+
 
 Dependencies (managed automatically by uv):
 - `ocp` -- OCCT Python bindings (replaces PythonOCC)
