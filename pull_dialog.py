@@ -17,16 +17,17 @@ the same, already-verified fix from the Session 90/91 empty-part
 investigation, carried into the dialog meant to be its permanent home
 rather than re-proven from scratch.
 
-Angular mode's axis-picking ("Select Axis") picks two points -- tail,
-then head -- reusing position_dialog.py's own proven "2 Points"
-pattern exactly (engine-path-first: a workplane catch becomes a world
-point; a genuine 3D vertex is the fallback). The second point gives
-the user explicit control over which way a positive angle rotates
-(the right-hand rule), rather than an implicit sign derived from a
-single picked line -- an earlier, single-cline-pick design was tried
-and replaced after Doug's own live testing found exactly this
-ambiguity. Hover feedback on both picks reuses mainwindow's own
-_preview_start_meas/_pick_marker mechanism directly (already used by
+Angular mode's axis-picking ("Define Axis (2 points)") picks two
+points -- tail, then head -- reusing position_dialog.py's own proven
+"2 Points" pattern exactly (engine-path-first: a workplane catch
+becomes a world point; a genuine 3D vertex is the fallback). The
+second point gives the user explicit control over which way a
+positive angle rotates (the right-hand rule), rather than an implicit
+sign derived from a single picked line -- an earlier, single-cline-pick
+design was tried and replaced after Doug's own live testing found
+exactly this ambiguity. Hover feedback on both picks reuses
+mainwindow's own _preview_start_meas/_pick_marker mechanism directly
+(already used by
 radMeasC/angMeasC for the same purpose) -- confirmed mainwindow-
 native, not a2d-toolset-only, so no reimplementation was needed for
 this part at all. Direction (+W/-W) is deliberately absent from
@@ -40,8 +41,8 @@ Layout follows the spec's own 4-section structure:
     Top:           Active Part / Active Workplane (bold, read-only)
     Upper Middle:  "Method" -- Operation / Mode
     Lower Middle:  unlabeled, swaps with Mode -- Linear: Direction,
-                   then Distance. Angular: Angle + Select Axis, no
-                   Direction control at all.
+                   then Distance. Angular: Angle + Define Axis (2
+                   points), no Direction control at all.
     Bottom:        one '\u2705 Done' button only -- no Reverse/Back,
                    no Keep WP/Keep Prof (Doug: shortcuts, not needed
                    yet)
@@ -168,7 +169,7 @@ class PullDialog(QDialog):
         self.angle_edit.setPlaceholderText("e.g. 90")
         angle_row.addWidget(self.angle_edit)
         angular_lay.addLayout(angle_row)
-        self.select_axis_btn = QPushButton("Select Axis")
+        self.select_axis_btn = QPushButton("Define Axis (2 points)")
         self.select_axis_btn.clicked.connect(self._start_axis_pick)
         angular_lay.addWidget(self.select_axis_btn)
         self.axis_status_label = QLabel("No axis selected.")
@@ -208,7 +209,7 @@ class PullDialog(QDialog):
             0 if self.linear_radio.isChecked() else 1)
         if self.angular_radio.isChecked():
             self.main_win.statusBar().showMessage(
-                "Enter an angle, then click Select Axis.", 5000)
+                "Enter an angle, then click Define Axis (2 points).", 5000)
 
     def _dist_changed(self, text):
         # Spec: "acknowledge value entered, prompt user to click
@@ -402,7 +403,7 @@ class PullDialog(QDialog):
 
         if angular:
             if self._picked_axis is None:
-                self._say("Select an axis first (click Select Axis).")
+                self._say("Select an axis first (click Define Axis (2 points)).")
                 return
             try:
                 angle_deg = float(self.angle_edit.text())
