@@ -145,8 +145,9 @@ confirm this one is *still* unchecked, not silently re-shown.)
 
 A few ways to adjust the viewport at any point:
 
-* LMB drag to rotate
-* MMB drag to pan
+* MMB drag to rotate
+* ctrl+MMB drag to pan
+* shift+MMB drag to zoom
 * RMB in the viewport -> **Draw -> Fit** to zoom to fill the viewport
 * Click a face, edge, or corner of the ViewCube (only works when no
   operation is currently active)

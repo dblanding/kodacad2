@@ -137,33 +137,6 @@ WP              ← workplanes (2D construction geometry)
   Create New Assembly, Create Shared Instance, Set Transparent,
   Set Opaque, Delete
 
-### Creating a new part (Creo-style workflow)
-
-1. **Workplane → On Face** — click a face in the viewport to place a
-   workplane, then click a second face for the U direction
-2. Draw a profile using the toolbar (H/V clines, circle, rectangle,
-   line, arc)
-3. **Create 3D → Extrude** — enter extrusion length and part name
-4. The new part appears under `/` in the tree
-5. **Drag** the new part onto the target assembly in the tree
-6. Because KodaCAD uses shared instances, the part appears in ALL
-   instances of the target assembly simultaneously
-
-### Modifying parts
-
-**Modify Active Part → Fillet**
-1. Right-click part in tree → Set Active
-2. Modify Active Part → Fillet
-3. Click edges in the viewport
-4. Enter radius, press Enter
-
-Because KodaCAD modifies the XDE prototype shape, all instances of the
-modified part update simultaneously.
-
-**Modify Active Part → Mill, Pull, Fillet, Shell**
-Same workflow -- Set Active, choose operation, select geometry, enter
-parameters.
-
 ---
 
 ## Tutorials
@@ -198,7 +171,7 @@ what it exercises in KodaCAD's own code.
   a full workout of the 2D sketch toolbar building a jack-o'-lantern
   face, then reusing the OCC Bottle's extrude-then-heavily-fillet
   technique to carve that same face into a pumpkin with a real,
-  multi-profile Mill operation.
+  multi-profile Pull operation.
 
 ## Tested workflows
 
@@ -213,7 +186,10 @@ what it exercises in KodaCAD's own code.
 ### Create and place a new part
 1. Load `as1-oc-214.stp`
 2. Place workplane on top face of right L-bracket
-3. Draw 5mm circle, extrude 3mm, name "button"
+3. Create a new part
+    * RMB click on '/' iin tree; select "Create Empty Part"; name "button"
+    * Draw 5mm circle on workplane
+    * **Creare/Modify -> Pull**; Distance: 3mm
 4. Button appears under `/` alongside `as1`
 5. Drag button to `l-bracket-assembly_2`
 6. Button appears in BOTH L-bracket assemblies (shared instance)
