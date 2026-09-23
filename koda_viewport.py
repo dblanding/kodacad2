@@ -437,7 +437,8 @@ class KodaViewport(QWidget):
 
     # ── AIS_Manipulator ("Dynamic" Position method) ─────────────────────
 
-    def attach_manipulator(self, leaf_shapes, move_callback=None, done_callback=None):
+    def attach_manipulator(self, leaf_shapes, move_callback=None,
+                           done_callback=None, translate_only_axis=None):
         """Attach an AIS_Manipulator gizmo to the first of leaf_shapes
         (the rest move in lockstep during drag -- see mouseMoveEvent).
 
@@ -449,6 +450,18 @@ class KodaViewport(QWidget):
         (mouse release), with the final delta. Used to actually apply
         the move via dm.set_component_location(), same as every other
         Position method.
+
+        translate_only_axis (Session 111, clip-plane dragging): when
+        given (0, 1, or 2), ALSO disables rotation on all three axes
+        and translation on the other two -- leaving only a single,
+        straight-line drag along that one axis. None (the default)
+        leaves existing callers (Dynamic part positioning) completely
+        unchanged: full rotate + translate, no scaling/plane-
+        translation, exactly as before this parameter existed.
+        CONFIRMED via live testing that this constraint must be
+        applied BEFORE Attach()/Display() -- applying it afterward, as
+        a separate, later step, visibly does nothing at all; the
+        gizmo's own visual parts are built once, at display time.
         """
         self.detach_manipulator()  # clean up any existing one first
 
@@ -470,9 +483,10 @@ class KodaViewport(QWidget):
             manip = AIS_Manipulator()
             manip.SetModeActivationOnDetection(True)
 
-            # Disable scaling handles -- translate + rotate only.
-            # CONFIRMED (previously guessed and wrong): AIS_MM_Scaling
-            # is a top-level member of the separate AIS_ManipulatorMode
+            # Disable scaling handles AND plane-translation handles --
+            # translate (axis-constrained) + rotate only. CONFIRMED
+            # (previously guessed and wrong): AIS_MM_Scaling is a
+            # top-level member of the separate AIS_ManipulatorMode
             # enum, not an attribute of the AIS_Manipulator class --
             # every name in the old try/except guess-loop
             # ("Scaling"/"Scale"/"AIS_MM_Scaling" as attributes of
@@ -480,9 +494,28 @@ class KodaViewport(QWidget):
             # never actually disabled. This is very likely why the
             # Dynamic gizmo has been seen inducing scaling as well as
             # rotation -- see docs/DEVELOPMENT_LOG.md, Session 39.
-            from OCP.AIS import AIS_MM_Scaling
+            #
+            # AIS_MM_TranslationPlane added Session 111 -- found and
+            # confirmed while building the section-view clip plane's
+            # own draggable gizmo: small, shaded quarter-arc "drag
+            # within this plane" handles, cluttering the presentation
+            # and interfering with cleanly picking the actual
+            # translation arrows. Never disabled here either, so this
+            # same clutter has very likely been present on the
+            # Dynamic part-positioning gizmo the whole time too --
+            # just never diagnosed until the clip-plane work made it
+            # obvious.
+            from OCP.AIS import AIS_MM_Scaling, AIS_MM_TranslationPlane
             for axis in range(3):
                 manip.SetPart(axis, AIS_MM_Scaling, False)
+                manip.SetPart(axis, AIS_MM_TranslationPlane, False)
+
+            if translate_only_axis is not None:
+                from OCP.AIS import AIS_MM_Rotation, AIS_MM_Translation
+                for axis in range(3):
+                    manip.SetPart(axis, AIS_MM_Rotation, False)
+                    if axis != translate_only_axis:
+                        manip.SetPart(axis, AIS_MM_Translation, False)
 
             manip.Attach(self._manip_leaf_shapes[0])
             self.context.Display(manip, False)

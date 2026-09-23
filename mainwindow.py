@@ -490,6 +490,9 @@ class MainWindow(QMainWindow):
         self.wgToolBar = QToolBar("2D")  # Geom Profile toolbar
         self.addToolBar(Qt.RightToolBarArea, self.wgToolBar)
         self.wgToolBar.setMovable(True)
+        self.sectionViewToolBar = QToolBar("Section View")
+        self.addToolBar(Qt.RightToolBarArea, self.sectionViewToolBar)
+        self.sectionViewToolBar.setMovable(True)
         self.menu_bar = self.menuBar()
         self._menus = {}
         self._menu_methods = {}

@@ -1357,6 +1357,312 @@ def setUnits_mm():
     win.setUnits("mm")
 
 
+def _scene_bbox_center():
+    """World-space (x, y, z) center of every currently displayed
+    part's own bounding box, or (0, 0, 0) if nothing's displayed.
+    Confirmed live (Doug's own test, as1-oc-214.stp): extents matched
+    the model's own known proportions exactly (X, the rod's own
+    length direction, clearly the largest). Same logic as the
+    now-removed Scene BBox Inspect smoke test, made permanent."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    bbox = Bnd_Box()
+    for uid, ais in win.ais_shape_dict.items():
+        try:
+            BRepBndLib.Add_s(ais.Shape(), bbox)
+        except Exception as e:
+            print(f"[section-view] bbox: uid={uid} failed: {e}")
+    if bbox.IsVoid():
+        return (0.0, 0.0, 0.0)
+    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+    return ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
+
+
+def set_section_view_mode(mode):
+    """Apply a section-view configuration -- Doug's own confirmation,
+    reading the CAD Assistant screenshot's tooltip list: the first
+    six options (Off, DX, DY, DZ, 2 planes, 3 planes) are mutually
+    exclusive, "what we used to call radio buttons" -- not six
+    independent toggles. Removes whatever's currently active first,
+    then builds the new configuration, if any -- only one mode is
+    ever live at a time.
+
+    'off', 'x', 'y', and 'z' are built so far -- 'xy' (2 planes) and
+    'xyz' (3 planes) are the next step, once confirmed working
+    individually. Each new plane is now centered on the currently
+    displayed geometry's own bounding box (Session 112), matching CAD
+    Assistant -- previously a fixed coordinate-plane-through-origin
+    placeholder, which only ever looked centered by coincidence for
+    models that happened to sit near the world origin already. Drag-
+    to-reposition is separate again, real application-level
+    integration on top of this, not a single ready-made OCCT class
+    (confirmed by research before any of this was built).
+
+    Reversed normal, capping, and visibility toggle (Doug's own
+    reading of the same screenshot) are NOT part of this exclusive
+    group at all -- they apply ON TOP OF whichever mode is active.
+    Capping and visibility are both built now, applied here on every
+    mode change so switching axes preserves whatever state was
+    already set, rather than silently reverting either one. Reversed
+    normal isn't built yet."""
+    from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+    from OCP.Graphic3d import Graphic3d_ClipPlane
+
+    existing = getattr(win, "_section_clip_planes", [])
+    for plane in existing:
+        try:
+            win.canvas.view.RemoveClipPlane(plane)
+        except Exception as e:
+            print(f"[section-view] remove failed: {e}")
+    win._section_clip_planes = []
+
+    _AXIS_NORMALS = {
+        # X and Z reversed from the "obvious" +axis normal (Doug's own
+        # live observation, Session 111): with KodaCAD2's default
+        # Top-Front-Right isometric startup view, the geometric +X/+Z
+        # normal clips away the FAR side, leaving the NEAR side
+        # blocking the view of the cut -- backwards from what a
+        # section view is for. Y already clipped the near side
+        # correctly as-is and was left alone.
+        "x": gp_Dir(-1, 0, 0),
+        "y": gp_Dir(0, 1, 0),
+        "z": gp_Dir(0, 0, -1),
+    }
+    if mode in _AXIS_NORMALS:
+        try:
+            cx, cy, cz = _scene_bbox_center()
+            plane_geom = gp_Pln(gp_Pnt(cx, cy, cz), _AXIS_NORMALS[mode])
+            clip_plane = Graphic3d_ClipPlane(plane_geom)
+            clip_plane.SetOn(True)
+            win.canvas.view.AddClipPlane(clip_plane)
+            win._section_clip_planes = [clip_plane]
+        except Exception as e:
+            print(f"[section-view] {mode.upper()} clip plane failed: {e}")
+    elif mode != "off":
+        print(f"[section-view] mode {mode!r} not yet built")
+
+    win.canvas.view.Redraw()
+    _apply_section_capping()
+    _update_clip_visibility()
+
+
+def _update_clip_visibility():
+    """Keep the clip plane's own drag gizmo in sync with whether
+    visibility is toggled on AND whether a plane is currently active.
+    Called both when the visibility button itself is toggled, and
+    whenever the mode changes (set_section_view_mode) -- so switching
+    from Z to X while visibility is on rebuilds the gizmo to match X
+    rather than leaving it stale on Z, and switching to Off removes
+    it entirely, since there's nothing to drag with no plane active.
+
+    Session 112 (Doug's own idea, after the underlying clip mechanism
+    checked out clean via direct diagnostic -- construction was
+    identical and correct for X/Y/Z alike, the "planes weren't there"
+    report turned out to be a viewing-angle issue, not a bug):
+    dropped the translucent, filled-face visual entirely. The
+    manipulator only ever needed SOME AIS_Shape to attach to for
+    tracking position -- not a visible square representing "the
+    plane" -- and CAD Assistant itself has no separate plane visual
+    at all, just the draggable gizmo. Attaches to a minimal vertex
+    marker at the plane's own center instead.
+
+    Drag-sync logic (move/done callbacks, translate_only_axis=2, the
+    live Graphic3d_ClipPlane update) is unchanged -- proven correct
+    independently of what the manipulator's own leaf shape looks
+    like."""
+    # Always start clean.
+    win.canvas.detach_manipulator()
+    visual = getattr(win, "_section_clip_visual", None)
+    if visual is not None:
+        try:
+            win.canvas.context.Erase(visual, True)
+        except Exception as e:
+            print(f"[section-view] visual erase failed: {e}")
+        win._section_clip_visual = None
+
+    if (not getattr(win, "_section_clip_visible", False)
+            or not getattr(win, "_section_clip_planes", [])):
+        return
+
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.AIS import AIS_Shape
+
+    planes = win._section_clip_planes
+    try:
+        gp_pln = planes[0].ToPlane()
+        center = gp_pln.Position().Location()
+        marker_shape = BRepBuilderAPI_MakeVertex(center).Vertex()
+        ais_shape = AIS_Shape(marker_shape)
+        win.canvas.context.Display(ais_shape, False)  # redraw deferred
+        # to attach_manipulator's own UpdateCurrentViewer() call, same
+        # pattern it already uses for the gizmo itself
+        win._section_clip_visual = ais_shape
+    except Exception as e:
+        print(f"[section-view] marker build failed: {e}")
+        return
+
+    win._section_clip_drag_orig_pln = planes[0].ToPlane()
+    attached = win.canvas.attach_manipulator(
+        [win._section_clip_visual],
+        move_callback=_clip_plane_drag_update,
+        done_callback=_clip_plane_drag_update,
+        translate_only_axis=2)
+    if attached:
+        ax3 = gp_pln.Position()
+        origin = ax3.Location()
+        w_dir = ax3.Direction()
+        u_dir = ax3.XDirection()
+        win.canvas.reposition_manipulator(
+            (origin.X(), origin.Y(), origin.Z()),
+            (w_dir.X(), w_dir.Y(), w_dir.Z()),
+            (u_dir.X(), u_dir.Y(), u_dir.Z()))
+
+
+def _clip_plane_drag_update(delta_trsf):
+    """Shared by move and done callbacks: reposition the ACTUAL
+    Graphic3d_ClipPlane (not just the visual face) by the delta
+    accumulated since the drag started, keeping the same normal.
+    delta_trsf is the WORLD-space total delta so far (not
+    incremental), per attach_manipulator's own documented contract --
+    always computed fresh from the captured drag-start plane, so
+    repeated calls during one drag can't drift."""
+    planes = getattr(win, "_section_clip_planes", [])
+    orig_pln = getattr(win, "_section_clip_drag_orig_pln", None)
+    if not planes or orig_pln is None:
+        return
+    from OCP.gp import gp_Pln, gp_Pnt
+    tp = delta_trsf.TranslationPart()
+    orig_loc = orig_pln.Position().Location()
+    normal = orig_pln.Position().Direction()
+    new_loc = gp_Pnt(orig_loc.X() + tp.X(), orig_loc.Y() + tp.Y(),
+                     orig_loc.Z() + tp.Z())
+    new_pln = gp_Pln(new_loc, normal)
+    planes[0].SetEquation(new_pln)
+    win.canvas.view.Redraw()
+
+
+def toggle_section_capping(checked):
+    """Handler for the Section View toolbar's own capping button --
+    stores the persistent flag and applies it directly to every
+    currently active clip plane, via the shared
+    _apply_section_capping(). Independent of the exclusive Off/X/Y/Z
+    group AND the visibility toggle -- capping applies to the actual
+    clip itself, regardless of whether the drag gizmo is shown."""
+    win._section_clip_capping = checked
+    _apply_section_capping()
+
+
+def _apply_section_capping():
+    """Apply the persistent capping flag to every currently active
+    clip plane. Called both by the capping toggle itself and by
+    set_section_view_mode whenever a new plane is built, so switching
+    modes preserves whatever capping state was already set, rather
+    than silently reverting to off. SetCapping/SetCappingColor,
+    confirmed via the original research as real Graphic3d_ClipPlane
+    methods -- same class as SetOn/SetEquation/ToPlane, all already
+    proven working live, unlike AIS_Plane (a different,
+    presentation-layer class) which needed real diagnosis."""
+    capping_on = getattr(win, "_section_clip_capping", False)
+    planes = getattr(win, "_section_clip_planes", [])
+    from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+    cap_color = Quantity_Color(
+        0.7, 0.7, 0.7, Quantity_TypeOfColor.Quantity_TOC_RGB)
+    for plane in planes:
+        try:
+            plane.SetCapping(capping_on)
+            if capping_on:
+                plane.SetCappingColor(cap_color)
+        except Exception as e:
+            print(f"[section-view] capping failed: {e}")
+    win.canvas.view.Redraw()
+
+
+def toggle_section_visibility(checked):
+    """Handler for the Section View toolbar's own visibility button --
+    just flips the persistent flag and lets _update_clip_visibility()
+    do the actual work, the same shared function set_section_view_mode
+    also calls whenever the active mode changes."""
+    win._section_clip_visible = checked
+    _update_clip_visibility()
+
+
+def build_section_view_toolbar():
+    """Populate the Section View toolbar (mainwindow.py's own
+    sectionViewToolBar, docked Qt.RightToolBarArea, stacked below
+    wcToolBar/wgToolBar). Called once at startup -- unlike the 2D
+    sketch panel, this toolbar is always relevant, not tied to a
+    workplane being active. Same grid-of-QToolButtons pattern as the
+    existing 2D sketch panel builder. Off/X/Y/Z as a real QButtonGroup
+    (exclusive by default) -- paired (XY) and all-3 join this same
+    group next, as pure additions. Visibility and capping toggles now
+    built too, both separate from the exclusive group (as they should
+    be -- both apply ON TOP OF whichever mode is active). Reversed
+    normal remains the one separate, independent control not built
+    yet."""
+    from PySide6.QtWidgets import (QWidget, QGridLayout, QToolButton,
+                                   QButtonGroup)
+    from PySide6.QtCore import QSize
+
+    _panel = QWidget()
+    _grid = QGridLayout(_panel)
+    _grid.setContentsMargins(2, 2, 2, 2)
+    _grid.setSpacing(2)
+
+    win._section_view_group = QButtonGroup(win)
+    win._section_view_group.setExclusive(True)
+
+    _MODES = [
+        ("off", "clip_off.gif", "Clipping OFF"),
+        ("x", "clip_x.gif", "DX normal"),
+        ("y", "clip_y.gif", "DY normal"),
+        ("z", "clip_z.gif", "DZ normal"),
+    ]
+    for _row, (_mode, _iconfile, _tip) in enumerate(_MODES):
+        _btn = QToolButton()
+        _btn.setCheckable(True)
+        _pix = QPixmap(f"icons/{_iconfile}")
+        if not _pix.isNull():
+            _btn.setIcon(QIcon(_pix))
+            _btn.setIconSize(QSize(24, 24))
+        else:
+            _btn.setText(_mode.upper())
+        _btn.setToolTip(_tip)
+        _btn.clicked.connect(
+            lambda checked, m=_mode: set_section_view_mode(m))
+        win._section_view_group.addButton(_btn)
+        _grid.addWidget(_btn, _row, 0)
+        if _row == 0:
+            _btn.setChecked(True)  # Off, matching the real initial state
+
+    _vis_btn = QToolButton()
+    _vis_btn.setCheckable(True)
+    _vis_pix = QPixmap("icons/clip_visible.gif")
+    if not _vis_pix.isNull():
+        _vis_btn.setIcon(QIcon(_vis_pix))
+        _vis_btn.setIconSize(QSize(24, 24))
+    else:
+        _vis_btn.setText("VIS")
+    _vis_btn.setToolTip("Toggle clipping plane visibility (drag to "
+                        "reposition)")
+    _vis_btn.clicked.connect(toggle_section_visibility)
+    _grid.addWidget(_vis_btn, len(_MODES), 0)
+
+    _cap_btn = QToolButton()
+    _cap_btn.setCheckable(True)
+    _cap_pix = QPixmap("icons/clip_capping.gif")
+    if not _cap_pix.isNull():
+        _cap_btn.setIcon(QIcon(_cap_pix))
+        _cap_btn.setIconSize(QSize(24, 24))
+    else:
+        _cap_btn.setText("CAP")
+    _cap_btn.setToolTip("Toggle capping on/off")
+    _cap_btn.clicked.connect(toggle_section_capping)
+    _grid.addWidget(_cap_btn, len(_MODES) + 1, 0)
+
+    win.sectionViewToolBar.addWidget(_panel)
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow()
@@ -1536,6 +1842,8 @@ if __name__ == "__main__":
     win.wcToolBar.clear()
     win.wcToolBar.addWidget(_panel)
     win.wgToolBar.setVisible(False)
+
+    build_section_view_toolbar()
 
     win.raise_()  # bring the app to the top
     app.exec()
