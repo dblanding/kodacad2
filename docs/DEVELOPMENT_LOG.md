@@ -6261,6 +6261,164 @@ Found to span six separate call sites across five files (the 2D sketch engine, g
 
 **The same session that fixes one thing can just as easily break another, and the two are often nowhere near each other in the code.** Session 108's box-select work was thoroughly tested on its own terms -- gesture binding confirmed, selection delivery confirmed, real use on a real part confirmed -- and every one of those confirmations was genuinely true. None of that testing ever happened to include a plain, ordinary click on a part's own sub-shape geometry, because nothing about that session's own goal pointed there. The regression this session found wasn't a gap in how carefully Session 108 was tested; it was a gap in what there was ever a reason to test, given what that session was actually about. Doug's own instinct to keep testing broadly, on unrelated real work, rather than narrowly re-confirming only what was just built, is what actually caught this -- not any specific test that was owed to box-select itself.
 
+# Session 110: an architectural limitation, documented and deliberately deferred
+
+## Origin
+
+Found while testing Session 109's own 2-Points positioning fix (`context.Select(True)`) on a real assembly, not while looking for it directly. Ctrl+Shift-picking to catch a point worked correctly on the active workplane, but a second, equally visible workplane sitting right alongside it couldn't be caught on at all -- not a visibility problem (Session 109's own, separate hidden-workplane fix already covers that), something more structural.
+
+## Finding
+
+Read directly rather than guessed at: every point-pick callback's own engine path -- `position_dialog.py`'s `_point_pick_callback`, and the equivalent logic wherever else a workplane catch point gets resolved -- hard-codes `wp = win.activeWp`. There's no parameter, no fallback, no alternate path; the active workplane is the only one any of these callbacks ever consult, by construction. A second, fully visible, fully un-hidden workplane simply isn't part of the search at all.
+
+## Decision: documented, not fixed
+
+No concrete need for this yet -- Doug's own, consistently-applied principle throughout this project: don't build for a problem not yet had. Confirmed as a real, structural limitation and left exactly as it is, on the record for if and when a real use case for catching on a non-active workplane actually comes up. No code changed for this item.
+
+# Session 111: Section View begins -- the AIS_Plane crash, and the real build underneath it
+
+## Origin
+
+Doug's own reference point throughout: a CAD Assistant screenshot showing a small toolbar of clipping-plane controls -- Off/X/Y/Z/2-planes/3-planes as one exclusive group, plus visibility, capping, and reversed-normal as separate toggles applying on top of whichever mode is active. The whole feature was built toward matching that shape, piece by piece, over many sessions -- this one lays the actual foundation.
+
+## Research first
+
+Confirmed via OCCT docs and forum search, before any code: `Graphic3d_ClipPlane`, and `V3d_View.AddClipPlane`/`RemoveClipPlane`/`ClipPlanes()`, all real and present in this OCP build. `AIS_MouseGesture_SelectLasso` and `AIS_MM_TranslationPlane` also turned up during this same pass, useful later.
+
+## The crash, diagnosed properly
+
+Early smoke testing (`Graphic3d_ClipPlane` create/attach/remove, via a throwaway Utility-menu test, later removed) worked cleanly. The next, natural step -- showing an actual visual plane via `AIS_Plane.SetSize()` -- produced a hard crash with no Python exception at all, nothing to catch, nothing printed. Isolated to that exact call through granular `sys.stdout.flush()` diagnostics narrowing the crash point line by line, then confirmed via the OCCT forum: a documented regression since OCCT 7.7 -- `SetSize()` reads a plane-aspect object from the object's own drawer, and returns NULL there unless `Attributes().SetOwnDatumAspects()` has been called first. Confirmed with a standalone smoke test reproducing the exact failure and the exact fix. Separately confirmed while investigating: `AIS_Plane` has no fill aspect at all, only edges/isolines/arrows -- the wrong class for a filled visual regardless of the crash.
+
+## Switching to a proven path: TopoDS_Face + AIS_Shape
+
+Rather than patch around AIS_Plane's own limitation, switched to a completely different, already-proven construction: build a real `TopoDS_Face` (the exact same `GC_MakeSegment`/`BRepBuilderAPI_MakeEdge`/`MakeWire`/`MakeFace` pattern `workplane.py`'s own `makeSqProfile()` already used successfully elsewhere in this project) and display it as an `AIS_Shape`, gray and semi-transparent. Worked cleanly, first try.
+
+## Making it draggable
+
+Reused `AIS_Manipulator` from the existing Dynamic-positioning machinery rather than building anything new. `attach_manipulator()` extended with a `translate_only_axis` parameter -- when set, disables rotation on every axis and translation on the other two, before `Attach()`/`Display()` are ever called. Confirmed the hard way: these constraints only take effect if applied *before* display, not after -- the gizmo's own parts are built once, at display time, and changing constraints afterward has no visible effect at all.
+
+Live sync between the manipulator's own drag and the real clip plane came next: a shared move/done callback reads the plane's position as it stood at drag-start, applies the manipulator's own accumulated delta, and calls `SetEquation()` plus a redraw. Confirmed live: dragging genuinely moves the cut boundary itself, not just a visual standing in for it.
+
+## Simplification: no visual at all
+
+Doug's own idea, once the mechanism was proven: drop the filled-face visual entirely. CAD Assistant itself has no separate plane visual either -- the manipulator attaches to a minimal `BRepBuilderAPI_MakeVertex` marker at the plane's own center instead. Same drag behavior, genuinely simpler, and this became the permanent design for single-axis modes going forward.
+
+## Permanent architecture landed this session
+
+`set_section_view_mode(mode)` -- the exclusive-group handler, tearing down whatever's active and building the new configuration. `_update_clip_visibility()` -- builds the marker and attaches the constrained manipulator whenever visibility is on. `_clip_plane_drag_update()` -- the live-sync callback. `toggle_section_visibility`/`toggle_section_capping` -- the two independent toggles. `build_section_view_toolbar()` -- the actual Qt panel, Off/X/Y/Z as a real `QButtonGroup`.
+
+### Lesson for future development
+
+**A hard crash with no exception at all is still a diagnosable bug, not a dead end -- it just needs a different tool than a traceback.** `sys.stdout.flush()` calls narrowing the failure to one exact line, then a targeted forum search once the exact call was known, turned an opaque, silent crash into a confirmed, three-year-old, publicly documented OCCT regression with a one-line fix. The instinct to keep narrowing rather than abandon the whole approach at the first sign of "nothing gets printed" is what separated this from a wasted afternoon.
+
+# Session 112: centering on the model, and the X/Z reversal Doug caught by eye
+
+## Origin
+
+The plane built in Session 111 sat at a fixed, origin-centered placeholder position -- only ever looking correctly centered by coincidence, for models that happened to already sit near the world origin. Doug's own comparison against CAD Assistant made clear a real section view centers on whatever's actually displayed.
+
+## Fix: bounding-box center
+
+`_scene_bbox_center()` -- `Bnd_Box` plus `BRepBndLib.Add_s()` across every currently displayed shape, returning the world center of their combined extent, or `(0, 0, 0)` if nothing's shown. Confirmed live against a real, 18-shape assembly (as1-oc-214.stp) -- correct center, correct extents.
+
+## The X/Z reversal
+
+Doug's own, direct observation against the app's default Top-Front-Right isometric startup view: the geometrically "obvious" +X and +Z normals clipped away the *far* side of the model, leaving the *near* side sitting in the way, blocking the view of the actual cut -- backwards from what a section view exists to show. Y's own default normal already clipped the near side correctly and was left alone. `_AXIS_NORMALS` built with X and Z reversed from their plain, geometric direction specifically to match this default view, not because of any deeper principle -- a genuinely empirical fix, caught by looking at the actual result rather than reasoning about it abstractly.
+
+# Session 113: capping color, and hatching's real, structural dead end
+
+## Origin
+
+Doug's own reading of the CAD Assistant screenshot again: a cut surface with a visible color and pattern conveys real information -- which part's material sits at that cross-section -- that a flat, empty cut plane doesn't.
+
+## Capping color: confirmed working cleanly
+
+`SetCapping`/`SetCappingColor` confirmed real, same class as the already-proven `SetOn`/`SetEquation`. `SetUseObjectMaterial(True)` added on Doug's own suggestion -- confirmed via official OCCT reference docs (consistent across versions 7.1 through 8.0) as a real, documented flag controlling whether capping material comes from the object being cut instead of one fixed, plane-wide color. Confirmed live: works automatically for every object a single, global clip plane cuts, no per-object association needed at all -- a clean, one-flag win.
+
+## Hatching: tried, and genuinely, structurally dead
+
+`SetCappingHatch()` confirmed real and callable, confirmed live to have zero visible effect regardless of the style value passed. Researched rather than guessed at further: an official OCCT forum reply stated plainly that native hatch rendering depends on obsolete OpenGL functionality unavailable in modern Core Profile contexts -- not a bug in this code, a real, acknowledged limitation of the mechanism itself, independently corroborated by an unrelated project (CQ-editor) hitting the identical wall and reaching the same conclusion on its own. Removed on Doug's own call: color-from-object alone already delivered the information that mattered, and hatching was a nice-to-have from the start.
+
+## A darker-color idea, raised and deliberately set aside
+
+Doug's own follow-up thought, once hatching was ruled out: cap with a color derived from the part's own color but visibly darker, rather than a fixed gray or a hatch pattern. Genuinely good idea, but a real tension surfaced immediately: `SetUseObjectMaterial` works precisely because OCCT looks up each object's own material internally and automatically -- the moment a *derived*, per-part-but-different color is wanted, that automatic lookup no longer applies, and something would need to inspect each displayed part's own color individually and manage its own cap color per object, real new mechanics rather than a small tweak. Deferred rather than built, given the section-view feature's more pressing, still-incomplete pieces at the time.
+
+# Session 114: proving the 2-plane (X&Y) cut, deliberately in isolation first
+
+## Origin
+
+With single-axis modes working cleanly, Doug's own idea for 2-plane mode: rather than build the full interactive feature at once, prove the underlying combined cut works correctly on its own first, before adding anything visual or interactive on top of it.
+
+## Chaining, confirmed live
+
+`Graphic3d_ClipPlane::SetChainNextPlane` -- confirmed real via the original research, genuinely untested until this session. Represents a logical AND: a point must satisfy *both* planes in the chain to remain visible. Only the head of the chain is ever added to the view directly; the chained plane is implicit. Built two planes (X and Y, same `_AXIS_NORMALS` base directions as single-axis mode), chained them, added just the head. Confirmed live and correct on a real model: a genuine quarter-cut out of the corner, matching CAD Assistant's own look, with capping applying correctly to both cut surfaces at once via the same, already-proven per-object color mechanism.
+
+Deliberately left with no interaction at all this session -- proving the cut itself was the whole point; how to drag two planes at once was an open, and as it turned out genuinely difficult, question for the sessions that followed.
+
+# Session 115: the click-to-attach mechanism -- built, debugged three times over, and ultimately abandoned
+
+## Origin
+
+With the combined cut proven, the real question became how to make *two* planes draggable when the existing manipulator machinery only ever supports one gizmo at a time. Doug's own first idea, closely modeled on CAD Assistant's own interaction: bring back real, visible plane faces (dropped back in Session 111 in favor of the minimal marker), and let the operator click directly on whichever plane they want to move -- a manipulator would appear on that plane, and clicking anything else -- the other plane, a part, empty background -- would make it disappear.
+
+## Why this was judged buildable
+
+The concern going in was whether this needed two simultaneous manipulators, which would have meant rewriting the core, shared mouse-drag detection code Dynamic positioning also depends on -- real, invasive surgery on proven infrastructure. Doug's own refinement resolved this cleanly: at any moment, only *one* manipulator would ever exist, just reattached to whichever plane was most recently clicked -- reusing the existing, single-manipulator machinery completely unchanged. The one genuinely new piece needed was detecting a click on a plane face at all, alongside normal viewport use. Confirmed as buildable, and safely so, by tracing the actual mechanism: `win.registerCallback()` enforces a single, exclusive callback (it calls `clearCallback()` on whatever was previously registered before installing a new one), but the lower-level mechanism it sits on top of -- `_select_callbacks`, a genuine list -- lets a callback be registered permanently, coexisting peacefully with whatever else is active, by going around that exclusivity deliberately.
+
+## Built, then broken three separate ways
+
+**Bug 1 -- wrong callback signature.** The new handler was written expecting a single shape as its first argument; every other callback registered this same way in the codebase (`filletC`, `shellC`, and the rest) takes a *list*. Confirmed directly from Doug's own traceback -- `cb(shape_list, *args)` called against a function defined as `(shape, *args)` -- and fixed to match the established convention.
+
+**Bug 2 -- stale shape reference after a drag.** Worked the first time, then silently stopped responding after Doug dragged both planes to new positions. Root cause: the click-matching logic compared `TopoDS_Shape.IsSame()` against a face reference captured once, at build time -- but `IsSame()` compares both underlying geometry *and* current location, and a dragged face's own location had since changed. No exception was ever thrown; the match just cleanly, silently returned `False`, hidden by the fact that the "no match found at all" code path itself printed nothing. Fixed by re-fetching and re-storing each face's own current shape after every drag update, and by adding visibility to the previously-silent no-match path so a future version of this same failure wouldn't disappear again.
+
+**Bug 3 -- occlusion, the one that couldn't be fixed.** Doug's own precise report: clicking regions of a plane face where a model part sat directly behind it selected the part instead of the face, even though the face was visually in front and only partially transparent. Researched directly: `AIS_InteractiveObject::SetSelectionPriority`/`SelectMgr_EntityOwner::SetPriority` confirmed real (the method actually lives on the owner object, not the shape itself, discovered only after a first guess at the wrong class threw a genuine `AttributeError`) and applied, boosting each face's own priority above the default. Confirmed live that the flag itself took effect -- readback showed the priority change had genuinely applied. Still didn't solve it: clicking through to a part behind the plane still won the pick. Best available explanation, never fully confirmed: OCCT's own depth-based picking most likely governs this outright, with SelectionPriority only ever breaking *ties* at equal depth, not overriding a genuine depth ordering where the opaque part is simply closer to the camera at that exact pixel.
+
+## Abandoned, on Doug's own call
+
+Three real, distinct problems in a row -- a parameter mismatch, a stale-reference bug, and what looked increasingly like a real fight against OCCT's own depth-based picking with no confirmed way to win it -- was read as mounting evidence rather than bad luck. Doug's own summary of the moment: "I think you're right. Let's try the small toolbar switch idea." All of this mechanism -- the visible faces, the persistent click handler, the per-axis drag callback -- was removed from the codebase entirely in the session that followed, once the replacement was built and proven.
+
+### Lesson for future development
+
+**Matching an existing application's own interaction model is not automatically the lowest-risk way to build a feature, even when the underlying capability is proven to exist.** Every individual piece of this mechanism was real and well-researched -- the callback list, SelectionPriority, the owner-object API -- and every bug that surfaced was fixed correctly and confirmed live. What sank the approach wasn't a mistake in the building; it was that the *shape* of the interaction itself -- pick a face among several, some of it occluded by other geometry -- ran headlong into a rendering-pipeline behavior (depth-based selection) that no amount of correct, careful code was going to route around. Recognizing that the pattern of failures was telling a story about the approach itself, not about any one fixable bug, is what let this get abandoned at the right time rather than one round trip too late.
+
+# Session 116: the toolbar-switch replacement
+
+## Origin
+
+Doug's own proposal, replacing the abandoned click-to-attach design: a small, ordinary toolbar switch decides which plane the *existing*, unmodified single-manipulator machinery currently targets, instead of ever detecting which of several 3D faces got clicked. No new click-detection code needed at all.
+
+## The core of it: one shared lookup
+
+`_get_clip_target_plane()` -- for single-axis modes, exactly the same `win._section_clip_planes[0]` lookup that always applied, genuinely unchanged; for XY mode, whichever axis a new Edit-X/Edit-Y toolbar pair currently has selected, looked up in `win._section_clip_planes_by_axis`. Every other piece of the drag machinery -- the marker, the manipulator attach, the live-sync callback -- reused completely as-is, just pointed at this one function instead of a hardcoded index.
+
+## Toolbar changes
+
+"VIS" renamed to "MOVE" -- Doug's own observation: the original name matched CAD Assistant's own design, where a real, visible plane becomes visible when toggled on; once Session 111 dropped that visible-plane approach for a minimal, invisible marker, the name stopped describing what the button actually did (gate whether the plane could currently be dragged, nothing about visibility). The new Edit-X/Edit-Y pair added alongside it, as a second, separate exclusive group only meaningful in XY mode.
+
+Confirmed working live by Doug across the full cycle: attach to X, drag, switch to Y, gizmo relocates correctly, drag Y, switch back -- exactly the design's own stated goal.
+
+# Session 117: the drag-baseline jump bug, and a toolbar reorder
+
+## Origin
+
+Doug's own, carefully reproduced report, after the toolbar switch was otherwise working well: dragging X to a precise position, zooming in with the scroll wheel, then attempting to re-select the manipulator to drag it again -- at which point the real clip plane snapped back to its original, pre-drag position, while the manipulator's own visual stayed exactly where the first drag had left it.
+
+## Diagnosed from a direct trace, not a guess
+
+A diagnostic added to the drag-update callback -- printing the delta received plus a short stack trace on every call -- caught the actual moment live. The telling detail: the second sequence of calls showed small, shrinking deltas (1.62mm down to 0.99mm) ending in a release -- a tiny, almost certainly accidental micro-drag from simply re-grabbing the manipulator, not the original, deliberate drag to the bolt. Root cause: `win._section_clip_drag_orig_pln` -- the "where did this drag start from" baseline -- was captured exactly once, when the manipulator was first attached inside `_update_clip_visibility()`, and never refreshed afterward. A second drag of the same, already-attached manipulator computed its new position as *that original, stale baseline* plus the new, tiny delta -- landing almost exactly back at the start, while the manipulator's own on-screen position, driven by a separate mechanism entirely, simply stayed wherever the first drag had actually left it. Zoom itself was never the trigger at all -- only ever a coincidence of timing between the first successful drag and the second, broken one.
+
+## Fixed by refreshing the baseline, not by touching navigation
+
+A small `_clip_plane_drag_done()` wrapper -- applies the drag update as before, then re-captures the target plane's own, now-current position as the new baseline, so the *next* drag, whenever it happens, starts from the right place. Deliberately only on drag completion, not on every intermediate move event -- the manipulator's own documented contract requires the baseline to stay fixed for the full duration of one, continuous drag (each move's delta is the total accumulated-so-far amount, not incremental), and refreshing it mid-drag would have reintroduced exactly the drift this was meant to prevent.
+
+## Toolbar reorder
+
+Doug's own, separate observation: with CAP sitting physically between MOVE and the EX/EY pair, their functional relationship (which plane MOVE currently drags) read as visually unclear. Reordered so MOVE, EX, and EY sit together as one group, with CAP moved to the end.
+
+### Lesson for future development
+
+**A bug that only shows up on the *second* use of a mechanism, never the first, is a strong, specific signal about where to look -- state that should have been refreshed but wasn't, rather than state that was wrong from the start.** Every earlier test of this feature, across several sessions, had confirmed a single drag worked correctly; nothing about that testing was careless. What none of it happened to include was dragging the *same*, already-attached manipulator a second time without detaching and reattaching it first -- because nothing about the feature's own design suggested that mattered. Doug's own, precise reproduction (drag, zoom, then try again) is what turned a vague "sometimes it jumps" into a diagnosable, one-line fix.
+
 # Session 118: capping appearance -- hatching, white edges, and texture, all tried and all set aside
 
 ## Note on numbering
@@ -6305,3 +6463,53 @@ Doug's own, considered call after all three attempts: plain color-from-object, n
 ### Lesson for future development
 
 **Testing a risky idea in a genuinely separate, isolated object -- not just a separate code path, but an object the real feature's own state never touches -- is what made four failed hypotheses in a row a productive investigation instead of four rounds of breaking and re-fixing a working feature.** Every one of the texture attempts left `_section_clip_planes` and `_apply_section_capping()` completely untouched; had the same experiments been run directly against the real planes, each failed guess would have needed its own careful revert before the next could be tried safely, and the accidental discovery about `SetCappingColor` might easily have been lost in the noise of repeated breakage instead of standing out as the one clear, positive signal in an otherwise negative result.
+
+# Session 119: the two-level toolbar redesign -- Normal View / Section View
+
+## Origin
+
+Doug's own, precise specification, given as a small ASCII layout sketch: two mutually exclusive top-level options, Normal View (default) and Section View, with everything below -- the X/Y/Z/X&Y mode group and the Edit-X/Edit-Y pair -- living inside Section View and grayed out entirely whenever Normal View is selected instead. A genuine restructuring, not a rename: "Off" stops being a sixth, ordinary member of the exclusive mode group and becomes its own, separate, higher-level switch.
+
+## Confirmed achievable with plain Qt first
+
+Before writing anything: a `QButtonGroup` for the top-level pair, Qt's own standard `setEnabled(False)` on a single container widget to gray out everything inside it at once (propagated automatically to every child, regardless of each child's own individual enabled state), and the existing X/Y/Z/XY group reused underneath, unchanged in mechanism. Confirmed feasible directly rather than assumed, then built.
+
+## The state model: one shared value, not a value per row
+
+The real design question was how to make "which plane's own Enable-edit is checked" persist correctly across mode switches, without a separate, per-mode dictionary. Resolved with a single, shared `win._section_clip_active_axis` (None by default), deliberately never touched by switching the mode itself -- only ever set or cleared by the Enable-edit controls. Switching from X to Y leaves `active_axis` sitting at "x" the whole time, simply not matching mode "y" (so nothing shows); switching back to X, it matches again automatically, and X's own manipulator reappears exactly as it was left, with no dictionary lookup needed at all -- `_get_clip_target_plane()` derives everything from this one value plus the current mode.
+
+`set_section_view_mode("off")` -- now called whenever Normal View is selected, to tear the actual clip planes down -- was guarded so it no longer overwrites `win._section_clip_mode` when that happens; without this, the lower group's own last selection would have been silently lost to "off," which isn't even a valid value in that group anymore, every time Normal View was toggled on.
+
+## Confirmed via Doug's own, deliberate test
+
+Check X's own Enable-edit, switch to Y, switch back to X -- confirmed it comes back checked and reattaches the manipulator automatically, without needing to be re-checked, exactly matching the persistence-across-switches design intent rather than just the reasoning behind it.
+
+# Session 120: capping always on, Reverse Normal per-plane, the compact Dir/Edit/Rev table, and remembering where a plane was left
+
+## Origin
+
+Four separate requests arriving together, all genuinely interconnected enough to build as one coherent pass rather than four isolated ones: capping had proven itself enough that Doug wanted it unconditional rather than a toggle; Reverse Normal -- the one control from the original CAD Assistant screenshot never yet built -- needed its own control *per plane*, since wanting only one of two chained planes reversed is a real, named use case, not a hypothetical; the toolbar was getting too wide once Reverse needed its own column alongside Edit; and toggling back and forth to Normal View, or between modes, was resetting a plane's own, already-dragged position every time.
+
+## Always-capped
+
+The simplest piece: `toggle_section_capping` and its own toolbar button removed entirely; `_apply_section_capping()` no longer takes a persistent flag into account at all, it just always applies `SetCapping(True)`/`SetUseObjectMaterial(True)`.
+
+## Reverse Normal, and the state model it needed
+
+`_on_reverse_checkbox_toggled()` flips a plane's own live normal directly (`SetEquation` with the same location, reversed direction) rather than rebuilding the plane from scratch, preserving wherever it currently sits, including an already-dragged position. Deliberately *not* wired as mutually exclusive between X&Y's own X and Y sub-rows, unlike Edit's own pair -- Doug's own, explicit reasoning: it's entirely plausible to want only one of the two reversed and not the other, so no such constraint exists for Reverse at all.
+
+## Position memory: the piece that touched the most existing code
+
+Doug's own request -- toggling Normal/Section View, or switching between modes, shouldn't require re-dragging a plane back to where it was. Solved with two small, shared functions: `_get_plane_geom(mode, axis)` checks a stored-state dictionary (`win._section_plane_state`, keyed by mode then axis) first, restoring a plane's own last-remembered position and normal together as one `gp_Pln`, and only falls back to a fresh build -- centered on the scene's own bounding box, using whatever the current Reverse state says -- the very first time that particular plane is ever activated. `_store_plane_geom()` writes to this same structure, called from exactly two places: after every completed drag, and after every Reverse toggle -- the only two things that ever change a plane's own geometry once built. `set_section_view_mode()` itself was rewritten to pull from this lookup instead of always rebuilding fresh from the bounding-box center on every single call, which is what had been silently discarding position across mode switches all along.
+
+A real bug in this new code was caught and fixed before ever reaching Doug: `_AXIS_NORMALS` moved to module level (needed by the new helper functions too, not just the one function that used to hold it locally) meant it now ran at import time rather than function-call time, and the first draft of `_get_plane_geom()` used `gp_Pln` without importing it in that specific function at all -- `gp_Pln` had never once been imported at module level anywhere in this file, only ever locally, inside whichever function happened to need it. Caught by deliberately tracing the actual import structure rather than trusting that a passing syntax check meant the code would actually run, and fixed before delivery.
+
+## The compact table layout
+
+Doug's own, specific design, given as a second small ASCII sketch: a three-column table -- Dir, Edit, Rev -- replacing the earlier, wordier "Enable X Edit"-style labeled buttons entirely. The Edit and Rev columns became plain `QCheckBox` widgets, no icon or label needed at all once the column header itself says what they are; the Dir column kept its existing icon buttons for actual mode selection. X&Y itself became a Dir-only row with blank Edit/Rev cells, since it isn't a single plane -- its own X and Y sub-planes get real rows directly underneath, each with genuine Edit and Rev checkboxes but a plain, non-clickable label instead of a button in the Dir column, since they aren't independently selectable modes on their own, just the two components of X&Y.
+
+One piece of the first draft was cleaned up before delivery for its own sake, not because it was broken: X&Y's own two Edit checkboxes initially needed connecting to each other as mutual partners, but each one's own partner didn't exist yet at the point the first one needed to be built -- resolved in a first pass by connecting one with no partner and then disconnecting and reconnecting it once both existed, a working but genuinely awkward pattern. Rewritten to build both checkboxes plain first, with no signal connected, and wire both together once both genuinely exist -- same result, no disconnect/reconnect needed at all.
+
+### Lesson for future development
+
+**Confirming that new code parses is not the same as confirming it runs, and the two failure modes look identical from a passing `py_compile` check.** `_AXIS_NORMALS`'s move to module level, and `_get_plane_geom()`'s missing local import, would have syntax-checked cleanly and then thrown a real `NameError` the moment either was actually exercised -- a class of bug that only becomes visible by deliberately tracing which names are in scope where, not by re-running the same check that already passed. Catching this before delivery, rather than from Doug's own terminal output afterward, came from treating "the file compiles" as necessary and clearly insufficient, not as the finish line.
