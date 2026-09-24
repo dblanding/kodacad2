@@ -1388,24 +1388,35 @@ def set_section_view_mode(mode):
     then builds the new configuration, if any -- only one mode is
     ever live at a time.
 
-    'off', 'x', 'y', and 'z' are built so far -- 'xy' (2 planes) and
-    'xyz' (3 planes) are the next step, once confirmed working
-    individually. Each new plane is now centered on the currently
-    displayed geometry's own bounding box (Session 112), matching CAD
-    Assistant -- previously a fixed coordinate-plane-through-origin
-    placeholder, which only ever looked centered by coincidence for
-    models that happened to sit near the world origin already. Drag-
-    to-reposition is separate again, real application-level
-    integration on top of this, not a single ready-made OCCT class
-    (confirmed by research before any of this was built).
+    'off', 'x', 'y', 'z', and 'xy' (2 planes, chained via
+    SetChainNextPlane -- a logical AND, a point must satisfy both to
+    remain visible) are built so far -- 'xyz' (3 planes) is the next
+    step. Each new plane is centered on the currently displayed
+    geometry's own bounding box (Session 112), matching CAD Assistant.
 
-    Reversed normal, capping, and visibility toggle (Doug's own
-    reading of the same screenshot) are NOT part of this exclusive
-    group at all -- they apply ON TOP OF whichever mode is active.
-    Capping and visibility are both built now, applied here on every
-    mode change so switching axes preserves whatever state was
-    already set, rather than silently reverting either one. Reversed
-    normal isn't built yet."""
+    _update_clip_visibility() now handles every mode uniformly,
+    single-axis and xy alike (Session 116) -- it targets whichever
+    plane _get_clip_target_plane() returns, which is
+    win._section_clip_planes[0] for single-axis modes (unchanged) or
+    whichever axis the toolbar's own Edit X/Edit Y switch currently
+    has selected for xy mode. Replaced an earlier, abandoned design
+    where xy mode built real, visible, independently-clickable plane
+    faces and a persistent 3D click handler -- CAD Assistant's own
+    interaction model, matching how the operator actually clicks a
+    plane there directly. Dropped after live testing surfaced three
+    distinct problems in a row (a parameter mismatch, a stale-
+    reference bug after dragging, and what testing indicated was very
+    likely OCCT's own depth-based picking overriding
+    SelectionPriority rather than respecting it) -- Doug's own call,
+    given the mounting friction: a toolbar switch reusing the
+    existing, already-proven single-manipulator machinery entirely
+    unchanged, rather than detecting which of several 3D faces got
+    clicked.
+
+    Reversed normal and capping (Doug's own reading of the CAD
+    Assistant screenshot) are NOT part of this exclusive group at
+    all -- they apply ON TOP OF whichever mode is active. Capping is
+    built; reversed normal isn't yet."""
     from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
     from OCP.Graphic3d import Graphic3d_ClipPlane
 
@@ -1439,12 +1450,64 @@ def set_section_view_mode(mode):
             win._section_clip_planes = [clip_plane]
         except Exception as e:
             print(f"[section-view] {mode.upper()} clip plane failed: {e}")
+    elif mode == "xy":
+        # Session 114: proved the chained, combined cut works on its
+        # own first (SetChainNextPlane -- a logical AND: a point must
+        # satisfy BOTH planes to remain visible; only the first plane
+        # in the chain is added to the view, the chained one is
+        # implicit) before building anything visual or interactive on
+        # top of it. Visibility/dragging wired in Session 116, via
+        # the toolbar Edit X/Edit Y switch -- see
+        # _get_clip_target_plane().
+        try:
+            cx, cy, cz = _scene_bbox_center()
+            plane_x = Graphic3d_ClipPlane(
+                gp_Pln(gp_Pnt(cx, cy, cz), _AXIS_NORMALS["x"]))
+            plane_y = Graphic3d_ClipPlane(
+                gp_Pln(gp_Pnt(cx, cy, cz), _AXIS_NORMALS["y"]))
+            plane_x.SetOn(True)
+            plane_y.SetOn(True)
+            plane_x.SetChainNextPlane(plane_y)
+            win.canvas.view.AddClipPlane(plane_x)
+            win._section_clip_planes = [plane_x, plane_y]
+            win._section_clip_planes_by_axis = {"x": plane_x, "y": plane_y}
+        except Exception as e:
+            print(f"[section-view] XY clip plane failed: {e}")
     elif mode != "off":
         print(f"[section-view] mode {mode!r} not yet built")
 
+    win._section_clip_mode = mode
     win.canvas.view.Redraw()
     _apply_section_capping()
     _update_clip_visibility()
+
+
+def _get_clip_target_plane():
+    """The single clip plane the manipulator should currently target.
+    Single-axis modes (x/y/z): win._section_clip_planes[0], exactly
+    the same lookup this always used -- completely unchanged
+    behavior. xy mode: whichever axis the toolbar's own Edit X/Edit Y
+    switch currently has selected (win._section_clip_active_axis,
+    default "x"), looked up in win._section_clip_planes_by_axis.
+
+    Session 116 (Doug's own call, after the 3D click-to-attach
+    mechanism surfaced three real, distinct problems in a row -- a
+    parameter mismatch, a stale-reference bug after dragging, and
+    what live testing showed was very likely OCCT's own depth-based
+    picking simply overriding SelectionPriority rather than
+    respecting it): abandoned in favor of this much simpler design --
+    a small toolbar switch decides which plane the EXISTING, already-
+    proven single-manipulator machinery currently targets, instead of
+    detecting which of several 3D faces got clicked. No new click-
+    detection code at all; the only genuinely new piece is this one
+    lookup function."""
+    mode = getattr(win, "_section_clip_mode", "off")
+    if mode == "xy":
+        by_axis = getattr(win, "_section_clip_planes_by_axis", {})
+        axis = getattr(win, "_section_clip_active_axis", "x")
+        return by_axis.get(axis)
+    planes = getattr(win, "_section_clip_planes", [])
+    return planes[0] if planes else None
 
 
 def _update_clip_visibility():
@@ -1470,7 +1533,14 @@ def _update_clip_visibility():
     Drag-sync logic (move/done callbacks, translate_only_axis=2, the
     live Graphic3d_ClipPlane update) is unchanged -- proven correct
     independently of what the manipulator's own leaf shape looks
-    like."""
+    like.
+
+    Session 116: now targets _get_clip_target_plane() instead of
+    always win._section_clip_planes[0] -- for single-axis modes this
+    is the exact same plane either way (no behavior change at all);
+    for xy mode it's whichever plane the toolbar's own Edit X/Edit Y
+    switch currently has selected, letting this same, unmodified
+    mechanism serve both cases."""
     # Always start clean.
     win.canvas.detach_manipulator()
     visual = getattr(win, "_section_clip_visual", None)
@@ -1481,16 +1551,15 @@ def _update_clip_visibility():
             print(f"[section-view] visual erase failed: {e}")
         win._section_clip_visual = None
 
-    if (not getattr(win, "_section_clip_visible", False)
-            or not getattr(win, "_section_clip_planes", [])):
+    target_plane = _get_clip_target_plane()
+    if not getattr(win, "_section_clip_move_enabled", False) or target_plane is None:
         return
 
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
     from OCP.AIS import AIS_Shape
 
-    planes = win._section_clip_planes
     try:
-        gp_pln = planes[0].ToPlane()
+        gp_pln = target_plane.ToPlane()
         center = gp_pln.Position().Location()
         marker_shape = BRepBuilderAPI_MakeVertex(center).Vertex()
         ais_shape = AIS_Shape(marker_shape)
@@ -1502,11 +1571,11 @@ def _update_clip_visibility():
         print(f"[section-view] marker build failed: {e}")
         return
 
-    win._section_clip_drag_orig_pln = planes[0].ToPlane()
+    win._section_clip_drag_orig_pln = target_plane.ToPlane()
     attached = win.canvas.attach_manipulator(
         [win._section_clip_visual],
         move_callback=_clip_plane_drag_update,
-        done_callback=_clip_plane_drag_update,
+        done_callback=_clip_plane_drag_done,
         translate_only_axis=2)
     if attached:
         ax3 = gp_pln.Position()
@@ -1526,10 +1595,15 @@ def _clip_plane_drag_update(delta_trsf):
     delta_trsf is the WORLD-space total delta so far (not
     incremental), per attach_manipulator's own documented contract --
     always computed fresh from the captured drag-start plane, so
-    repeated calls during one drag can't drift."""
-    planes = getattr(win, "_section_clip_planes", [])
+    repeated calls during one drag can't drift.
+
+    Session 116: targets _get_clip_target_plane() -- the same lookup
+    _update_clip_visibility() used when it attached the manipulator
+    in the first place, so this always stays consistent with
+    whichever plane is actually being dragged."""
+    target_plane = _get_clip_target_plane()
     orig_pln = getattr(win, "_section_clip_drag_orig_pln", None)
-    if not planes or orig_pln is None:
+    if target_plane is None or orig_pln is None:
         return
     from OCP.gp import gp_Pln, gp_Pnt
     tp = delta_trsf.TranslationPart()
@@ -1538,8 +1612,40 @@ def _clip_plane_drag_update(delta_trsf):
     new_loc = gp_Pnt(orig_loc.X() + tp.X(), orig_loc.Y() + tp.Y(),
                      orig_loc.Z() + tp.Z())
     new_pln = gp_Pln(new_loc, normal)
-    planes[0].SetEquation(new_pln)
+    target_plane.SetEquation(new_pln)
     win.canvas.view.Redraw()
+
+
+def _clip_plane_drag_done(delta_trsf):
+    """Done-callback wrapper -- Session 117 fix, confirmed via Doug's
+    own terminal output (a stack trace directly from mouseReleaseEvent
+    -> _manip_done_callback, not a guess): win._section_clip_drag_
+    orig_pln was only ever captured ONCE, when the manipulator was
+    first attached inside _update_clip_visibility(). The manipulator
+    stays attached and draggable indefinitely afterward, with no
+    re-attachment between separate drags -- so a SECOND drag of the
+    same, already-attached manipulator incorrectly recomputed its new
+    position as the ORIGINAL, attach-time baseline plus the new
+    delta, rather than wherever the first drag had actually left it.
+    Doug's own report matched this exactly: a real drag to a bolt,
+    then a tiny, likely-accidental micro-drag just from re-grabbing
+    the manipulator, snapped the real plane back to its starting
+    point while the manipulator's own visual (unaffected by this
+    calculation at all) stayed exactly where the first drag left it.
+
+    Applies the final update via _clip_plane_drag_update() as before,
+    then re-captures the target plane's own, now-current position as
+    the new baseline -- so the NEXT drag, whenever it starts, begins
+    from the right place. Deliberately only on done, not on every
+    move event too -- attach_manipulator's own documented contract
+    requires orig_pln to stay FIXED for the full duration of a single,
+    continuous drag (delta_trsf is the total accumulated-so-far
+    delta, not incremental); re-capturing on every move would break
+    that and reintroduce drift within one drag."""
+    _clip_plane_drag_update(delta_trsf)
+    target_plane = _get_clip_target_plane()
+    if target_plane is not None:
+        win._section_clip_drag_orig_pln = target_plane.ToPlane()
 
 
 def toggle_section_capping(checked):
@@ -1605,12 +1711,34 @@ def _apply_section_capping():
     win.canvas.view.Redraw()
 
 
-def toggle_section_visibility(checked):
-    """Handler for the Section View toolbar's own visibility button --
-    just flips the persistent flag and lets _update_clip_visibility()
-    do the actual work, the same shared function set_section_view_mode
-    also calls whenever the active mode changes."""
-    win._section_clip_visible = checked
+
+def toggle_section_move_mode(checked):
+    """Handler for the Section View toolbar's own Move button --
+    flips the persistent flag and lets _update_clip_visibility() do
+    the actual work, the same shared function set_section_view_mode
+    also calls whenever the active mode changes.
+
+    Session 117 rename (Doug's own observation): this button was
+    originally "VIS" / "Toggle clipping plane visibility," matching
+    CAD Assistant's own design, where a real, visible plane becomes
+    visible when toggled on. That name stopped being accurate once
+    the visible-plane approach was abandoned (Session 112) in favor
+    of a minimal, invisible marker -- what this button actually gates
+    is whether the plane can currently be DRAGGED at all, nothing
+    about visibility. "Move" says that plainly."""
+    win._section_clip_move_enabled = checked
+    _update_clip_visibility()
+
+
+def set_clip_active_axis(axis):
+    """Handler for the Section View toolbar's own Edit X/Edit Y
+    switch (xy mode only) -- sets which plane
+    _get_clip_target_plane() should return, then rebuilds the
+    manipulator via the same, shared _update_clip_visibility()
+    everything else already uses. A no-op, harmlessly, if visibility
+    is currently off or the mode isn't actually xy -- the rebuild
+    still runs, it just finds nothing to attach to."""
+    win._section_clip_active_axis = axis
     _update_clip_visibility()
 
 
@@ -1644,6 +1772,7 @@ def build_section_view_toolbar():
         ("x", "clip_x.gif", "DX normal"),
         ("y", "clip_y.gif", "DY normal"),
         ("z", "clip_z.gif", "DZ normal"),
+        ("xy", "clip_xy.gif", "2 planes (X and Y)"),
     ]
     for _row, (_mode, _iconfile, _tip) in enumerate(_MODES):
         _btn = QToolButton()
@@ -1662,18 +1791,53 @@ def build_section_view_toolbar():
         if _row == 0:
             _btn.setChecked(True)  # Off, matching the real initial state
 
-    _vis_btn = QToolButton()
-    _vis_btn.setCheckable(True)
-    _vis_pix = QPixmap("icons/clip_visible.gif")
-    if not _vis_pix.isNull():
-        _vis_btn.setIcon(QIcon(_vis_pix))
-        _vis_btn.setIconSize(QSize(24, 24))
+    _move_btn = QToolButton()
+    _move_btn.setCheckable(True)
+    _move_pix = QPixmap("icons/clip_move.gif")
+    if not _move_pix.isNull():
+        _move_btn.setIcon(QIcon(_move_pix))
+        _move_btn.setIconSize(QSize(24, 24))
     else:
-        _vis_btn.setText("VIS")
-    _vis_btn.setToolTip("Toggle clipping plane visibility (drag to "
-                        "reposition)")
-    _vis_btn.clicked.connect(toggle_section_visibility)
-    _grid.addWidget(_vis_btn, len(_MODES), 0)
+        _move_btn.setText("MOVE")
+    _move_btn.setToolTip("Enable dragging the clipping plane to "
+                         "reposition it")
+    _move_btn.clicked.connect(toggle_section_move_mode)
+    _grid.addWidget(_move_btn, len(_MODES), 0)
+
+    # Session 117 (Doug's own observation): EX/EY moved to sit
+    # immediately after MOVE, not CAP -- they're functionally part of
+    # the same group (which plane MOVE is currently dragging), and
+    # having CAP between them made that relationship visually unclear.
+    # Session 116: which plane the single, existing manipulator
+    # currently targets for xy mode -- Doug's own idea, replacing the
+    # abandoned 3D click-to-attach mechanism. A second, separate
+    # exclusive group (distinct from the Off/X/Y/Z mode group above);
+    # only meaningful in xy mode, but harmless to leave visible
+    # otherwise, since _get_clip_target_plane() only ever consults it
+    # when the current mode actually is "xy".
+    win._section_edit_axis_group = QButtonGroup(win)
+    win._section_edit_axis_group.setExclusive(True)
+    _EDIT_AXES = [
+        ("x", "clip_edit_x.gif", "Edit: X plane"),
+        ("y", "clip_edit_y.gif", "Edit: Y plane"),
+    ]
+    for _erow, (_axis, _iconfile, _tip) in enumerate(_EDIT_AXES):
+        _ebtn = QToolButton()
+        _ebtn.setCheckable(True)
+        _epix = QPixmap(f"icons/{_iconfile}")
+        if not _epix.isNull():
+            _ebtn.setIcon(QIcon(_epix))
+            _ebtn.setIconSize(QSize(24, 24))
+        else:
+            _ebtn.setText(f"E{_axis.upper()}")
+        _ebtn.setToolTip(_tip)
+        _ebtn.clicked.connect(
+            lambda checked, a=_axis: set_clip_active_axis(a))
+        win._section_edit_axis_group.addButton(_ebtn)
+        _grid.addWidget(_ebtn, len(_MODES) + 1 + _erow, 0)
+        if _erow == 0:
+            _ebtn.setChecked(True)  # X, matching the existing default
+            # in _get_clip_target_plane() itself
 
     _cap_btn = QToolButton()
     _cap_btn.setCheckable(True)
@@ -1685,7 +1849,7 @@ def build_section_view_toolbar():
         _cap_btn.setText("CAP")
     _cap_btn.setToolTip("Toggle capping on/off")
     _cap_btn.clicked.connect(toggle_section_capping)
-    _grid.addWidget(_cap_btn, len(_MODES) + 1, 0)
+    _grid.addWidget(_cap_btn, len(_MODES) + 1 + len(_EDIT_AXES), 0)
 
     win.sectionViewToolBar.addWidget(_panel)
 
