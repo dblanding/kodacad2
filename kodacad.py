@@ -1694,22 +1694,55 @@ def _apply_section_capping():
     own call, rather than pursue the sanctioned workaround
     (SetCappingTexture, an actual image applied as a texture map) --
     treated as a nice-to-have, given color-from-object already
-    delivers the main informational value on its own."""
+    delivers the main informational value on its own.
+
+    Session 117 (Doug's own alternative, once hatching and texturing
+    both looked like real steps up in scope): white edge lines along
+    each part's own cut-surface boundary, matching how real part
+    edges are already shown in black elsewhere. Confirmed via
+    official OCCT reference docs plus a working, real-world code
+    example: Graphic3d_AspectFillArea3d::SetEdgeOn()/SetEdgeColor()
+    are real, and white is that class's own DEFAULT edge color
+    already. Applied to the capping aspect Graphic3d_ClipPlane
+    already exposes via CappingAspect() -- genuinely lower risk than
+    texturing, no new image asset or object kind this project hasn't
+    already used.
+
+    First attempt also called SetCappingAspect(cap_aspect) explicitly
+    after modifying it, on the assumption CappingAspect() might
+    return a copy needing to be set back. Doug's own live test showed
+    the whole cap rendering white instead of edges over the existing
+    color-from-object fill -- consistent with that explicit re-set
+    replacing the plane's entire capping aspect wholesale, discarding
+    whatever UseObjectMaterial was doing internally, rather than
+    modifying it in place as intended. Removed; CappingAspect()
+    modified directly, with no re-set call at all, testing whether it
+    already returns a live, mutable reference. Confirmed by Doug:
+    still rendered solid white regardless -- edges genuinely don't
+    combine with per-object color in this API. Removed entirely
+    (Session 118): Doug's own call, given plain color-from-object is
+    what he actually wants as the accepted result now, not color plus
+    a broken white override.
+
+    SetCappingColor also removed this session, as a direct test of
+    Doug's own observation: the isolated capping-texture test planes
+    (never calling SetCappingColor at all, only SetUseObjectMaterial)
+    looked distinctly cleaner and crisper than this function's own,
+    real output. The docs describe CappingColor as simply unused
+    once UseObjectMaterial is on, but that's a claim about the final
+    color, not necessarily about every aspect of how the surface
+    renders -- worth trusting Doug's own, direct side-by-side
+    observation over an incomplete reading of the docs."""
     capping_on = getattr(win, "_section_clip_capping", False)
     planes = getattr(win, "_section_clip_planes", [])
-    from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
-    cap_color = Quantity_Color(
-        0.7, 0.7, 0.7, Quantity_TypeOfColor.Quantity_TOC_RGB)
     for plane in planes:
         try:
             plane.SetCapping(capping_on)
             if capping_on:
-                plane.SetCappingColor(cap_color)
                 plane.SetUseObjectMaterial(True)
         except Exception as e:
             print(f"[section-view] capping failed: {e}")
     win.canvas.view.Redraw()
-
 
 
 def toggle_section_move_mode(checked):

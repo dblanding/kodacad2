@@ -6260,3 +6260,48 @@ Found to span six separate call sites across five files (the 2D sketch engine, g
 ### Lesson for future development
 
 **The same session that fixes one thing can just as easily break another, and the two are often nowhere near each other in the code.** Session 108's box-select work was thoroughly tested on its own terms -- gesture binding confirmed, selection delivery confirmed, real use on a real part confirmed -- and every one of those confirmations was genuinely true. None of that testing ever happened to include a plain, ordinary click on a part's own sub-shape geometry, because nothing about that session's own goal pointed there. The regression this session found wasn't a gap in how carefully Session 108 was tested; it was a gap in what there was ever a reason to test, given what that session was actually about. Doug's own instinct to keep testing broadly, on unrelated real work, rather than narrowly re-confirming only what was just built, is what actually caught this -- not any specific test that was owed to box-select itself.
+
+# Session 118: capping appearance -- hatching, white edges, and texture, all tried and all set aside
+
+## Note on numbering
+
+Sessions 110 through 117 -- the entire 2-plane (XY) section-view feature, its abandoned 3D click-to-attach mechanism, the toolbar-switch replacement that took its place, and the manipulator drag-baseline jump bug -- were never written up here. This entry picks up at 118 to match ongoing code-comment numbering rather than leave a silent gap; the earlier sessions remain undocumented and worth a dedicated pass of their own at some point.
+
+## Origin
+
+With the section-view feature otherwise working, Doug's own observation against a CAD Assistant screenshot: color-from-object alone conveys real information (which part's material a cut surface belongs to) but a flat cap still reads as less informative than CA's own hatched look. Three separate approaches were tried, in sequence, each ruled out for a different, concrete reason rather than abandoned on a hunch.
+
+## Attempt 1: native hatching
+
+`Graphic3d_ClipPlane::SetCappingHatch()` confirmed real and callable, but confirmed live to have zero visible effect regardless of style value. Researched rather than re-guessed: an official OCCT forum reply stated plainly that hatch rendering depends on obsolete OpenGL functionality unavailable in modern Core Profile contexts -- not a bug in this code, a real, acknowledged limitation of the mechanism itself. Independently corroborated by an unrelated project (CQ-editor) hitting the identical wall and reaching the same conclusion on its own. Removed entirely, on Doug's own call: color-from-object alone already delivered the information that mattered most, and hatching was a nice-to-have from the start.
+
+## Attempt 2: white edge lines at the cap boundary
+
+Doug's own alternative, once hatching was ruled out: outline each part's own cut-surface region in white, matching how real part edges already render in black elsewhere. `Graphic3d_ClipPlane::CappingAspect()` exposes a `Graphic3d_AspectFillArea3d`, and that class's own `SetEdgeOn()`/`SetEdgeColor()` are real, confirmed via official docs plus a working example from an unrelated project -- and white turned out to already be that class's own default edge color.
+
+Live testing showed the entire cap rendering solid white, though -- color-from-object lost entirely, not layered underneath the edges. Two variants tried: getting the aspect and explicitly calling `SetCappingAspect()` to set it back, and getting the aspect and modifying it in place with no re-set call at all (testing whether `CappingAspect()` already returns a live, mutable reference). Both failed identically. That both a "set it back" and a "don't set it back" version produced the exact same result rules out a call-sequence mistake -- touching this aspect object at all appears to switch the cap into a different rendering path than the one `SetUseObjectMaterial` uses, not something fixable by adjusting how the aspect gets applied. Removed entirely.
+
+## Attempt 3: capping texture, tested off-line first
+
+Texture was the OCCT forum's own stated, sanctioned alternative to hatching -- but rather than build it directly into the working, committed feature, Doug proposed testing it as a genuinely separate, throwaway experiment first: a standalone Utility-menu test building its own, isolated `Graphic3d_ClipPlane`, never touching `_section_clip_planes` or any of the real, committed capping code, freely repeatable without any risk to what was already working. This pattern -- prove a risky mechanism in isolation before it ever touches real code -- is the same discipline this whole feature has followed from the start (see the AIS_Plane/SetSize crash investigation, Session 111), applied here explicitly at Doug's own suggestion rather than by default.
+
+A high-contrast test texture (magenta background, cyan diagonal stripes -- deliberately unlike any real part color) was generated for unambiguous visual results. Four distinct hypotheses were tested in sequence as the texture stubbornly failed to appear, each one genuinely ruled out rather than assumed:
+
+- **Priority conflict** (`ObjectMaterial` and `ObjectTexture` competing for the same slot, material silently winning) -- ruled out by removing `SetUseObjectMaterial` entirely; the cap rendered solid black instead of showing color OR the texture, not the color-wins result the hypothesis predicted.
+- **Working-directory / path resolution** -- ruled out directly: the resolved, absolute path was logged and confirmed to exist exactly where expected, still black.
+- **Constructor overload mismatch** -- confirmed real and fixed: `Graphic3d_Texture2D`'s file-path constructor expects a `TCollection_AsciiString` specifically, not a bare Python `str`, discovered by inspecting `__init__.__doc__` directly rather than guessing. Still black after the fix.
+- **Missing UV/texture coordinates on dynamically-computed cap geometry** -- the remaining, most likely explanation, never tested. A cap isn't pre-existing mesh with real texture coordinates baked in the way an imported part's faces are; it's generated on the fly wherever a plane happens to intersect a solid, and nothing in this investigation established that OCCT assigns it any UV mapping at all. `Graphic3d_TextureParams` looked like a plausible relevant class but was never investigated -- this is where the trail was deliberately left rather than run to ground.
+
+Shelved on Doug's own call at this point: four real hypotheses tested and eliminated is meaningful progress, but the remaining explanation was visibly more speculative than the ones already ruled out, and each further round trip has a real cost. If ever revisited, `Graphic3d_TextureParams` and how OCCT generates (or doesn't) UV coordinates for capping geometry specifically is the concrete next question, not another variation on the texture-loading call itself.
+
+## An unplanned, genuine finding along the way
+
+Doug's own, direct observation: the isolated texture test planes -- which never called `SetCappingColor` at all, only `SetUseObjectMaterial` -- looked distinctly cleaner and crisper than the real feature's own output, which set both together. The docs describe `CappingColor` as simply unused once `UseObjectMaterial` is on, but that's a claim about final color, not necessarily about every aspect of how the surface renders. Tested directly on the real, committed capping function: `SetCappingColor` removed, leaving only `SetCapping`/`SetUseObjectMaterial`. Final state of the feature.
+
+## Final decision
+
+Doug's own, considered call after all three attempts: plain color-from-object, no edges, no texture, no fallback color, is the accepted final appearance. "The part color cap is OK and we don't need to pursue it any more." All exploratory test code (five throwaway Utility-menu functions built across this investigation) removed from `kodacad.py` in the same session this was decided, along with their menu registrations -- nothing exploratory left behind once the question was settled.
+
+### Lesson for future development
+
+**Testing a risky idea in a genuinely separate, isolated object -- not just a separate code path, but an object the real feature's own state never touches -- is what made four failed hypotheses in a row a productive investigation instead of four rounds of breaking and re-fixing a working feature.** Every one of the texture attempts left `_section_clip_planes` and `_apply_section_capping()` completely untouched; had the same experiments been run directly against the real planes, each failed guess would have needed its own careful revert before the next could be tried safely, and the accidental discovery about `SetCappingColor` might easily have been lost in the noise of repeated breakage instead of standing out as the one clear, positive signal in an otherwise negative result.
