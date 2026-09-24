@@ -1562,7 +1562,33 @@ def _apply_section_capping():
     confirmed via the original research as real Graphic3d_ClipPlane
     methods -- same class as SetOn/SetEquation/ToPlane, all already
     proven working live, unlike AIS_Plane (a different,
-    presentation-layer class) which needed real diagnosis."""
+    presentation-layer class) which needed real diagnosis.
+
+    SetUseObjectMaterial(True) added (Session 113, Doug's own
+    observation against the CAD Assistant screenshot: color and
+    hatching both convey real information a flat gray cap conceals --
+    which part's material is at this cross-section, not just that a
+    cut happened). Confirmed via official OCCT reference docs
+    (consistent across 7.1 through 8.0): a real, documented flag,
+    default FALSE, controlling whether capping material is taken from
+    the object being cut instead of the plane's own fixed
+    CappingColor/CappingMaterial. CONFIRMED live by Doug: works
+    automatically for every object our single, global clip plane
+    cuts -- no per-object association needed. SetCappingColor kept as
+    a harmless fallback -- the docs describe it as simply unused, not
+    conflicting, whenever UseObjectMaterial is on.
+
+    Hatching was also tried, same session -- confirmed live to have
+    no visible effect, then confirmed via two independent sources
+    (an official OCCT forum reply, and a separate, unrelated project
+    hitting the identical issue) as a genuine, acknowledged OCCT
+    limitation: native hatch rendering depends on obsolete OpenGL
+    functionality unavailable in modern Core Profile contexts, not
+    fixable via a different call or style value. Removed by Doug's
+    own call, rather than pursue the sanctioned workaround
+    (SetCappingTexture, an actual image applied as a texture map) --
+    treated as a nice-to-have, given color-from-object already
+    delivers the main informational value on its own."""
     capping_on = getattr(win, "_section_clip_capping", False)
     planes = getattr(win, "_section_clip_planes", [])
     from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
@@ -1573,6 +1599,7 @@ def _apply_section_capping():
             plane.SetCapping(capping_on)
             if capping_on:
                 plane.SetCappingColor(cap_color)
+                plane.SetUseObjectMaterial(True)
         except Exception as e:
             print(f"[section-view] capping failed: {e}")
     win.canvas.view.Redraw()
