@@ -6513,3 +6513,41 @@ One piece of the first draft was cleaned up before delivery for its own sake, no
 ### Lesson for future development
 
 **Confirming that new code parses is not the same as confirming it runs, and the two failure modes look identical from a passing `py_compile` check.** `_AXIS_NORMALS`'s move to module level, and `_get_plane_geom()`'s missing local import, would have syntax-checked cleanly and then thrown a real `NameError` the moment either was actually exercised -- a class of bug that only becomes visible by deliberately tracing which names are in scope where, not by re-running the same check that already passed. Catching this before delivery, rather than from Doug's own terminal output afterward, came from treating "the file compiles" as necessary and clearly insufficient, not as the finish line.
+
+# Session 121: Set Part Color -- revisiting an old estimate honestly, then a real shared-instance bug caught by Doug's own thorough testing
+
+## Origin
+
+Early in KodaCAD2's development, a "Set part color" RMB action had been estimated as small, high-value, low-risk work -- `context.SetColor` plus a `QColorDialog`, with one flagged uncertainty (whether a user-set color would survive `redraw()`'s own full rebuild). Never pursued at the time, always something more urgent. Doug's own question, much later: given how much has changed since, does that old estimate still hold?
+
+## Verifying rather than reflexively confirming
+
+The honest answer required actually looking at the current code, not trusting an assessment made before most of this project's own architecture existed. Confirmed directly: `redraw()` still does a full `RemoveAll()` and rebuild, so the original concern was real -- but `draw_shape()` itself was confirmed to already read `color = part_data["color"]` on every call, meaning the mechanism the old estimate hoped for was genuinely in place, just under a different key than remembered: `dm.part_dict[uid]["color"]`, not `dm.label_dict[uid]['color']` -- the document model had moved on since that early estimate, as expected.
+
+A better template than the original estimate anticipated turned up along the way: `setTransparent()`/`setOpaque()`, two existing RMB actions doing almost exactly this already -- resolve the clicked item via a hardened helper (`_get_clicked_or_current_item()`, itself with its own past bug fix for a stale, deleted-but-still-Python-truthy tree item), confirm it's a real part, update its own style state, then a *targeted* `erase_shape(uid)` + `draw_shape(uid)` rather than a full `redraw()`. Better than the redraw-safety concern the original estimate flagged as its own one uncertain piece, since the established pattern never touches that full-rebuild path at all.
+
+## The persistence question, raised and answered
+
+Checking the actual `color_tool.SetColor` usage elsewhere in `docmodel.py` (the STEP import path, and shared-instance creation) surfaced a real design question the original estimate hadn't addressed: color in this codebase has two separate homes, the Python-side `part_dict` cache `draw_shape()` reads for display, and the XCAF document itself, which is what a STEP export or reload actually reads from. The `setTransparent`/`setOpaque` template only ever touches the first -- correct for transparency, which has no STEP equivalent to preserve, but color is different. Raised directly rather than assumed either way: did Doug want a session-only visual override, or a real, permanent, saved property? Confirmed: permanent, part of the saved file.
+
+## Built
+
+`dm.set_part_color(uid, color)` -- shape-keyed `SetColor`, written to both `XCAFDoc_ColorSurf` and `XCAFDoc_ColorGen` together, matching the exact, already-proven convention `_transfer_color()` uses on the STEP import path (Sessions 52-53: real vendor files were found to store color under either kind, so writing both is what makes it reliably found again regardless of which one a later reader checks first). `color_tool` obtained via `XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())`, the same, consistent convention used everywhere else in `docmodel.py` that touches color.
+
+`setPartColor()` in `mainwindow.py` -- a new RMB action, "Set Color...", added right alongside Set Transparent/Set Opaque. `QColorDialog.getColor()`, pre-populated with the part's own current color when one exists (`Quantity_Color`'s own `Red()`/`Green()`/`Blue()`, confirmed real via official OCCT docs before use, wrapped in its own try/except so a failed read-back only costs the nicety of a pre-filled picker, never the feature itself).
+
+## Doug's own test surfaces a real bug the design hadn't anticipated
+
+Recoloring one instance of a shared part in `as1-oc-214.stp` ('L-bkt') updated correctly everywhere -- except the *other*, already-displayed instance in the same, live session. Save and reload: both correct. Opened fresh in CAD Assistant: both correct. Only the live session's own second instance stayed stale, and toggling hide/show didn't help either.
+
+That pattern -- correct everywhere a document gets freshly re-read, wrong only in the one place holding an already-built display -- pointed straight at the gap: `part_dict`'s own color cache is kept *per occurrence*, and `set_part_color()` had only ever updated the one `uid` actually clicked.
+
+The first instinct -- find siblings by comparing shapes -- was checked directly against the code before being used, and confirmed wrong: `part_dict[uid]["shape"]` is a genuinely distinct, independently-*located* shape per occurrence (`BRepBuilderAPI_Transform`, applied once per component's own world placement in `parse_components`), never `IsSame()` to another instance of the same shared part even though both trace back to one prototype. Comparing shapes at all was the wrong idea. The reliable signal was already sitting in the data model, unused for this purpose: `label_dict[uid]['ref_entry']`, the shared prototype label's own identity, set once per occurrence and identical across every instance of the same part regardless of where each one sits.
+
+`set_part_color()` rewritten to group by `ref_entry`, update every sibling's own cached color, and return the full list of affected uids, rather than a bare success flag. The RMB handler refreshes every uid in that list, not just the one originally clicked.
+
+Confirmed by Doug: all tests passed, including the original scenario that surfaced the gap.
+
+### Lesson for future development
+
+**A bug that's correct everywhere a document gets freshly re-parsed, and wrong only in the one place holding state built up *before* the change, is a strong, specific signal about where the fix belongs -- and it's worth resisting the pull toward the first plausible-sounding mechanism for finding "the other instances" without checking it against what the code actually does.** Shape comparison felt like the obvious answer and would have been a second, silent bug sitting directly on top of the first, fixing nothing, because two instances of a shared part are never `IsSame()` to each other by construction. The actual fix came from reading `parse_components()` directly rather than reasoning about XCAF in the abstract, and from a key (`ref_entry`) the codebase had already been using correctly, elsewhere, for exactly this same "same underlying part, different occurrence" concept all along.

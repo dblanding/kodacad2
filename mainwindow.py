@@ -851,6 +851,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Create Shared Instance", self.createSharedInstance)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
+        menu.addAction("Set Color...", self.setPartColor)
         menu.addSeparator()
         menu.addAction("Delete", self.deleteItem)
 
@@ -1179,6 +1180,74 @@ class MainWindow(QMainWindow):
                 self.transparency_dict.pop(uid)
                 self.erase_shape(uid)
                 self.draw_shape(uid)
+            self.itemClicked = None
+        else:
+            print("No item selected. Try first left clicking item then right clicking.")
+
+    def setPartColor(self):
+        """RMB: open a color picker and set the clicked part's own
+        color -- permanently, via dm.set_part_color(), which writes
+        into the XCAF document itself, not just applied for the
+        current display (Doug's own confirmation, Session 121: wanted
+        as a real, saved property, surviving reload and showing up
+        correctly in any other STEP-compliant application, the same
+        way as1-oc-214.stp's own, originally-authored colors do).
+
+        Broadly the same shape as setTransparent()/setOpaque() --
+        resolve the clicked part, confirm it's a real part, apply,
+        then a targeted erase_shape()+draw_shape() rather than a full
+        redraw() -- with two real differences transparency's own,
+        purely visual, session-only setting never needed: the
+        document-level SetColor call itself, and refreshing EVERY uid
+        dm.set_part_color() reports as affected, not just the one
+        clicked. That second part matters for shared parts
+        specifically (Session 121, Doug's own report on as1-oc-214.
+        stp's 'L-bkt'): recoloring one instance is correct in the
+        document immediately, and any other instance's own SEPARATE,
+        already-displayed AIS_Shape in this live session needs its own
+        explicit refresh too, or it keeps showing its old color until
+        something else happens to redraw it.
+
+        Pre-populates the dialog with the part's current color when
+        one exists, read back via Quantity_Color's own Red()/Green()/
+        Blue() (confirmed real, official OCCT docs) -- wrapped in its
+        own try/except so a failure here only costs the nicety of a
+        pre-filled picker, never the ability to set a color at all."""
+        item = self._get_clicked_or_current_item()
+        if item:
+            uid = item.text(1)
+            if uid in dm.part_dict:
+                initial = QColor()
+                current = dm.part_dict[uid].get("color")
+                if current is not None:
+                    try:
+                        initial = QColor.fromRgbF(
+                            current.Red(), current.Green(), current.Blue())
+                    except Exception as ce:
+                        print(f"[setPartColor] reading current color "
+                             f"failed ({ce}) -- picker opens without "
+                             f"a pre-filled value")
+                from PySide6.QtWidgets import QColorDialog
+                qcolor = QColorDialog.getColor(
+                    initial, self, "Set Part Color")
+                if qcolor.isValid():
+                    from OCP.Quantity import (Quantity_Color,
+                                              Quantity_TypeOfColor)
+                    occt_color = Quantity_Color(
+                        qcolor.redF(), qcolor.greenF(), qcolor.blueF(),
+                        Quantity_TypeOfColor.Quantity_TOC_RGB)
+                    # Session 121 fix: set_part_color() returns EVERY
+                    # uid affected -- the clicked one plus any sibling
+                    # occurrences of the same shared part -- not just
+                    # a success flag. All of them need their own
+                    # display refreshed, or a shared part's OTHER
+                    # instance(s) stay visibly stale in this live
+                    # session even though the document itself, and
+                    # therefore a save/reload, is already correct for
+                    # all of them.
+                    for auid in dm.set_part_color(uid, occt_color):
+                        self.erase_shape(auid)
+                        self.draw_shape(auid)
             self.itemClicked = None
         else:
             print("No item selected. Try first left clicking item then right clicking.")

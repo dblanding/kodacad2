@@ -28,7 +28,8 @@ from OCP.STEPControl import STEPControl_AsIs
 from OCP.TCollection import TCollection_ExtendedString
 from OCP.TDataStd import TDataStd_Name
 from OCP.TCollection import TCollection_ExtendedString as TColEStr
-from OCP.TDF import TDF_CopyLabel, TDF_Label, TDF_LabelSequence, TDF_ChildIterator
+from OCP.TDF import TDF_CopyLabel, TDF_Label, TDF_ChildIterator
+from OCP.TDF import TDF_LabelSequence
 from OCP.TDocStd import TDocStd_Document, TDocStd_XLinkTool
 from OCP.TopoDS import TopoDS_Compound, TopoDS_Shape
 from OCP.XCAFApp import XCAFApp_Application
@@ -154,7 +155,8 @@ def rebuild_imported_structure(src_label, shape_tool, color_tool, memo):
     Returns the destination label for src_label's underlying shape --
     the caller adds it as a component wherever it belongs.
     """
-    from OCP.TDF import TDF_Label, TDF_LabelSequence
+    from OCP.TDF import TDF_Label
+    from OCP.TDF import TDF_LabelSequence
     from OCP.TopoDS import TopoDS_Compound
     from OCP.BRep import BRep_Builder
 
@@ -241,7 +243,8 @@ def _transfer_color(src_label, dst_label, shape_tool, color_tool):
     top_found = False
     n_sub = 0
     from OCP.XCAFDoc import XCAFDoc_ShapeTool, XCAFDoc_ColorTool
-    from OCP.TDF import TDF_Label, TDF_LabelSequence
+    from OCP.TDF import TDF_Label
+    from OCP.TDF import TDF_LabelSequence
     try:
         src_color_tool = XCAFDoc_DocumentTool.ColorTool_s(src_label)
         src_shape = XCAFDoc_ShapeTool.GetShape_s(src_label)
@@ -368,7 +371,8 @@ def remove_shape_and_orphaned_descendants(shape_tool, label):
     that point at them), then checks each captured child for orphan
     status (GetUsers_s == 0) and recurses into it if so.
     """
-    from OCP.TDF import TDF_Label, TDF_LabelSequence
+    from OCP.TDF import TDF_Label
+    from OCP.TDF import TDF_LabelSequence
     child_refs = []
     if shape_tool.IsAssembly_s(label):
         children = TDF_LabelSequence()
@@ -812,7 +816,8 @@ class DocModel:
         reparent_component().
         """
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
-        from OCP.TDF import TDF_Label, TDF_LabelSequence
+        from OCP.TDF import TDF_Label
+        from OCP.TDF import TDF_LabelSequence
         if uid not in self.label_dict:
             print(f"[delete] Unknown uid {uid}")
             return False
@@ -940,7 +945,8 @@ class DocModel:
         # assembly-with-children. Removing the unshare makes
         # Create Shared Instance -> Position yield genuine persistent
         # sharing end to end, the whole point of a shared instance.
-        from OCP.TDF import TDF_Label, TDF_LabelSequence
+        from OCP.TDF import TDF_Label
+        from OCP.TDF import TDF_LabelSequence
 
         # Parent assembly label (component's CURRENT parent -- we are
         # repositioning in place, not reparenting).
@@ -1126,6 +1132,78 @@ class DocModel:
               f"{(round(pt.X(),3), round(pt.Y(),3), round(pt.Z(),3)) if pt else None}"
               f"{' (chosen from ' + str(len(matches)) + ' shared occurrences)' if len(matches) > 1 else ''}")
         return chosen_uid
+
+    def set_part_color(self, uid, color):
+        """Set a part's own display color, permanently -- written into
+        the XCAF document itself (via XCAFDoc_ColorTool), not just
+        held in part_dict for the current session, so it survives a
+        real save/reload and shows up correctly in any other STEP-
+        compliant application too.
+
+        color: a Quantity_Color. Session 121 (Doug's own confirmation:
+        wanted as a permanent, saved property, not a session-only
+        display override).
+
+        Shape-keyed SetColor, written to BOTH XCAFDoc_ColorSurf and
+        XCAFDoc_ColorGen together -- the same, proven convention
+        _transfer_color() already uses on the STEP import path (see
+        its own docstring, Sessions 52-53: real vendor files were
+        found to store color under either kind, and a reader may only
+        ever check one of the two, so writing both is what makes the
+        color reliably found again regardless of which convention the
+        NEXT reader -- including KodaCAD2 itself, on a later reload --
+        happens to check first).
+
+        Session 121 fix (Doug's own report: recoloring one instance of
+        a shared part, as1-oc-214.stp's own 'L-bkt', updated correctly
+        everywhere EXCEPT the live session's own OTHER, already-
+        displayed instance -- confirmed correct after save/reload, and
+        in CAD Assistant, both proving the document-level write above
+        was already right). Root cause: part_dict[uid]['shape'] is a
+        LOCATED shape, built per-occurrence via BRepBuilderAPI_
+        Transform (parse_components, each occurrence at its own world
+        placement) -- never the same object, or even IsSame() to one
+        another, across two occurrences of the same shared part, even
+        though they share one underlying prototype. Comparing shapes
+        at all was the wrong idea for finding siblings. The reliable
+        signal already exists, unused for this: label_dict[uid][
+        'ref_entry'] -- the prototype label's own identity, set once
+        in parse_components and IDENTICAL across every occurrence of
+        the same shared part, regardless of where each one sits.
+        Every uid sharing this uid's own ref_entry gets its part_dict
+        color updated too, not just uid itself.
+
+        Returns the list of ALL uids whose own DISPLAY needs
+        refreshing as a result (always includes uid itself, plus any
+        siblings found) -- empty list on failure. The caller is
+        expected to erase_shape()+draw_shape() every uid in the
+        returned list, not just the one originally clicked."""
+        if uid not in self.part_dict:
+            print(f"[set_part_color] Unknown part uid {uid}")
+            return []
+        from OCP.XCAFDoc import (XCAFDoc_DocumentTool, XCAFDoc_ColorSurf,
+                                 XCAFDoc_ColorGen)
+        try:
+            shape = self.part_dict[uid]["shape"]
+            color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
+            color_tool.SetColor(shape, color, XCAFDoc_ColorSurf)
+            color_tool.SetColor(shape, color, XCAFDoc_ColorGen)
+
+            ref_entry = self.label_dict.get(uid, {}).get('ref_entry')
+            affected = [uid]
+            if ref_entry is not None:
+                for other_uid in self.part_dict:
+                    if other_uid == uid:
+                        continue
+                    if self.label_dict.get(other_uid, {}).get(
+                            'ref_entry') == ref_entry:
+                        affected.append(other_uid)
+            for auid in affected:
+                self.part_dict[auid]["color"] = color
+            return affected
+        except Exception as e:
+            print(f"[set_part_color] failed for uid={uid}: {e}")
+            return []
 
     def get_full_path_name(self, uid):
         """Full breadcrumb path from '/' down to uid, e.g.
@@ -1359,7 +1437,8 @@ class DocModel:
         product, in the session and through STEP save/reload.
         """
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
-        from OCP.TDF import TDF_Label, TDF_LabelSequence
+        from OCP.TDF import TDF_Label
+        from OCP.TDF import TDF_LabelSequence
         if uid not in self.label_dict:
             print(f"[create_shared_instance] Unknown uid {uid}")
             return False
@@ -1421,7 +1500,8 @@ class DocModel:
         """
         if not entry:
             return None
-        from OCP.TDF import TDF_LabelSequence, TDF_ChildIterator
+        from OCP.TDF import TDF_ChildIterator
+        from OCP.TDF import TDF_LabelSequence
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
 
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
