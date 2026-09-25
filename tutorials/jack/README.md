@@ -21,8 +21,9 @@ Polyline, Arc by 3 Points, Arc: Center + 2 Points, and both Delete
 Construction Element and Delete Geometry Element -- deliberately using
 more than one tool to build equivalent geometry (the two eyes), so the
 same result is reachable more than one way. The second half builds on
-the Bottle tutorial's own pull-then-heavily-fillet technique for a
-rounded, non-revolved form, then moves the workplane with the face
+the Bottle tutorial's pull-then-heavily-fillet technique for a
+rounded, non-revolved form, then shells the form and uses section view
+to verify the shell operation, then moves the workplane with the face
 features into position on the front of the pumpkin to demonstrate
 Pull's multi-profile capability to remove material from the pumkin.
 
@@ -177,7 +178,6 @@ operation turns that box into a rounded, pumpkin-like solid.*
 * **Modify Active Part -> Shell**: click the small square top face,
   enter `20` for the shell thickness.
 
-
 Worth knowing going in: that top face is entirely bounded by tangent
 fillets rather than genuine sharp edges shared with other faces, so
 Shell has no real opening to carve there -- the result comes out
@@ -188,10 +188,20 @@ in this project against both this pumpkin shape and a plain filleted
 bottle. It's also not a problem for this particular build, since the
 face will be cut through entirely in the next step regardless.
 
+In order to verify that the punpkin was properly shelled, click on the 
+**Section View** button near the bottom of the toolbar.
+
+![Section View of Pumpkin](imgs/section-view.png)
+
+Initially, the clipped "face" of the section view will be in the X direction.
+Click on other directions to explore the way section views are displayed.
+Once in a section view, you can edit the location of the clipping plane.
+If you select **Normal View** again, then return to the section view
+just edited, the clipping plane you set will be remembered.
+
 *Exercises: Shell on a form whose only candidate open face is entirely
-tangent-bounded -- a deliberate, known limitation to work around
-rather than something the operation should be expected to succeed at
-here.*
+tangent-bounded, Section Views, and how to adjust the position of the 
+clipping plane.*
 
 ## Step 6 -- Move workplane wp1 onto the front of the pumpkin
 
