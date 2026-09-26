@@ -849,6 +849,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Create New Assembly", self.createNewAssembly)
         menu.addAction("Create Empty Part", self.createEmptyPart)
         menu.addAction("Create Shared Instance", self.createSharedInstance)
+        menu.addAction("Copy Part", self.copyPart)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
@@ -1420,6 +1421,44 @@ class MainWindow(QMainWindow):
             # handles correctly with no special flag needed: the new
             # instance's uid is genuinely new, so it gets drawn;
             # nothing else does.
+            self.build_tree()
+            self._incremental_reconcile(old_uids)
+        self.treeView.clearSelection()
+        self.itemClicked = None
+
+    def copyPart(self):
+        """RMB: create a genuinely independent copy of the clicked
+        part -- superimposed on the original -- move it via the
+        Position dialog. Session 123 (Doug's own reconsidered
+        workflow, after Session 122's confirmed, structural STEP-
+        export limitation around unsharing: rather than keep chasing
+        that specific bug, build the same "fork without affecting the
+        source" result a different way -- Create New Assembly plus
+        Reparent plus this, the one missing piece). Same shape as
+        createSharedInstance() throughout, right down to the
+        incremental-reconcile refresh -- this is also just one
+        genuinely new component added, nothing else touched -- with
+        the one real difference (dm.copy_part() building an
+        independent prototype rather than referencing the existing
+        one) living entirely in the document-model method itself.
+
+        Deliberately scoped to simple parts only, matching Doug's own
+        stated request -- dm.copy_part() itself rejects assemblies
+        explicitly, so this handler doesn't need its own, separate
+        guard for that."""
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        if uid not in dm.label_dict:
+            print(f"'{item.text(0)}' cannot be copied.")
+            self.itemClicked = None
+            return
+        old_uids = set(dm.part_dict.keys())
+        with undo_transaction(dm):
+            copied = dm.copy_part(uid)
+        if copied:
             self.build_tree()
             self._incremental_reconcile(old_uids)
         self.treeView.clearSelection()

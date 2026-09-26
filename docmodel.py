@@ -786,7 +786,6 @@ class DocModel:
         shape_tool.UpdateAssemblies()
         self.parse_doc()
 
-
     def delete_component(self, uid):
         """Delete a part or assembly component from the XDE document.
 
@@ -1492,6 +1491,106 @@ class DocModel:
               f"{'assembly' if shape_tool.IsAssembly_s(ref_label) else 'part'}.)")
         return True
 
+    def copy_part(self, uid):
+        """Create a genuinely independent copy of the SIMPLE PART
+        identified by uid, at exactly the same location as the
+        original -- superimposed, ready to be moved via the Position
+        dialog. Session 123 (Doug's own reconsidered workflow: rather
+        than keep chasing Session 122's confirmed, structural STEP-
+        export limitation around unsharing -- a shared prototype's
+        own name writing out blank when its relating parent was
+        itself built this session via AddShape(empty compound, True)
+        AND that same prototype is also referenced by a different,
+        originally-imported parent elsewhere in the document -- build
+        the same "fork it without affecting the source" result a
+        different way: create_new_assembly() (already proven) plus
+        reparent_component() (already proven) plus this, the one
+        missing piece, compose into the same outcome while never
+        creating the specific structural combination that triggers
+        the export bug at all. A genuinely independent copy has no
+        prototype shared with anything else in the document, so the
+        actual precondition for Session 122's bug is never present in
+        the first place -- not a workaround for it, a structure that
+        doesn't have the problem to begin with).
+
+        Deliberately scoped to simple parts only, matching Doug's own
+        stated request -- assemblies are explicitly rejected here,
+        since copying one recursively (every level independently
+        duplicated, nothing shared with the original at any depth) is
+        a genuinely different, larger operation than what was asked
+        for, not something to fold into this quietly.
+
+        Mechanism: the same, already-proven shape-copy step
+        unshare_component()'s own simple-part branch uses --
+        BRepBuilderAPI_Copy to produce a real, independent TopoDS_
+        Shape (confirmed live, Session 122: handing the SAME shape
+        object back to AddShape silently reuses the existing label
+        rather than creating a new one -- a copy is what actually
+        produces independence), then AddShape to register it as its
+        own, new top-level prototype -- then a new component under
+        the SAME parent as the original, at the SAME location,
+        referencing this new, independent prototype instead of the
+        original's own. Uses next_sibling_name(), the same sibling-
+        scoped naming helper create_shared_instance() already uses,
+        so the new part's own name doesn't collide with existing
+        siblings under that same parent."""
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_Label
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+        if uid not in self.label_dict:
+            print(f"[copy_part] Unknown uid {uid}")
+            return False
+        if not self.label_dict[uid].get('parent_uid'):
+            print("[copy_part] The root cannot be copied.")
+            return False
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
+        comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+        if comp_label is None:
+            print(f"[copy_part] Could not find label for {uid}")
+            return False
+        ref_label = TDF_Label()
+        if not shape_tool.GetReferredShape_s(comp_label, ref_label):
+            print(f"[copy_part] '{get_label_name(comp_label)}' is not a "
+                 f"component reference -- cannot copy it.")
+            return False
+        if shape_tool.IsAssembly_s(ref_label):
+            print(f"[copy_part] '{get_label_name(comp_label)}' is an "
+                 f"assembly, not a simple part -- copy_part() is "
+                 f"scoped to simple parts only.")
+            return False
+
+        parent_assy = comp_label.Father()
+        loc = shape_tool.GetShape_s(comp_label).Location()
+        ref_shape = shape_tool.GetShape_s(ref_label)
+        ref_name = get_label_name(ref_label)
+        old_color = get_part_display_color(
+            color_tool, shape_tool, ref_label, ref_shape)
+
+        try:
+            copied_shape = BRepBuilderAPI_Copy(ref_shape).Shape()
+            new_ref_label = shape_tool.AddShape(copied_shape, False)
+            set_label_name(new_ref_label, ref_name)
+            if old_color is not None:
+                color_tool.SetColor(new_ref_label, old_color,
+                                    XCAFDoc_ColorSurf)
+                color_tool.SetColor(new_ref_label, old_color,
+                                    XCAFDoc_ColorGen)
+
+            new_comp = shape_tool.AddComponent(parent_assy, new_ref_label,
+                                               loc)
+            occ_name = next_sibling_name(shape_tool, parent_assy, ref_name)
+            set_label_name(new_comp, occ_name)
+            shape_tool.UpdateAssemblies()
+            self.parse_doc()
+            print(f"[copy_part] '{occ_name}' created, superimposed on "
+                 f"the original, its own genuinely independent "
+                 f"prototype -- use the Position dialog to move it.")
+            return True
+        except Exception as e:
+            print(f"[copy_part] failed for uid={uid}: {e}")
+            return False
+
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.
 
@@ -1548,7 +1647,7 @@ class DocModel:
         # time (Session 14 only went one level deep -- the name
         # corruption this round may be at any depth, not just top-level).
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
-        from OCP.TDF import TDF_LabelSequence
+        from OCP.TDF import TDF_Label, TDF_LabelSequence
         shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
 
         def _dump(label, depth):
@@ -1557,8 +1656,24 @@ class DocModel:
             t = loc.Transformation().TranslationPart()
             print(f"{'  ' * depth}{name!r} entry={get_label_entry(label)} "
                   f"loc=({t.X():.3f}, {t.Y():.3f}, {t.Z():.3f})")
+            # Session 122 fix (Doug's own report: the dump only ever
+            # showed two lines -- '/' and 'as1_1' -- for a document
+            # that's actually many levels deep). Root cause: as1_1
+            # here is a REFERENCE label (a component, pointing at its
+            # own, real prototype), not the prototype itself -- the
+            # exact same distinction that caused unshare_component's
+            # own parent-resolution bug earlier. GetComponents_s on a
+            # reference directly returns nothing at all; a reference
+            # has no children of its own, only whatever it points to
+            # does. Walk through to the referred prototype first
+            # whenever label is itself a reference.
+            walk_label = label
+            if shape_tool.IsReference_s(label):
+                ref_label = TDF_Label()
+                if shape_tool.GetReferredShape_s(label, ref_label):
+                    walk_label = ref_label
             children = TDF_LabelSequence()
-            shape_tool.GetComponents_s(label, children, False)
+            shape_tool.GetComponents_s(walk_label, children, False)
             for i in range(1, children.Length() + 1):
                 _dump(children.Value(i), depth + 1)
 
@@ -1801,6 +1916,16 @@ class DocModel:
         if self.part_dict[uid]['loc']:
             modshape.Move(self.part_dict[uid]['loc'].Inverted())
         shape_tool.SetShape(label, modshape)
+        # Session 122 fix (Doug's own report: a part modified and
+        # re-colored correctly in-session lost its color specifically
+        # after a save/reload). This was the only color-write location
+        # in the whole file writing just ONE of the two established
+        # kinds -- every other one (_transfer_color, unshare_
+        # component) always writes both XCAFDoc_ColorSurf and
+        # XCAFDoc_ColorGen together, precisely because real files, and
+        # apparently the STEP writer's own export path too, can prefer
+        # either one.
+        color_tool.SetColor(modshape, color, XCAFDoc_ColorSurf)
         color_tool.SetColor(modshape, color, XCAFDoc_ColorGen)
         shape_tool.UpdateAssemblies()
         # Session 78, Doug: undoing a fillet left the fillet visibly
