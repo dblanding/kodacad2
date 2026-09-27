@@ -6591,3 +6591,21 @@ This isn't a workaround for the confirmed export bug so much as a structure that
 ### Lesson for future development
 
 **A confirmed, well-diagnosed bug in a third-party library is a different kind of finding than a bug in this codebase's own logic, and deserves a different response: not a deeper patch, but a genuine reconsideration of whether the same goal can be reached by a route that never creates the bug's own precondition at all.** Every fix applied to `unshare_component` itself was correct and confirmed -- the parent-resolution bug, the shape-reuse bug, both real, both properly diagnosed and properly closed. What made this session end in a retirement rather than a fix wasn't running out of ideas; it was recognizing, once the STEP-export limitation was pinned down precisely enough to state its exact trigger condition, that continuing to chase it inside `unshare_component` would only ever be patching around something structurally outside this codebase's own control -- while a different, already-available composition of proven primitives sidestepped the actual precondition entirely, rather than working around its symptom.
+
+# Session 123: line_circ_inters replaced with Geom2dAPI_InterCurveCurve, dead code removed
+
+## Origin
+
+The 09/03 fix to `cline_box_intrsctn` (a 45-degree cline through a ccirc's exact center hitting two opposite box corners, computed via different arithmetic, occasionally failing to dedup as the same float point) recurred: a construction line at 45 degrees through a construction circle again produced no intersection point. Doug noticed `Geom2dAPI_InterCurveCurve` was already imported and in use elsewhere in `workplane.py` (`intersectPts()`, for the same cline/ccirc case) and asked whether the hand-rolled `line_circ_inters` should simply be replaced with it.
+
+## Investigation and fix
+
+Confirmed every call site first: exactly three, all in `snap_engine.py`, all calling `wpm.line_circ_inters(cline_or_arc_circle, circle)` and expecting a list of `(x, y)` tuples back. `line_circ_inters` itself rewritten to build a `Geom2d_Line`/`Geom2d_Circle` from the same `(a, b, c)` and `((xc, yc), r)` inputs and hand the intersection to `Geom2dAPI_InterCurveCurve`, matching `intersectPts()`'s own established pattern for the same primitive rather than inventing a new one. Return type unchanged, so none of the three call sites needed touching. Doug confirmed the original failing construction now finds its intersection point.
+
+## Dead code removed
+
+`cline_box_intrsctn()` was only ever called from the old `line_circ_inters()` body -- confirmed via grep before deleting, not assumed -- so it's removed outright rather than left behind. `seg_circ_inters()` stays; it has two other, unrelated call sites. Per Doug's own stated preference, kept in one commit together with the fix itself, so a future "actually, put it back" is a single, easy revert rather than an archaeology project across two commits.
+
+### Lesson for future development
+
+**A hand-rolled geometry routine that has already failed once on a specific edge case, been patched, and failed again on the same shape of edge case is a strong signal to stop patching and look for whether a proven primitive already sits in the same file solving the same problem.** `Geom2dAPI_InterCurveCurve` was already trusted for cline/ccirc intersection in `intersectPts()`; the fix here wasn't new geometry work, just recognizing that `line_circ_inters()` didn't need its own bespoke box-and-segment reduction when the file already had a battle-tested path to the same answer.

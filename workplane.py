@@ -161,28 +161,31 @@ def seg_circ_inters(x1, y1, x2, y2, xc, yc, r):
 def line_circ_inters(line, circle):
     '''Return list of intersection pts of line and circle.
 
-    line defined by coeffs a, b, c, circle (cntr xc,yc and radius r).
-    (The "extra points" bug this docstring used to warn about was
-    root-caused and fixed in seg_circ_inters: a negative discriminant
-    -- no real intersection -- was being treated as if it were
-    positive.)'''
+    line defined by coeffs a, b, c (ax+by+c=0), circle (cntr xc,yc
+    and radius r).
+
+    Was hand-rolled (project a box around the line's closest approach
+    to the circle center, reduce to a segment, then solve the
+    segment/circle quadratic). That path had a real, confirmed
+    edge-case bug -- a 45-degree cline through a ccirc's exact center
+    hit two opposite box corners, computed via different arithmetic
+    paths, which occasionally failed to dedup as the same float
+    point -- and it recurred a second time after the first fix.
+    Replaced with OCCT's own curve/curve intersector,
+    Geom2dAPI_InterCurveCurve -- the same primitive intersectPts()
+    already uses for cline/ccirc snap-catch detection elsewhere in
+    this file -- instead of patching the hand-rolled geometry again.'''
     a, b, c = line
     (xc, yc), r = circle
-    # first find pt on line closest to circle center
-    p0 = proj_pt_on_line(line, (xc, yc))
-    # define corners of box (4r x 4r) centered on p0
-    x0, y0 = p0
-    xb1 = x0 - 2*r
-    yb1 = y0 - 2*r
-    xb2 = x0 + 2*r
-    yb2 = y0 + 2*r
-    box = (xb1, yb1, xb2, yb2)
-    # define line segment to be intersection points of line with box
-    p1, p2 = cline_box_intrsctn(line, box)
-    x1, y1 = p1
-    x2, y2 = p2
-    # find intersection points of segment and circle
-    return seg_circ_inters(x1, y1, x2, y2, xc, yc, r)
+    geom_line = Geom2d_Line(gp_Lin2d(a, b, c))
+    geom_circ = Geom2d_Circle(gp_Circ2d(gp_Ax2d(gp_Pnt2d(xc, yc),
+                                                 gp_Dir2d(1, 0)), r))
+    inters = Geom2dAPI_InterCurveCurve(geom_circ, geom_line)
+    pts = []
+    for i in range(inters.NbPoints()):
+        pnt2d = inters.Point(i+1)
+        pts.append((pnt2d.X(), pnt2d.Y()))
+    return pts
 
 
 def circ_circ_inters(circ1, circ2):
@@ -211,41 +214,6 @@ def same_pt_p(p1, p2):
     '''Return True if p1 and p2 are within 1e-10 of each other.'''
     if p2p_dist(p1, p2) < 1e-6:
         return True
-
-
-def cline_box_intrsctn(cline, box):
-    """Return tuple of pts where line intersects edges of box.
-
-    Doug's pumpkin-eyes report: a 45-degree cline through the center
-    of a ccirc produced no catch glyph at all, with nothing printed
-    anywhere -- traced to this function. The box is centered on the
-    line's own closest point to the circle, so a line passing exactly
-    through the circle's center also passes exactly through two
-    opposite corners of this box (never true for H/V lines, which
-    cross the middle of two opposite edges instead). Each corner then
-    gets computed twice -- once via each of its two adjacent edges,
-    through different arithmetic -- and those two results can be the
-    same point mathematically without being exactly equal as floats.
-    The old exact-equality dedup (`pt not in pts`) could then return
-    3 or 4 points instead of 2, silently breaking the `p1, p2 = ...`
-    unpack two lines below this call in line_circ_inters -- caught by
-    find_snap's own try/except, so the failure was silent."""
-    x0, y0, x1, y1 = box
-    pts = []
-    segments = [((x0, y0), (x1, y0)),
-                ((x1, y0), (x1, y1)),
-                ((x1, y1), (x0, y1)),
-                ((x0, y1), (x0, y0))]
-    tol = 1.0e-7  # matches the TOLERANCE constant printed at startup
-    for seg in segments:
-        pt = intersection(cline, cnvrt_2pts_to_coef(seg[0], seg[1]))
-        if pt:
-            if p2p_dist(pt, seg[0]) <= p2p_dist(seg[0], seg[1]) and \
-               p2p_dist(pt, seg[1]) <= p2p_dist(seg[0], seg[1]):
-                if not any(p2p_dist(pt, existing) < tol
-                          for existing in pts):
-                    pts.append(pt)
-    return tuple(pts)
 
 
 def para_line(cline, pt):
