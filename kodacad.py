@@ -30,8 +30,11 @@ from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
-from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QTreeWidgetItemIterator
+from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
+                               QHBoxLayout, QLabel, QMenu,
+                               QMessageBox, QPushButton,
+                               QTreeWidgetItemIterator, QVBoxLayout)
 
 from m2d import M2D
 import stepanalyzer
@@ -40,6 +43,7 @@ from mainwindow import MainWindow, dm
 from OCCUtils import Topology
 import workplane
 from workplane import face_normal
+import isolated_features
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # set to DEBUG | INFO | ERROR
@@ -819,89 +823,68 @@ def shellC(shapeList, *args):
         shell()
 
 
-def removeHole(event=None):
-    """Remove a simple cylindrical hole (blind or through) from the
-    active part, healing the surrounding geometry, via OCP's
-    BRepAlgoAPI_Defeaturing.
-
-    Deliberately scoped narrow for now (Doug's own step-at-a-time
-    preference): one simple cylindrical hole per operation. Confirmed
-    working via the Utility menu smoke tests that preceded this --
-    both on synthetic geometry and on a real, imported goBILDA part --
-    including the discovery that a hole's cylindrical surface can be
-    split into multiple face patches (picking captures only one; the
-    algorithm needs the complete set), and that a blind hole's own
-    bottom cap is healed automatically once the cylindrical wall is
-    removed, with no separate cap handling needed.
-    """
-    if not require_active_part("Remove Hole"):
-        return
-    win.registerCallback(removeHoleC)
-    display.SetSelectionModeFace()
-    win.statusBar().showMessage(
-        "Select a cylindrical face (a hole) to remove.")
-
-
-def removeHoleC(shapeList, *args):
-    """Callback (collector) for removeHole."""
-    if not shapeList:
-        return
-    try:
-        picked_face = TopoDS.Face_s(shapeList[0])
-    except Exception:
-        win.statusBar().showMessage(
-            "Pick a face (not an edge or vertex).")
-        return
-
-    # Ownership check -- same pattern fillet()/shell() already use:
-    # compare against the part's own DISPLAYED reference shape (which
-    # may be NurbsConverted), not win.activePart directly.
-    uid = win.activePartUID
+def _defeaturing_workpart(uid):
+    """Return (workPart, ref_shape, face_pairs) for the active part --
+    same analytic-mapping lookup fillet()/shell() and the old
+    removeHole()/removeIsolatedFeature()/autoIsolatedFeature() all
+    already used (Session 91): a picked face may come from a
+    NurbsConverted display surrogate rather than the part's own real
+    geometry. face_pairs is None when there's no analytic surrogate
+    in play at all (workPart == ref_shape, no mapping needed)."""
     cached = win._display_prep_cache.get(uid)
     ref_shape = cached[1] if cached is not None else win.activePart
-    ref_faces = list(Topology.Topo(ref_shape).faces()) \
-        if ref_shape is not None else []
-    if not any(picked_face.IsSame(f) for f in ref_faces):
-        win.statusBar().showMessage(
-            "Selected face must be in Active Part.")
-        return
-
-    surf = BRepAdaptor_Surface(picked_face)
-    if surf.GetType() != GeomAbs_Cylinder:
-        win.statusBar().showMessage(
-            "Pick a cylindrical face (a hole) -- other feature "
-            "types aren't supported yet.")
-        return
-    win.clearCallback()
-
-    # Same analytic-mapping pattern as fillet()/shell() (Session 91):
-    # a picked face may come from a NurbsConverted display surrogate
-    # rather than the part's own real geometry.
     face_prep = win._face_prep_map.get(uid)
     if face_prep is not None:
         analytic_shape, face_pairs, _edge_pairs = face_prep
-        matched = _match_analytic_subshape(
-            picked_face, analytic_shape, face_pairs, TopAbs_FACE)
-        workPart = analytic_shape
-        work_face = matched if matched is not None else picked_face
-    else:
-        workPart = ref_shape
-        work_face = picked_face
+        return analytic_shape, ref_shape, face_pairs
+    return ref_shape, ref_shape, None
 
-    # Multi-patch collection: find every face sharing the SAME
-    # underlying cylinder (same axis, same radius) as the picked one,
-    # rather than pass only the single patch that was clicked.
-    picked_surf = BRepAdaptor_Surface(work_face)
-    matching_faces = [work_face]
+
+def _defeaturing_map_picked_faces(picked_faces, workPart, face_pairs):
+    """Map picked (possibly NurbsConverted-surrogate) faces onto
+    workPart's own analytic geometry -- same pattern used throughout
+    this file. A face with no analytic counterpart is skipped rather
+    than risk a mismatch."""
+    if face_pairs is None:
+        return list(picked_faces)
+    mapped = []
+    for picked_face in picked_faces:
+        matched = _match_analytic_subshape(
+            picked_face, workPart, face_pairs, TopAbs_FACE)
+        if matched is not None:
+            mapped.append(TopoDS.Face_s(matched))
+        else:
+            print("[Defeaturing] picked face has no analytic "
+                 "counterpart at all -- skipping it rather than "
+                 "risk a mismatch")
+    return mapped
+
+
+def _defeaturing_hole_faces(workPart, seed_face):
+    """Given ONE picked face for Remove Hole mode, verify it's
+    cylindrical and return every face sharing its surface (a hole's
+    cylindrical wall can be split into multiple patches -- picking
+    captures only one) plus any adjacent single-edge cap face (a
+    blind hole's own bottom, healed automatically once the wall is
+    removed -- no separate handling needed beyond finding it).
+    Unchanged logic from the original standalone removeHoleC.
+    Returns (faces, None) or (None, error_message)."""
+    surf = BRepAdaptor_Surface(seed_face)
+    if surf.GetType() != GeomAbs_Cylinder:
+        return None, ("Pick a cylindrical face (a hole) for Remove "
+                      "Hole -- other feature types aren't supported "
+                      "by this mode.")
+
+    matching_faces = [seed_face]
     try:
-        cyl1 = picked_surf.Cylinder()
+        cyl1 = surf.Cylinder()
         ax1 = cyl1.Axis()
         r1 = cyl1.Radius()
         line1 = gp_Lin(ax1)
         exp = TopExp_Explorer(workPart, TopAbs_FACE)
         while exp.More():
             f = TopoDS.Face_s(exp.Current())
-            if not f.IsSame(work_face):
+            if not f.IsSame(seed_face):
                 surf2 = BRepAdaptor_Surface(f)
                 if surf2.GetType() == GeomAbs_Cylinder:
                     cyl2 = surf2.Cylinder()
@@ -914,25 +897,13 @@ def removeHoleC(shapeList, *args):
                         matching_faces.append(f)
             exp.Next()
     except Exception as e:
-        print(f"[removeHole] multi-patch detection failed ({e}) -- "
-             f"falling back to the single picked face")
-        matching_faces = [work_face]
+        print(f"[Defeaturing:Hole] multi-patch detection failed "
+             f"({e}) -- falling back to the single picked face")
+        matching_faces = [seed_face]
 
-    print(f"[removeHole] {len(matching_faces)} cylindrical face(s) "
-         f"share the picked face's own surface")
+    print(f"[Defeaturing:Hole] {len(matching_faces)} cylindrical "
+         f"face(s) share the picked face's own surface")
 
-    # Doug's own finding (re-watching the source video): a blind hole
-    # built this way (sketch + prism + cut, not a native cylinder
-    # primitive) needs its BOTTOM CAP explicitly added too, not just
-    # the cylindrical wall -- confirmed directly by a synthetic test
-    # mirroring the real construction path, which failed identically
-    # to Doug's own part until the cap was included. Found by
-    # adjacency: any face sharing an edge with a collected cylindrical
-    # face. Restricted to faces bounded by exactly one edge (a simple,
-    # fully-closed cap) to avoid also picking up the block's own top
-    # face, which is ALSO adjacent to the cylinder's top edge but is
-    # part of the surrounding geometry, not the feature -- adding
-    # that one would be a genuine mistake, not just a missed one.
     try:
         cap_faces = []
         for cyl_f in list(matching_faces):
@@ -959,34 +930,38 @@ def removeHoleC(shapeList, *args):
                         cap_faces.append(f)
                 exp3.Next()
         if cap_faces:
-            print(f"[removeHole] {len(cap_faces)} cap face(s) found "
-                 f"adjacent to the cylindrical wall -- adding them "
-                 f"too")
+            print(f"[Defeaturing:Hole] {len(cap_faces)} cap face(s) "
+                 f"found adjacent to the cylindrical wall -- adding "
+                 f"them too")
             matching_faces.extend(cap_faces)
     except Exception as e:
-        print(f"[removeHole] cap-face detection failed ({e}) -- "
-             f"proceeding with cylindrical face(s) only")
+        print(f"[Defeaturing:Hole] cap-face detection failed ({e}) "
+             f"-- proceeding with cylindrical face(s) only")
 
+    return matching_faces, None
+
+
+def _defeaturing_execute(uid, workPart, faces_to_remove, label=""):
+    """Run BRepAlgoAPI_Defeaturing on workPart, removing
+    faces_to_remove, and write the result back to the active part as
+    ONE undo step. Shared tail logic for all three Defeaturing dialog
+    modes -- previously duplicated three times across the standalone
+    removeHoleC/removeIsolatedFeatureC/autoIsolatedFeatureC. Returns
+    (True, status_message) or (False, status_message)."""
     dfr = BRepAlgoAPI_Defeaturing()
     dfr.SetShape(workPart)
-    for f in matching_faces:
+    for f in faces_to_remove:
         dfr.AddFaceToRemove(f)
     dfr.Build()
-    print(f"[removeHole] IsDone={dfr.IsDone()}")
+    print(f"[Defeaturing:{label}] IsDone={dfr.IsDone()}")
     if not dfr.IsDone():
-        win.statusBar().showMessage(
-            "Unable to remove this hole -- the surrounding geometry "
-            "couldn't be healed.")
-        return
+        return False, ("Unable to remove this feature -- the "
+                       "surrounding geometry couldn't be healed.")
     newPart = dfr.Shape()
 
-    # Doug's own report: IsDone=True on both the through hole AND the
-    # blind hole, but only the through hole was actually removed --
-    # a claimed success that doesn't match what's on screen. Checking
-    # the actual result shape directly, before it's ever written back
-    # to the document, rather than trust IsDone=True at face value a
-    # second time: does the face count genuinely reflect a removal,
-    # or is IsDone=True trivially true without one?
+    # Same before/after face-count safety check every defeaturing
+    # path in this file has always used (Session 103): IsDone=True
+    # alone isn't trustworthy on its own for this algorithm.
     n_before = 0
     exp_before = TopExp_Explorer(workPart, TopAbs_FACE)
     while exp_before.More():
@@ -997,156 +972,7 @@ def removeHoleC(shapeList, *args):
     while exp_after.More():
         n_after += 1
         exp_after.Next()
-    print(f"[removeHole] faces before={n_before}, after={n_after}")
-
-    try:
-        win.erase_shape(uid)
-        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
-        old_uids = set(dm.part_dict.keys())
-        with docmodel.undo_transaction(dm):
-            dm.replace_shape(uid, newPart)
-        _redraw_after_shape_replace(ref_entry, old_uids)
-        win.statusBar().showMessage("Hole removed.")
-    except Exception as e:
-        print(f"Unable to replace/draw shape. {e}")
-        win.redraw()
-    win.setActivePart(uid)
-
-
-def removeIsolatedFeature(event=None):
-    """Remove an arbitrary, isolated feature (a slot, pocket, or any
-    shape bounded by a specific set of faces) from the active part,
-    healing the surrounding geometry, via OCP's
-    BRepAlgoAPI_Defeaturing -- confirmed general-purpose via a
-    synthetic through-slot smoke test (4 flat wall faces, no
-    cylindrical geometry at all: 10 faces before, 6 after, valid),
-    per Quaoar's own description of the algorithm's real capability.
-
-    Deliberately kept SEPARATE from Remove Hole (Doug's own explicit
-    choice), rather than merged into it or replacing it -- Remove
-    Hole's own single-click convenience and automatic cylindrical
-    multi-patch/cap detection stay exactly as they are, untouched and
-    still proven. This tool instead asks the user to pick every face
-    bounding the feature manually (no automatic surface-matching at
-    all), then press Enter to execute -- Quaoar's own terminology,
-    "Remove Isolated Feature", used directly, per Doug's own request.
-    """
-    if not require_active_part("Remove Isolated Feature"):
-        return
-    win.registerCallback(removeIsolatedFeatureC)
-    display.SetSelectionModeFace()
-    win.statusBar().showMessage(
-        "Select all faces bounding the feature to remove, then "
-        "press Enter.")
-
-
-def removeIsolatedFeatureC(shapeList, *args):
-    """Callback (collector) for removeIsolatedFeature. Accumulates
-    picked faces into win.faceStack (shared with shell(), never
-    simultaneously active, same convention chamfer() already uses
-    with win.edgeStack). An empty shapeList means Enter was pressed:
-    mainwindow.py's own appendToStack() (the Enter handler) appends
-    whatever's in the line edit -- even an empty string -- and calls
-    the registered callback with cb([]) regardless, so no numeric
-    value is needed here at all, unlike Fillet or Chamfer.
-
-    win.lineEdit.setFocus() (Doug's own report: Enter needed a
-    manual click into the line edit first, before it would register
-    at all) -- missing from the very first version. filletC() has
-    exactly this call as its own first line, for exactly this reason:
-    without it, Enter routes wherever focus already is (the
-    viewport), not to the line edit that's actually listening for it.
-    """
-
-    win.lineEdit.setFocus()
-    uid = win.activePartUID
-
-    if shapeList:
-        cached = win._display_prep_cache.get(uid)
-        ref_shape = cached[1] if cached is not None else win.activePart
-        ref_faces = list(Topology.Topo(ref_shape).faces()) \
-            if ref_shape is not None else []
-        for shape in shapeList:
-            try:
-                face = TopoDS.Face_s(shape)
-            except Exception:
-                win.statusBar().showMessage(
-                    "Pick a face (not an edge or vertex).")
-                return
-            if not any(face.IsSame(f) for f in ref_faces):
-                win.statusBar().showMessage(
-                    "Selected face(s) must be in Active Part.")
-                return
-            win.faceStack.append(face)
-        count = len(win.faceStack)
-        win.statusBar().showMessage(
-            f"Face {count} selected. Add more faces or press Enter "
-            f"to remove the feature.")
-        return
-
-    # shapeList is empty -- Enter was pressed
-    if not win.faceStack:
-        win.statusBar().showMessage(
-            "Pick at least one face before pressing Enter.")
-        return
-    picked_faces = list(win.faceStack)
-    win.faceStack = []
-    win.clearCallback()
-
-    # Same analytic-mapping pattern as fillet()/chamfer()/removeHole
-    # (Session 91): a picked face may come from a NurbsConverted
-    # display surrogate rather than the part's own real geometry.
-    cached = win._display_prep_cache.get(uid)
-    ref_shape = cached[1] if cached is not None else win.activePart
-    face_prep = win._face_prep_map.get(uid)
-    if face_prep is not None:
-        analytic_shape, face_pairs, _edge_pairs = face_prep
-        workPart = analytic_shape
-        mapped_faces = []
-        for picked_face in picked_faces:
-            matched = _match_analytic_subshape(
-                picked_face, analytic_shape, face_pairs, TopAbs_FACE)
-            if matched is not None:
-                mapped_faces.append(TopoDS.Face_s(matched))
-            else:
-                print(f"[removeIsolatedFeature] picked face has no "
-                     f"analytic counterpart at all -- skipping it "
-                     f"rather than risk a mismatch")
-        picked_faces = mapped_faces
-    else:
-        workPart = ref_shape
-
-    if not picked_faces:
-        win.statusBar().showMessage("No usable faces to remove.")
-        return
-
-    dfr = BRepAlgoAPI_Defeaturing()
-    dfr.SetShape(workPart)
-    for f in picked_faces:
-        dfr.AddFaceToRemove(f)
-    dfr.Build()
-    print(f"[removeIsolatedFeature] IsDone={dfr.IsDone()}")
-    if not dfr.IsDone():
-        win.statusBar().showMessage(
-            "Unable to remove this feature -- the surrounding "
-            "geometry couldn't be healed.")
-        return
-    newPart = dfr.Shape()
-
-    # Same before/after face-count safety check as removeHoleC
-    # (Session 103): IsDone=True alone turned out NOT to be
-    # trustworthy on its own for this algorithm.
-    n_before = 0
-    exp_before = TopExp_Explorer(workPart, TopAbs_FACE)
-    while exp_before.More():
-        n_before += 1
-        exp_before.Next()
-    n_after = 0
-    exp_after = TopExp_Explorer(newPart, TopAbs_FACE)
-    while exp_after.More():
-        n_after += 1
-        exp_after.Next()
-    print(f"[removeIsolatedFeature] faces before={n_before}, "
+    print(f"[Defeaturing:{label}] faces before={n_before}, "
          f"after={n_after}")
 
     try:
@@ -1156,12 +982,245 @@ def removeIsolatedFeatureC(shapeList, *args):
         with docmodel.undo_transaction(dm):
             dm.replace_shape(uid, newPart)
         _redraw_after_shape_replace(ref_entry, old_uids)
-        win.statusBar().showMessage("Feature removed.")
+        win.setActivePart(uid)
+        return True, "Feature removed."
     except Exception as e:
         print(f"Unable to replace/draw shape. {e}")
         win.redraw()
-    win.setActivePart(uid)
+        return False, f"Unable to replace/draw shape: {e}"
 
+
+class DefeaturingDialog(QDialog):
+    """Unified Defeaturing dialog (Session 125) -- replaces the three
+    formerly-separate menu items (Remove Hole / Remove Isolated
+    Feature / Auto Isolated Feature) with one dialog offering all
+    three as named "Method" choices.
+
+    Doug's own design call, after using all three separately on a
+    real part (ANC101.stp, Quaoar's own demo part): the three tools
+    are related in PURPOSE but different in INTERACTION -- Remove
+    Hole fired instantly on one click, Remove Isolated Feature needed
+    every face picked by hand then Enter, and Auto Isolated Feature
+    (once generalized to handle through-features -- see
+    isolated_features.py's own docstring) ALSO needed Enter, except
+    Doug's live app was still running the pre-Enter build when he
+    first tried it, which is what made it look like a single click
+    was enough even for multi-pocket cases. Renaming alone couldn't
+    fix that inconsistency; a shared '✅ Apply' button can, by
+    making every mode work the same way: pick face(s), press Apply.
+    Apply had been deliberately avoided everywhere else in this
+    project (mill_pull_dialog.py's own docstring: "Apply exists
+    nowhere else") -- used here specifically because giving the three
+    modes a homogeneous feel was the actual point, not a convenience.
+
+    '⏹ Done' is a SEPARATE button, ending the whole defeaturing
+    SESSION rather than a single operation -- the dialog stays open
+    across repeated Apply presses so a part can be defeatured one
+    feature at a time without reopening the tool each time (confirmed
+    directly: Doug took ANC101.stp down to a bare slab, Apply by
+    Apply, then undid all the way back -- each Apply is its own undo
+    step already, via _defeaturing_execute's own undo_transaction).
+
+    Modeled on mill_pull_dialog.py's own conventions (non-modal
+    QDialog, bold full-path breadcrumb header) with one genuine
+    first for this project: live 3D face picking (win.registerCallback)
+    while a dialog stays open, rather than working off a workplane's
+    own 2D profiles the way Mill/Pull does. Using a clicked Apply
+    button rather than Enter-in-a-lineEdit sidesteps the one real
+    risk that raised on paper (Enter-key/lineEdit-focus competing
+    with the dialog for keyboard focus) -- Apply is an ordinary
+    button click, no different from any other dialog control, and
+    doesn't depend on win.lineEdit having focus at all.
+    """
+
+    MODES = [
+        ("Remove Hole",
+         "Click the hole's cylindrical face, then Apply."),
+        ("Manual (pick every face)",
+         "Click every face of the feature, then Apply."),
+        ("Auto (pick capping face(s))",
+         "Click the face capping the feature. For a feature open at "
+         "BOTH ends (a through-hole), also click its other capping "
+         "face. Then Apply."),
+    ]
+
+    def __init__(self, main_win):
+        super().__init__(main_win)
+        self.main_win = main_win
+        self.setWindowTitle("Defeaturing")
+        self.setModal(False)
+        self.face_stack = []
+
+        lay = QVBoxLayout(self)
+
+        # Header matches Mill/Pull's own convention exactly (Session
+        # 63, Doug: side-by-side dialogs should share one look):
+        # caption line + BOLD full-path breadcrumb.
+        lay.addWidget(QLabel("Modifying part:"))
+        self.part_label = QLabel()
+        _bold = QFont()
+        _bold.setBold(True)
+        self.part_label.setFont(_bold)
+        self.part_label.setWordWrap(True)
+        lay.addWidget(self.part_label)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Method:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([m[0] for m in self.MODES])
+        self.mode_combo.currentIndexChanged.connect(
+            self._on_mode_changed)
+        row.addWidget(self.mode_combo)
+        lay.addLayout(row)
+
+        self.instructions_label = QLabel()
+        self.instructions_label.setWordWrap(True)
+        lay.addWidget(self.instructions_label)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        lay.addWidget(self.status_label)
+
+        btn_row = QHBoxLayout()
+        self.apply_btn = QPushButton("✅ Apply")
+        self.apply_btn.clicked.connect(self._on_apply)
+        btn_row.addWidget(self.apply_btn)
+        self.done_btn = QPushButton("⏹ Done")
+        self.done_btn.clicked.connect(self._on_done)
+        btn_row.addWidget(self.done_btn)
+        lay.addLayout(btn_row)
+
+        self._refresh_header()
+        self._on_mode_changed()
+        self._start_picking()
+
+    def _refresh_header(self):
+        uid = win.activePartUID
+        name = ""
+        if uid is not None and hasattr(dm, "get_full_path_name"):
+            try:
+                name = dm.get_full_path_name(uid)
+            except Exception:
+                name = str(uid)
+        self.part_label.setText(name)
+
+    def _on_mode_changed(self):
+        idx = self.mode_combo.currentIndex()
+        self.instructions_label.setText(self.MODES[idx][1])
+        self.face_stack = []
+        self._update_status()
+
+    def _update_status(self, extra=""):
+        n = len(self.face_stack)
+        base = f"{n} face(s) selected."
+        self.status_label.setText(f"{extra}  {base}" if extra else base)
+
+    def _start_picking(self):
+        win.registerCallback(self._on_pick)
+        display.SetSelectionModeFace()
+
+    def _on_pick(self, shapeList, *args):
+        # Apply drives execution now, not Enter -- an empty
+        # shapeList (what used to mean "Enter was pressed" for the
+        # old Manual/Auto tools) is simply ignored here.
+        if not shapeList:
+            return
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        ref_shape = cached[1] if cached is not None else win.activePart
+        ref_faces = list(Topology.Topo(ref_shape).faces()) \
+            if ref_shape is not None else []
+        for shape in shapeList:
+            try:
+                face = TopoDS.Face_s(shape)
+            except Exception:
+                self._update_status("Pick a face (not an edge or "
+                                    "vertex).")
+                return
+            if not any(face.IsSame(f) for f in ref_faces):
+                self._update_status("Selected face must be in "
+                                    "Active Part.")
+                return
+            self.face_stack.append(face)
+        self._update_status()
+
+    def _on_apply(self):
+        if not require_active_part("Defeaturing"):
+            return
+        uid = win.activePartUID
+        if not self.face_stack:
+            self._update_status("Pick at least one face before "
+                                "Apply.")
+            return
+        picked_faces = list(self.face_stack)
+        self.face_stack = []
+
+        workPart, _ref_shape, face_pairs = _defeaturing_workpart(uid)
+        seed_faces = _defeaturing_map_picked_faces(
+            picked_faces, workPart, face_pairs)
+        if not seed_faces:
+            self._update_status("No usable faces to apply.")
+            return
+
+        idx = self.mode_combo.currentIndex()
+        mode_name = self.MODES[idx][0]
+
+        if idx == 0:  # Remove Hole
+            if len(seed_faces) > 1:
+                self._update_status("Remove Hole takes one pick at "
+                                    "a time -- pick just the hole's "
+                                    "cylindrical face.")
+                return
+            faces_to_remove, err = _defeaturing_hole_faces(
+                workPart, seed_faces[0])
+            if err:
+                self._update_status(err)
+                return
+        elif idx == 1:  # Manual
+            faces_to_remove = seed_faces
+        else:  # Auto
+            try:
+                faces_to_remove = \
+                    isolated_features.find_isolated_feature_faces(
+                        workPart, seed_faces)
+            except Exception as e:
+                print(f"[Defeaturing:Auto] detection failed: {e}")
+                self._update_status("Could not analyze -- see "
+                                    "console for details.")
+                return
+            if not faces_to_remove:
+                self._update_status("No isolated feature found -- "
+                                    "for a through-feature, pick "
+                                    "BOTH capping faces.")
+                return
+
+        ok, msg = _defeaturing_execute(
+            uid, workPart, faces_to_remove, label=mode_name)
+        self._update_status(msg)
+        self._refresh_header()
+        # Session stays open -- ready for the next pick/Apply.
+        self._start_picking()
+
+    def _on_done(self):
+        win.clearCallback()
+        self.close()
+
+    def closeEvent(self, event):
+        win.clearCallback()
+        super().closeEvent(event)
+
+
+def show_defeaturing_dialog(main_win):
+    if not require_active_part("Defeaturing"):
+        return
+    dlg = getattr(main_win, "_defeaturing_dialog", None)
+    if dlg is None or not dlg.isVisible():
+        dlg = DefeaturingDialog(main_win)
+        main_win._defeaturing_dialog = dlg
+        dlg.show()
+    else:
+        dlg.raise_()
+        dlg.activateWindow()
 
 #############################################
 #
@@ -2199,10 +2258,9 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create/Modify", "Fillet", fillet)
     win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
-    win.add_function_to_menu("Create/Modify", "Remove Hole", removeHole)
     win.add_function_to_menu(
-        "Create/Modify", "Remove Isolated Feature",
-        removeIsolatedFeature)
+        "Create/Modify", "Defeaturing...",
+        lambda: show_defeaturing_dialog(win))
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Workplane", position_selected_wp)
     win.add_function_to_menu("Position", "Part/Asy", position_selected)
