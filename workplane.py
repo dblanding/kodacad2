@@ -946,21 +946,20 @@ class WorkPlane():
     # Which can be used as a tool to build or modify a face or solid body.
     # =======================================================================
 
-    def make_faces(self):
-        """MULTI-PROFILE face builder (Session 63, the Mill/Pull
-        dialog): chain edgeList into closed loops by endpoint
-        adjacency (reliable because engine input guarantees
-        coincident endpoints), classify containment in UV, and build
-        one face per OUTER loop with its directly-contained loops as
-        HOLES. Returns (faces, err) -- faces a list of TopoDS_Face,
-        err a message or None."""
+    def _chain_profile_loops(self):
+        """Chain self.edgeList into closed loops by endpoint adjacency
+        (reliable because engine input guarantees coincident
+        endpoints). Returns (loops, err) -- loops a list of edge
+        chains, err a message or None.
+
+        Extracted from make_faces (Session 128, the Loft command) so
+        outer_profile_wire() can reuse the exact same chaining logic
+        without duplicating it -- step 1 of make_faces's own original,
+        unchanged docstring: 'chain edgeList into closed loops by
+        endpoint adjacency.'"""
         from OCP.BRepAdaptor import BRepAdaptor_Curve
-        from OCP.ElSLib import ElSLib
-        _params = getattr(ElSLib, "Parameters_s", None) or \
-            getattr(ElSLib, "Parameters")
         tol = 1.0e-5
 
-        # --- 1. chain edges into loops ---
         infos = []  # (edge, p_start(3d), p_end(3d))
         for edge in self.edgeList:
             try:
@@ -1009,8 +1008,18 @@ class WorkPlane():
             loops.append(chain)
         if not loops:
             return [], "no profile geometry on the workplane"
+        return loops, None
 
-        # --- 2. wires + UV polygons for containment ---
+    def _loops_to_wires_and_polys(self, loops):
+        """Build a TopoDS_Wire and a UV polygon (for containment
+        testing) for each edge chain in loops. Returns (wires, polys,
+        err). Extracted from make_faces (Session 128) -- step 2,
+        unchanged."""
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.ElSLib import ElSLib
+        _params = getattr(ElSLib, "Parameters_s", None) or \
+            getattr(ElSLib, "Parameters")
+
         wires = []
         polys = []
         for chain in loops:
@@ -1018,7 +1027,7 @@ class WorkPlane():
             for e in chain:
                 mkw.Add(e)
             if not mkw.IsDone():
-                return [], "wire construction failed on a loop"
+                return [], [], "wire construction failed on a loop"
             wires.append(mkw.Wire())
             pts = []
             for e in chain:
@@ -1028,6 +1037,13 @@ class WorkPlane():
                     p = crv.Value(f0 + (f1 - f0) * i / 8.0)
                     pts.append(_params(self.gpPlane, p))
             polys.append(pts)
+        return wires, polys, None
+
+    def _classify_loop_depth(self, polys):
+        """Return, for each loop's UV polygon, how many OTHER polygons
+        contain it (0 = a top-level outer loop, 1 = a hole, 2 = an
+        island inside a hole, ...). Extracted from make_faces (Session
+        128) -- unchanged ray-cast containment logic."""
 
         def _pip(pt, poly):
             # ray-cast point-in-polygon in UV
@@ -1043,7 +1059,7 @@ class WorkPlane():
                         inside = not inside
             return inside
 
-        n_loops = len(wires)
+        n_loops = len(polys)
         contains = [[False] * n_loops for _ in range(n_loops)]
         for a in range(n_loops):
             for b in range(n_loops):
@@ -1051,6 +1067,57 @@ class WorkPlane():
                     contains[a][b] = _pip(polys[b][0], polys[a])
         depth = [sum(1 for a in range(n_loops) if contains[a][b])
                  for b in range(n_loops)]
+        return depth, contains
+
+    def outer_profile_wire(self):
+        """Return (wire, err): the single, top-level closed profile
+        wire on this workplane -- for use as one loft section (Session
+        128, the Loft command). Any hole/island loops are ignored for
+        now (Doug: 'keep it simple and lean... make it work, then make
+        it more deluxe later' -- the same call he made for Workplane
+        Sets, applied again here). Returns an error if there's no
+        profile, an open chain, or more than one top-level (depth-0)
+        loop -- multiple disjoint profiles on one workplane aren't a
+        single loft section yet."""
+        loops, err = self._chain_profile_loops()
+        if err is not None:
+            return None, err
+        wires, polys, err = self._loops_to_wires_and_polys(loops)
+        if err is not None:
+            return None, err
+        depth, _ = self._classify_loop_depth(polys)
+        outers = [w for w, d in zip(wires, depth) if d == 0]
+        if len(outers) == 1:
+            return outers[0], None
+        if not outers:
+            return None, "no profile geometry on the workplane"
+        return None, (f"{len(outers)} separate profiles found on this "
+                      f"workplane -- Loft needs exactly one closed "
+                      f"profile per workplane")
+
+    def make_faces(self):
+        """MULTI-PROFILE face builder (Session 63, the Mill/Pull
+        dialog): chain edgeList into closed loops by endpoint
+        adjacency (reliable because engine input guarantees
+        coincident endpoints), classify containment in UV, and build
+        one face per OUTER loop with its directly-contained loops as
+        HOLES. Returns (faces, err) -- faces a list of TopoDS_Face,
+        err a message or None.
+
+        Session 128: steps 1/2/3's chaining, wire+UV-polygon, and
+        depth-classification logic now live in _chain_profile_loops /
+        _loops_to_wires_and_polys / _classify_loop_depth respectively
+        (shared with the new outer_profile_wire(), for the Loft
+        command) -- behavior here is unchanged, just no longer
+        duplicated."""
+        loops, err = self._chain_profile_loops()
+        if err is not None:
+            return [], err
+        wires, polys, err = self._loops_to_wires_and_polys(loops)
+        if err is not None:
+            return [], err
+        depth, contains = self._classify_loop_depth(polys)
+        n_loops = len(wires)
 
         # DIAGNOSTIC (Doug: multiple separate rectangles imprint but
         # remove no material, while multiple circles -- or one

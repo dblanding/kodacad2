@@ -20,7 +20,9 @@ from OCP.BRepAlgoAPI import (BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse,
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import (BRepFilletAPI_MakeFillet,
                                BRepFilletAPI_MakeChamfer)
-from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepOffsetAPI import (BRepOffsetAPI_MakeThickSolid,
+                               BRepOffsetAPI_ThruSections)
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.gp import gp_Ax1, gp_Ax3, gp_Dir, gp_Lin, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
@@ -380,6 +382,148 @@ def require_active_part(op_name):
         f"You must set an Active Part before using {op_name}.\n\n"
         f"Select a part in the tree, then RMB \u2192 Set Active.")
     return False
+
+
+def require_active_wp(op_name):
+    """Check that an Active Workplane is set before an operation that
+    needs one as a reference starts. Same purpose and shape as
+    require_active_part() above, for the workplane side of the app
+    (Session 127, added for "Create Workplane Set", which needs an
+    active workplane to offset from)."""
+    if win.activeWp is not None:
+        return True
+    QMessageBox.warning(
+        win, "No Active Workplane",
+        f"You must set an Active Workplane before using {op_name}.\n\n"
+        f"Select a workplane in the tree, then RMB → Set Active, "
+        f"or create one first.")
+    return False
+
+
+def makeWpSet():
+    """Launch the Create Workplane Set dialog (Session 127) -- guarded
+    the same way Pull/Defeaturing guard on an active part."""
+    if not require_active_wp("Workplane Set"):
+        return
+    from wp_set_dialog import show_wp_set_dialog
+    show_wp_set_dialog(win)
+
+
+def loftWpSet():
+    """Loft through the profiles sketched on every workplane in a
+    Workplane Set, in the set's own spacing order, producing one
+    solid (Session 128 -- realizes Doug's own description of the
+    end-to-end workflow: "an empty part is created, followed by a
+    loft operation on a workplane set, et Voila! we get a lofted
+    shape.").
+
+    Select the Set's own tree node ('s1') OR any workplane that
+    belongs to one, then choose Create/Modify -> Loft. Each member
+    workplane must have exactly one closed profile sketched on it
+    (WorkPlane.outer_profile_wire() -- holes/multiple profiles per
+    plane aren't supported yet, same "simple and lean first" call
+    Doug made for Workplane Sets themselves).
+
+    Uses BRepOffsetAPI_ThruSections(isSolid=True, ruled=False) with
+    CheckCompatibility(True) -- OCCT's own automatic point
+    correspondence/twist-avoidance (confirmed by
+    smoke_test_loft_thru_sections.py) -- rather than requiring Doug to
+    hand-align a "match line" the way CoCreate did. Always ADDS to the
+    active part: an empty part becomes the loft directly (Doug's
+    described workflow); a non-empty one gets the loft fused in --
+    same empty-part convention pull_dialog.py already established, no
+    separate Add/Remove choice exposed (lean first)."""
+
+    if not require_active_part("Loft"):
+        return
+
+    item = win.treeView.currentItem() or win.itemClicked
+    if not item:
+        win.statusBar().showMessage(
+            "Select a Workplane Set (or one of its workplanes) in "
+            "the tree, then choose Loft.", 5000)
+        return
+    item_uid = item.text(1)
+    if item_uid in win.wp_set_dict:
+        set_uid = item_uid
+    elif item_uid in win.wp_parent_set:
+        set_uid = win.wp_parent_set[item_uid]
+    else:
+        win.statusBar().showMessage(
+            f"'{item.text(0)}' is not a Workplane Set (or a member of "
+            f"one) -- select one, then choose Loft.", 5000)
+        return
+
+    wp_uids = win.wp_set_dict.get(set_uid, [])
+    if len(wp_uids) < 2:
+        win.statusBar().showMessage(
+            f"Workplane set '{set_uid}' needs at least 2 workplanes "
+            f"to loft.", 5000)
+        return
+
+    wires = []
+    for wp_uid in wp_uids:
+        wp = win.wp_dict.get(wp_uid)
+        if wp is None:
+            win.statusBar().showMessage(
+                f"'{wp_uid}' is missing from the set -- aborting "
+                f"Loft.", 5000)
+            return
+        wire, err = wp.outer_profile_wire()
+        if err is not None:
+            win.statusBar().showMessage(
+                f"Loft aborted -- {wp_uid}: {err}", 8000)
+            return
+        wires.append(wire)
+
+    ts = BRepOffsetAPI_ThruSections(True, False)  # isSolid, ruled=False
+    ts.CheckCompatibility(True)
+    for w in wires:
+        ts.AddWire(w)
+    try:
+        ts.Build()
+    except Exception as e:
+        win.statusBar().showMessage(f"Loft failed: {e}", 8000)
+        return
+    if not ts.IsDone():
+        win.statusBar().showMessage(
+            "Loft failed -- BRepOffsetAPI_ThruSections did not "
+            "complete.", 8000)
+        return
+    tool = ts.Shape()
+    if not BRepCheck_Analyzer(tool).IsValid():
+        # Session 103's own standing finding, still honored: IsDone()
+        # == True alone isn't trustworthy -- check the actual shape.
+        win.statusBar().showMessage(
+            "Loft failed -- result shape is not valid.", 8000)
+        return
+
+    uid = win.activePartUID
+    part = win.activePart
+    n_faces = 0
+    exp = TopExp_Explorer(part, TopAbs_FACE)
+    while exp.More():
+        n_faces += 1
+        exp.Next()
+    part_is_empty = (n_faces == 0)
+
+    try:
+        newPart = (tool if part_is_empty
+                  else BRepAlgoAPI_Fuse(part, tool).Shape())
+    except Exception as e:
+        win.statusBar().showMessage(f"Loft fuse failed: {e}", 8000)
+        return
+
+    ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+    old_uids = set(dm.part_dict.keys())
+    win.erase_shape(uid)
+    with docmodel.undo_transaction(dm):
+        dm.replace_shape(uid, newPart)
+    _redraw_after_shape_replace(ref_entry, old_uids)
+    win.setActivePart(uid)
+    win.statusBar().showMessage(
+        f"Loft complete through {len(wires)} profiles in '{set_uid}' "
+        f"(Ctrl+Z undoes).", 6000)
 
 
 def _redraw_after_shape_replace(ref_entry, old_uids):
@@ -2239,6 +2383,7 @@ if __name__ == "__main__":
     win.add_function_to_menu("Workplane", "By 3 points", wpBy3Pts)
     win.add_function_to_menu(
         "Workplane", "Point && Direction", wpByPtDir)
+    win.add_function_to_menu("Workplane", "Set...", makeWpSet)
     # Session 96: the "crystal ball" end state from Doug's own
     # Pull_Dialog_Specification.pdf, now realized -- Create 3D and
     # Modify Active Part are gone, folded into one Create/Modify menu
@@ -2258,6 +2403,7 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create/Modify", "Fillet", fillet)
     win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
+    win.add_function_to_menu("Create/Modify", "Loft", loftWpSet)
     win.add_function_to_menu(
         "Create/Modify", "Defeaturing...",
         lambda: show_defeaturing_dialog(win))

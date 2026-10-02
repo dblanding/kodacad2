@@ -588,6 +588,16 @@ class MainWindow(QMainWindow):
         self.activeWpUID = 0
         self.wp_dict = {}  # k = uid, v = wpObject
         self._wpNmbr = 1
+        # Workplane Sets (Session 127, Doug's one-step shortcut for
+        # CoCreate's lofting concept -- see wp_set_dialog.py): a set
+        # is just a tree-grouping of existing wp_dict entries, not a
+        # new geometry type. wp_set_dict: {set_uid: [wp_uid, ...]}.
+        # wp_parent_set: {wp_uid: set_uid} for wp's that belong to a
+        # set -- a plain wp (not in this dict) stays a direct child
+        # of self.wp_root, exactly as before sets existed.
+        self.wp_set_dict = {}
+        self.wp_parent_set = {}
+        self._wpSetNmbr = 1
 
         self.activeAsyUID = 0
         self.assy_list = []  # list of assy uid's
@@ -805,7 +815,7 @@ class MainWindow(QMainWindow):
         return (slash_root, wp_root)
 
     def repopulate_2D_tree_view(self):
-        """Add all workplanes to 2D section of tree view."""
+        """Add all workplane sets and workplanes to 2D section of tree view."""
 
         # add items to treeView
         # Session 82, Doug: hiding a workplane didn't stick -- it
@@ -820,14 +830,44 @@ class MainWindow(QMainWindow):
         # derivation and expand/collapse state -- a rebuild must not
         # discard user-set state -- just never applied to this
         # specific, separate code path before now.
+        #
+        # Session 127: Workplane Sets are a pure tree-grouping layer
+        # on top of the same flat wp_dict -- create each set's own
+        # tree item first (still a direct child of wp_root, same as
+        # every plain workplane always was), then parent each wp item
+        # under its set's item (via wp_parent_set) instead of wp_root
+        # when it belongs to one. sortViewItems/uncheckedToList/etc.
+        # all key off `uid in self.wp_dict`, not tree depth, so this
+        # nesting is otherwise invisible to every existing code path.
+        set_items = {}
+        for set_uid in self.wp_set_dict:
+            set_item = QTreeWidgetItem(self.wp_root, [set_uid, set_uid])
+            set_item.setFlags(set_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            self.treeView.expandItem(set_item)
+            set_items[set_uid] = set_item
+
         for uid in self.wp_dict:
+            parent_item = set_items.get(self.wp_parent_set.get(uid),
+                                        self.wp_root)
             itemName = [uid, uid]
-            item = QTreeWidgetItem(self.wp_root, itemName)
+            item = QTreeWidgetItem(parent_item, itemName)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             if uid in self.hide_list:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
             else:
                 item.setCheckState(0, Qt.CheckState.Checked)
+
+        # Derive each set's own checkbox from its children, same rule
+        # _correct_ancestor_checkboxes applies on a live click -- a
+        # freshly rebuilt set item otherwise defaults to Unchecked
+        # regardless of its members' real state.
+        for set_item in set_items.values():
+            any_checked = any(
+                set_item.child(i).checkState(0) == Qt.CheckState.Checked
+                for i in range(set_item.childCount()))
+            set_item.setCheckState(
+                0, Qt.CheckState.Checked if any_checked
+                else Qt.CheckState.Unchecked)
 
     #############################################
     #
@@ -1040,6 +1080,20 @@ class MainWindow(QMainWindow):
             item = None
         return item or self.treeView.currentItem()
 
+    def _find_tree_item_by_uid(self, uid):
+        """Return the treeView QTreeWidgetItem whose uid column (1)
+        matches `uid`, or None. Session 127: used by deleteItem() to
+        recurse onto each member of a Workplane Set being deleted as
+        a whole, the same way sortViewItems()/uncheckedToList() already
+        walk the whole tree regardless of nesting depth."""
+        iterator = QTreeWidgetItemIterator(self.treeView)
+        while iterator.value():
+            item = iterator.value()
+            if item.text(1) == uid:
+                return item
+            iterator += 1
+        return None
+
     def setClickedActive(self):
         """Set item clicked in treeView Active.
         Falls back to currentItem() so RMB works without prior left-click.
@@ -1108,10 +1162,46 @@ class MainWindow(QMainWindow):
             return
         name = item.text(0)
         uid = item.text(1)
-        if uid in self.wp_dict:
+        if uid in self.wp_set_dict:
+            # Whole Workplane Set node (Session 127): deleting it
+            # deletes every workplane it contains, same as dragging a
+            # Creo E/D set to the trash would. Reuses this same method
+            # per member rather than duplicating the per-wp cleanup
+            # below.
+            reply = QMessageBox.question(
+                self,
+                "Delete",
+                f"Delete workplane set '{name}' and all {len(self.wp_set_dict[uid])} "
+                f"workplane(s) in it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                for member_uid in list(self.wp_set_dict.get(uid, [])):
+                    member_item = self._find_tree_item_by_uid(member_uid)
+                    self.itemClicked = member_item
+                    self.deleteItem()
+                self.wp_set_dict.pop(uid, None)
+                self.build_tree()
+                print(f"Workplane set {name} deleted.")
+            self.itemClicked = None
+            return
+        elif uid in self.wp_dict:
             del self.wp_dict[uid]
             if uid in self.hide_list:
                 self.hide_list.remove(uid)
+            # Session 127: clean up Workplane Set membership too, so
+            # deleting one wp out of a set doesn't leave a dangling
+            # uid in wp_set_dict/wp_parent_set. An emptied set is
+            # dropped entirely rather than left behind as an empty,
+            # permanent tree node.
+            set_uid = self.wp_parent_set.pop(uid, None)
+            if set_uid is not None and set_uid in self.wp_set_dict:
+                members = self.wp_set_dict[set_uid]
+                if uid in members:
+                    members.remove(uid)
+                if not members:
+                    del self.wp_set_dict[set_uid]
             # Incremental: the AIS objects for THIS workplane are
             # already tracked per-uid in _wp_ais_reg -- remove
             # exactly those, nothing else in the viewer is touched.
@@ -1507,6 +1597,42 @@ class MainWindow(QMainWindow):
         # Make new workplane active
         self.setActiveWp(uid)
         return uid
+
+    def create_wp_set(self, wp_objct_list):
+        """Create a new Workplane Set tree node ('s1', 's2', ...) and
+        add each WorkPlane object in wp_objct_list as one of its
+        children -- all in one step (Session 127, Doug's explicit
+        1-step shortcut for CoCreate's Workplane Set concept, vs. Creo
+        E/D's multi-step create-parallel-wps-then-drag-into-a-set
+        flow -- see wp_set_dialog.py). The LAST workplane added is
+        made active, same end state as get_wp_uid() leaves after
+        creating a single workplane.
+
+        Returns (set_uid, [wp_uid, ...]).
+        """
+        set_uid = "s%i" % self._wpSetNmbr
+        self._wpSetNmbr += 1
+        self.wp_set_dict[set_uid] = []
+
+        set_item = QTreeWidgetItem(self.wp_root, [set_uid, set_uid])
+        set_item.setFlags(set_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        self.treeView.expandItem(set_item)
+
+        wp_uids = []
+        for wp_objct in wp_objct_list:
+            uid = "wp%i" % self._wpNmbr
+            self._wpNmbr += 1
+            self.wp_dict[uid] = wp_objct
+            self.wp_set_dict[set_uid].append(uid)
+            self.wp_parent_set[uid] = set_uid
+            item = QTreeWidgetItem(set_item, [uid, uid])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(0, Qt.CheckState.Checked)
+            wp_uids.append(uid)
+
+        if wp_uids:
+            self.setActiveWp(wp_uids[-1])
+        return set_uid, wp_uids
 
     def appendToStack(self):
         """Called when <ret> is pressed on line edit"""
