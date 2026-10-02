@@ -65,8 +65,28 @@ DEFAULT_COLOR = Quantity_Color(0.6, 0.6, 0.4, Quantity_TypeOfColor.Quantity_TOC_
 
 
 def wpBy3Pts(*args):
-    """Direction from pt1 to pt2 sets wDir, pt2 is wpOrigin.
-    Direction from pt2 to pt3 sets uDir."""
+    """3 points define the new workplane (Session 129, Doug's own
+    request -- Workplane Sets/Loft surfaced a real need to build
+    precise workplane "scaffolding" off a non-block-shaped part, and
+    this method was the natural one to improve for it):
+
+        point 1 -> origin of the new workplane
+        point 2 -> sets the +W direction (origin -> pt2)
+        point 3 -> sets the +U direction (origin -> pt3)
+
+    (Previously: pt1->pt2 set wDir, pt2 was the origin, pt2->pt3 set
+    uDir -- changed to this origin-first ordering per Doug's explicit
+    request, a cleaner match for how the 3 picks are actually used.)
+
+    Each of the 3 points may be EITHER a genuine 3D vertex on a part
+    OR a catch (endpoint, intersection, Ctrl+Shift center/midpoint) on
+    the ACTIVE workplane's own 2D sketch -- see wpBy3PtsC, which tries
+    the workplane-catch path first and falls back to a 3D vertex pick,
+    the same established pattern wpByPtDirC and position_dialog.py's
+    own _point_pick_callback already use, now extended here to all 3
+    picks (previously vertex-only) so a new workplane can be built
+    from scaffolding sketched on the current workplane, points on the
+    3D part, or a mix of both."""
 
     prev_uid = win.activeWpUID  # uid of currently active workplane
     if win.ptStack:
@@ -74,11 +94,9 @@ def wpBy3Pts(*args):
         p3 = win.ptStack.pop()
         p2 = win.ptStack.pop()
         p1 = win.ptStack.pop()
-        wVec = gp_Vec(p1, p2)
-        wDir = gp_Dir(wVec)
-        origin = p2
-        uVec = gp_Vec(p2, p3)
-        uDir = gp_Dir(uVec)
+        origin = p1
+        wDir = gp_Dir(gp_Vec(p1, p2))
+        uDir = gp_Dir(gp_Vec(p1, p3))
         axis3 = gp_Ax3(origin, wDir, uDir)
         wp = workplane.WorkPlane(100, ax3=axis3)
         new_uid = win.get_wp_uid(wp)
@@ -89,23 +107,70 @@ def wpBy3Pts(*args):
         win.registerCallback(wpBy3PtsC)
         display.selected_shape = None
         display.SetSelectionModeVertex()
-        statusText = "Pick 3 points. Dir from pt1-pt2 sets wDir, pt2 is origin."
+        statusText = ("Pick point 1 (new workplane's origin) -- a "
+                     "part vertex or a catch on the active workplane.")
         win.statusBar().showMessage(statusText)
         return
 
 
 def wpBy3PtsC(shapeList, *args):
-    """Callbask (collector) for wpBy3Pts"""
+    """Callback (collector) for wpBy3Pts. Each pick tries the active
+    workplane's own 2D sketch FIRST -- a snap-engine catch (endpoint,
+    intersection, Ctrl+Shift center/midpoint) turned into a world
+    point via uv_to_world -- falling back to a genuine 3D vertex pick
+    if there's no catch there. Same engine-path-first/vertex-fallback
+    order as wpByPtDirC / position_dialog.py's own
+    _point_pick_callback (Session 129: previously this callback only
+    ever accepted a 3D vertex, for all 3 picks)."""
 
-    for shape in shapeList:
-        vrtx = TopoDS.Vertex_s(shape)
-        gpPt = BRep_Tool.Pnt_s(vrtx)  # convert vertex to gp_Pnt
-        win.ptStack.append(gpPt)
+    pt = None
+    # 1. Engine path: catch on the active workplane
+    try:
+        click_xy = args[1] if len(args) > 1 else None
+        wp = win.activeWp
+        if (click_xy is not None and click_xy[0] is not None
+                and wp is not None):
+            from snap_engine import (screen_to_uv, find_snap,
+                                     uv_to_world, SNAP_PIXELS,
+                                     current_snap_mode)
+            uv = screen_to_uv(win.canvas.view, click_xy[0],
+                              click_xy[1], wp.gpPlane)
+            if uv is not None:
+                try:
+                    tol = abs(win.canvas.view.Convert(SNAP_PIXELS))
+                except Exception:
+                    tol = 1.0
+                hidden = win.activeWpUID in win.hide_list
+                snap = find_snap(wp, uv, tol, current_snap_mode(),
+                                 hidden=hidden)
+                if snap is not None:
+                    pt = uv_to_world(wp.gpPlane, snap[1][0],
+                                     snap[1][1])
+    except Exception as e:
+        print(f"[wpBy3PtsC] engine path failed: {e}")
+    # 2. Fallback: a genuine 3D vertex pick
+    if pt is None:
+        for shape in shapeList:
+            if shape is None:
+                continue
+            try:
+                vrtx = TopoDS.Vertex_s(shape)
+                pt = BRep_Tool.Pnt_s(vrtx)
+                break
+            except Exception:
+                continue
+    if pt is None:
+        win.statusBar().showMessage(
+            "No catch or vertex there -- click a workplane catch or "
+            "a part vertex.", 3000)
+        return
+
+    win.ptStack.append(pt)
     if len(win.ptStack) == 1:
-        statusText = "Now select point 2 (wp origin)."
+        statusText = "Now pick point 2 to set the +W direction."
         win.statusBar().showMessage(statusText)
     elif len(win.ptStack) == 2:
-        statusText = "Now select point 3 to set uDir."
+        statusText = "Now pick point 3 to set the +U direction."
         win.statusBar().showMessage(statusText)
     elif len(win.ptStack) == 3:
         wpBy3Pts()
