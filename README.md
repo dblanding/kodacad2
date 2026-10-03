@@ -18,7 +18,7 @@ Designed for users who want to assemble, modify, and create
 3D mechanical parts and assemblies using a scriptable, open-source
 toolchain -- with no commercial dependencies and no Conda environment.
 
----
+![KodaCAD UI](icons/kodacad.png)
 
 ## What makes KodaCAD different
 

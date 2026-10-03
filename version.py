@@ -1,5 +1,14 @@
 """Single source of truth for the KodaCAD application version.
 
+2.1.0 -- 2026-10-03 (Session 129) including:
+* Pull (Linear/Angular, Add/Remove material, +/- Direction)
+* Chamfer
+* Loft from Workplane Set
+* Defeaturing (Remove hole, remove Isolated Feature (manual/auto))
+* Position (Parts/Assemblies, Workplanes)
+* Section Views
+* Set Part Color
+
 2.0.0 -- THE SKETCH ENGINE ERA (Session 62). In Doug's words: 'a
 foundation that, quite honestly, I didn't think was achievable.'
 Pyurcad/CoCreate-style sketching on Kodacad workplanes: the
@@ -18,4 +27,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
