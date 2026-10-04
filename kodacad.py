@@ -1662,102 +1662,81 @@ _AXIS_NORMALS = {
     "z": gp_Dir(0, 0, -1),
 }
 
+_SECTION_AXES = ("x", "y", "z")  # fixed chain order, also row order
 
-def _get_plane_geom(mode, axis):
-    """The gp_Pln to use when (re)building a given (mode, axis)
-    plane. Session 120 (Doug's own request: toggling back and forth
-    to Normal View, or between modes, shouldn't reset a plane's own,
-    already-adjusted position): checks win._section_plane_state
-    first, restoring exactly where that specific plane was last left
-    (position AND normal both) if it's been built before. Only when
-    nothing's been remembered yet -- the very first time this
-    particular (mode, axis) plane is ever activated -- does it fall
+
+def _get_plane_geom(axis):
+    """The gp_Pln to use when (re)building a given axis's clip plane.
+    Session 129 (FreeCAD-style redesign, Doug's own call -- see
+    _rebuild_section_clip_planes()'s docstring): simplified from the
+    old (mode, axis)-keyed lookup to a flat, axis-only one. There's no
+    more "mode" dimension to key by -- a given axis's plane is the
+    same plane regardless of which OTHER axes happen to be checked
+    alongside it, so remembering its position/normal per-mode was
+    never actually needed, just inherited from the old design.
+
+    Checks win._section_plane_state first, restoring exactly where
+    this axis's plane was last left (position AND normal both) if
+    it's been built before (Session 120's own memory mechanism,
+    unchanged in spirit). Only when nothing's been remembered yet --
+    the very first time this axis is ever checked -- does it fall
     back to a fresh build, centered on the scene's own current
     bounding box (Session 112), with the base normal from
-    _AXIS_NORMALS reversed first if this (mode, axis) row's own
-    Reverse checkbox is currently checked (win._section_reversed)."""
+    _AXIS_NORMALS reversed first if this axis's own Reverse checkbox
+    is currently checked (win._section_reversed)."""
     from OCP.gp import gp_Pln, gp_Pnt
-    stored = getattr(win, "_section_plane_state", {}).get(
-        mode, {}).get(axis)
+    stored = getattr(win, "_section_plane_state", {}).get(axis)
     if stored is not None:
         return stored
     cx, cy, cz = _scene_bbox_center()
     normal = _AXIS_NORMALS[axis]
-    reversed_state = getattr(win, "_section_reversed", {}).get(
-        mode, {}).get(axis, False)
+    reversed_state = getattr(win, "_section_reversed", {}).get(axis, False)
     if reversed_state:
         normal = normal.Reversed()
     return gp_Pln(gp_Pnt(cx, cy, cz), normal)
 
 
-def _store_plane_geom(mode, axis, pln):
-    """Remember a (mode, axis) plane's own current position and
-    normal (a full gp_Pln, capturing both at once), so a future
-    rebuild -- switching modes and back, or toggling Normal/Section
-    View -- restores it via _get_plane_geom() instead of resetting to
-    the scene's own bounding-box center. Called after every completed
-    drag (_clip_plane_drag_done) and every Reverse toggle
-    (_on_reverse_checkbox_toggled), the only two things that ever
-    change a plane's own geometry after it's first built."""
+def _store_plane_geom(axis, pln):
+    """Remember an axis's own current plane position and normal (a
+    full gp_Pln, capturing both at once), so a future rebuild --
+    unchecking and rechecking it, or checking a DIFFERENT axis
+    alongside it -- restores it via _get_plane_geom() instead of
+    resetting to the scene's own bounding-box center. Called after
+    every completed drag (_clip_plane_drag_done) and every Reverse
+    toggle (_on_reverse_checkbox_toggled), the only two things that
+    ever change a plane's own geometry after it's first built.
+    Session 129: flat, axis-only dict now -- see _get_plane_geom()'s
+    own docstring for why the old mode dimension was dropped."""
     win._section_plane_state = getattr(win, "_section_plane_state", {})
-    win._section_plane_state.setdefault(mode, {})[axis] = pln
+    win._section_plane_state[axis] = pln
 
 
-def set_section_view_mode(mode):
-    """Apply a section-view configuration -- Doug's own confirmation,
-    reading the CAD Assistant screenshot's tooltip list: the first
-    six options (Off, DX, DY, DZ, 2 planes, 3 planes) are mutually
-    exclusive, "what we used to call radio buttons" -- not six
-    independent toggles. Removes whatever's currently active first,
-    then builds the new configuration, if any -- only one mode is
-    ever live at a time.
+def _rebuild_section_clip_planes():
+    """Apply the current section-view configuration from scratch --
+    whichever of X/Y/Z are currently checked (win._section_checked),
+    zero to three of them, independently. Session 129: replaces the
+    old set_section_view_mode(mode) -- FreeCAD's own section-view UI
+    (Doug's own reference) uses 3 independent checkboxes rather than a
+    5-way exclusive mode selector (off/x/y/z/xy): none checked is
+    Normal View, any combination of 1-3 gives that combination's own
+    section view, including the 3-plane case that was never actually
+    built under the old design ("'xyz' (3 planes) is the next step" --
+    Session 116's own docstring, now obsolete). Doug's own reasoning:
+    a user should be able to turn any subset of the 3 principal planes
+    on or off independently, the same way FreeCAD lets them -- not
+    pick from a fixed menu of named combinations.
 
-    'off', 'x', 'y', 'z', and 'xy' (2 planes, chained via
-    SetChainNextPlane -- a logical AND, a point must satisfy both to
-    remain visible) are built so far -- 'xyz' (3 planes) is the next
-    step.
-
-    _update_clip_visibility() now handles every mode uniformly,
-    single-axis and xy alike (Session 116) -- it targets whichever
-    plane _get_clip_target_plane() returns, which is
-    win._section_clip_planes[0] for single-axis modes (unchanged) or
-    whichever axis the toolbar's own Edit X/Edit Y switch currently
-    has selected for xy mode. Replaced an earlier, abandoned design
-    where xy mode built real, visible, independently-clickable plane
-    faces and a persistent 3D click handler -- CAD Assistant's own
-    interaction model, matching how the operator actually clicks a
-    plane there directly. Dropped after live testing surfaced three
-    distinct problems in a row (a parameter mismatch, a stale-
-    reference bug after dragging, and what testing indicated was very
-    likely OCCT's own depth-based picking overriding
-    SelectionPriority rather than respecting it) -- Doug's own call,
-    given the mounting friction: a toolbar switch reusing the
-    existing, already-proven single-manipulator machinery entirely
-    unchanged, rather than detecting which of several 3D faces got
-    clicked.
-
-    Session 119: called with "off" whenever the toolbar's own top-
-    level switch reads Normal View, to tear the actual clip planes
-    down -- but this no longer overwrites win._section_clip_mode when
-    that happens, so the lower X/Y/Z/X&Y group's own last selection
-    survives the round trip and is restored correctly whenever
-    Section View gets re-enabled, rather than being lost to "off",
-    which isn't even a valid value in that group anymore.
-
-    Session 120: plane geometry now comes from _get_plane_geom()
-    rather than always being built fresh here -- restoring each
-    plane's own, last-remembered position and normal (see that
-    function's own docstring) rather than resetting it on every mode
-    switch or Normal/Section View toggle. Capping is now unconditional
-    (Doug's own call, having lived with it a while: not a preference,
-    just how a section view should always look) -- no separate
-    persistent flag to preserve across mode changes anymore.
-
-    Reversed normal (Doug's own reading of the CAD Assistant
-    screenshot) is now built too (Session 120), per-plane rather than
-    a single, global toggle -- see _get_plane_geom() and
-    _on_reverse_checkbox_toggled()."""
-    from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+    Removes whatever clip planes currently exist, then rebuilds from
+    win._section_checked: each checked axis gets a Graphic3d_ClipPlane
+    from _get_plane_geom(axis) (restoring its own remembered position/
+    normal if it's been built before), chained together in a fixed
+    x->y->z order via SetChainNextPlane (a logical AND -- a point must
+    satisfy EVERY checked plane to remain visible; only the first
+    plane in the chain is ever added to the view -- Session 114 proved
+    this mechanism for the old, always-2-plane xy mode; generalized
+    here to 1, 2, or 3 planes uniformly instead of special-casing a
+    fixed pair). Capping stays unconditional (Session 120's own call,
+    unchanged)."""
     from OCP.Graphic3d import Graphic3d_ClipPlane
 
     existing = getattr(win, "_section_clip_planes", [])
@@ -1767,43 +1746,27 @@ def set_section_view_mode(mode):
         except Exception as e:
             print(f"[section-view] remove failed: {e}")
     win._section_clip_planes = []
+    win._section_clip_planes_by_axis = {}
 
-    if mode in _AXIS_NORMALS:
-        try:
-            plane_geom = _get_plane_geom(mode, mode)
-            clip_plane = Graphic3d_ClipPlane(plane_geom)
-            clip_plane.SetOn(True)
-            win.canvas.view.AddClipPlane(clip_plane)
-            win._section_clip_planes = [clip_plane]
-        except Exception as e:
-            print(f"[section-view] {mode.upper()} clip plane failed: {e}")
-    elif mode == "xy":
-        # Session 114: proved the chained, combined cut works on its
-        # own first (SetChainNextPlane -- a logical AND: a point must
-        # satisfy BOTH planes to remain visible; only the first plane
-        # in the chain is added to the view, the chained one is
-        # implicit) before building anything visual or interactive on
-        # top of it. Visibility/dragging wired in Session 116, via
-        # the toolbar Edit X/Edit Y switch -- see
-        # _get_clip_target_plane().
-        try:
-            plane_x_geom = _get_plane_geom("xy", "x")
-            plane_y_geom = _get_plane_geom("xy", "y")
-            plane_x = Graphic3d_ClipPlane(plane_x_geom)
-            plane_y = Graphic3d_ClipPlane(plane_y_geom)
-            plane_x.SetOn(True)
-            plane_y.SetOn(True)
-            plane_x.SetChainNextPlane(plane_y)
-            win.canvas.view.AddClipPlane(plane_x)
-            win._section_clip_planes = [plane_x, plane_y]
-            win._section_clip_planes_by_axis = {"x": plane_x, "y": plane_y}
-        except Exception as e:
-            print(f"[section-view] XY clip plane failed: {e}")
-    elif mode != "off":
-        print(f"[section-view] mode {mode!r} not yet built")
+    checked = getattr(win, "_section_checked", {})
+    active_axes = [a for a in _SECTION_AXES if checked.get(a)]
 
-    if mode != "off":
-        win._section_clip_mode = mode
+    try:
+        planes = []
+        for axis in active_axes:
+            plane_geom = _get_plane_geom(axis)
+            plane = Graphic3d_ClipPlane(plane_geom)
+            plane.SetOn(True)
+            planes.append(plane)
+            win._section_clip_planes_by_axis[axis] = plane
+        for i in range(len(planes) - 1):
+            planes[i].SetChainNextPlane(planes[i + 1])
+        if planes:
+            win.canvas.view.AddClipPlane(planes[0])
+        win._section_clip_planes = planes
+    except Exception as e:
+        print(f"[section-view] clip plane build failed: {e}")
+
     win.canvas.view.Redraw()
     _apply_section_capping()
     _update_clip_visibility()
@@ -1813,54 +1776,36 @@ def _get_clip_target_plane():
     """The single clip plane the manipulator should currently target,
     or None if nothing should currently be draggable at all.
 
-    Session 119 (Doug's own toolbar redesign): a full, two-level
-    model now. Returns None outright unless the toolbar's own
-    Normal/Section View switch is on "section" -- previously "off"
-    was just another entry in the same exclusive mode group as x/y/z/
-    xy; now it's a separate, higher-level switch, and the lower
-    section (mode + edit controls) is Qt-disabled (grayed out)
-    whenever it reads "normal", so this can never even be reached
-    from a click in that state, but the check stays here too as the
-    authoritative, function-level source of truth.
+    Session 129: simplified along with the rest of the mode-based
+    machinery it replaces -- no more top-level Normal/Section switch
+    to check (none of X/Y/Z checked already means no planes exist at
+    all, so there's nothing to target either way), and no more mode-
+    dependent lookup (the old xy-only by-axis dict is now simply how
+    every configuration works, 1, 2 or 3 planes alike, not a special
+    case for exactly 2).
 
-    win._section_clip_active_axis (None by default) is the single,
-    shared "which row's own Enable-edit control is checked" state,
-    covering x/y/z's own single checkbox each AND xy's own, separate
-    Enable-X/Enable-Y pair uniformly -- deliberately never touched by
-    switching win._section_clip_mode itself (x/y/z/xy), only ever set
-    or cleared by the Enable-edit controls themselves. That's what
-    gives per-row persistence across mode switches for free, with no
-    separate, per-mode dictionary needed at all: switch from X to Y,
-    active_axis stays "x" the whole time (simply not matching mode
-    "y", so nothing shows); switch back to X, it matches again
-    automatically, and X's own manipulator reappears exactly as it
-    was left.
-
-    For a single-axis mode (x/y/z), the active axis must equal the
-    mode itself (only one possible "on" value each). For xy, either
-    "x" or "y" directly selects that specific plane, via
-    win._section_clip_planes_by_axis -- unchanged from Session 116/
-    117's own design there."""
-    if getattr(win, "_section_top_level", "normal") != "section":
-        return None
+    win._section_clip_active_axis (None by default) is still the one,
+    shared "which row's own Edit control is checked" state -- now
+    covering X/Y/Z uniformly instead of X/Y/Z/XY-X/XY-Y. Returns the
+    live plane for that axis if it's currently built in
+    win._section_clip_planes_by_axis -- unchecking an axis's own Dir
+    box while it's also the active Edit axis clears active_axis
+    directly (_on_dir_checkbox_toggled), so this should never actually
+    be asked for a stale axis, but checks the dict anyway rather than
+    assuming that invariant always holds."""
     axis = getattr(win, "_section_clip_active_axis", None)
     if axis is None:
         return None
-    mode = getattr(win, "_section_clip_mode", "x")
-    if mode == "xy":
-        by_axis = getattr(win, "_section_clip_planes_by_axis", {})
-        return by_axis.get(axis)
-    if axis != mode:
-        return None
-    planes = getattr(win, "_section_clip_planes", [])
-    return planes[0] if planes else None
+    by_axis = getattr(win, "_section_clip_planes_by_axis", {})
+    return by_axis.get(axis)
 
 
 def _update_clip_visibility():
     """Keep the clip plane's own drag gizmo in sync with whether
     visibility is toggled on AND whether a plane is currently active.
     Called both when the visibility button itself is toggled, and
-    whenever the mode changes (set_section_view_mode) -- so switching
+    whenever the configuration changes (_rebuild_section_clip_planes)
+    -- so switching
     from Z to X while visibility is on rebuilds the gizmo to match X
     rather than leaving it stale on Z, and switching to Off removes
     it entirely, since there's nothing to drag with no plane active.
@@ -1997,23 +1942,23 @@ def _clip_plane_drag_done(delta_trsf):
     that and reintroduce drift within one drag.
 
     Session 120: also stores the plane's own new position via
-    _store_plane_geom(), keyed by the current (mode, axis) -- the
-    actual position-memory wiring behind Doug's own request that
-    toggling Normal/Section View, or switching between modes, not
-    reset a plane's own, already-adjusted position."""
+    _store_plane_geom(), keyed by axis -- the actual position-memory
+    wiring behind Doug's own request that toggling a plane off and
+    back on not reset its own, already-adjusted position. Session 129:
+    _store_plane_geom() is now flat/axis-only (no more mode dimension
+    -- see its own docstring)."""
     _clip_plane_drag_update(delta_trsf)
     target_plane = _get_clip_target_plane()
     if target_plane is not None:
         win._section_clip_drag_orig_pln = target_plane.ToPlane()
-        mode = getattr(win, "_section_clip_mode", "x")
         axis = getattr(win, "_section_clip_active_axis", None)
         if axis is not None:
-            _store_plane_geom(mode, axis, target_plane.ToPlane())
+            _store_plane_geom(axis, target_plane.ToPlane())
 
 
 def _apply_section_capping():
     """Apply capping to every currently active clip plane. Called by
-    set_section_view_mode whenever a new plane is built.
+    _rebuild_section_clip_planes() whenever a new plane is built.
     SetCapping/SetCappingColor, confirmed via the original research
     as real Graphic3d_ClipPlane methods -- same class as SetOn/
     SetEquation/ToPlane, all already proven working live, unlike
@@ -2098,67 +2043,76 @@ def _apply_section_capping():
     win.canvas.view.Redraw()
 
 
-def set_section_top_level(level):
-    """Handler for the toolbar's own top-level Normal View/Section
-    View switch (Session 119, Doug's own redesign). "normal" tears
-    the actual clip planes down entirely, via set_section_view_mode
-    ("off") -- guarded there (see its own docstring) so that call
-    doesn't overwrite the lower group's own remembered mode.
-    "section" restores whatever the lower group was last set to.
-    Either way, the lower section's own container widget is enabled/
-    disabled here too, relying on Qt's own standard behavior: a
-    disabled parent grays out and disables every child inside it
-    automatically, regardless of each child's own, individual
-    setEnabled() state -- no manual per-widget graying needed on top
-    of this one call."""
-    win._section_top_level = level
-    lower = getattr(win, "_section_lower_widget", None)
-    if lower is not None:
-        lower.setEnabled(level == "section")
-    if level == "normal":
-        set_section_view_mode("off")
-    else:
-        set_section_view_mode(getattr(win, "_section_clip_mode", "x"))
+def _on_dir_checkbox_toggled(checked, axis):
+    """Handler for every Dir checkbox (X/Y/Z) -- Session 129's
+    FreeCAD-style redesign: independently toggleable, any combination
+    of 0-3 checked at once, replacing the old 2-level Normal View/
+    Section View switch plus 5-way exclusive mode selector entirely.
+    None checked IS Normal View now -- there's no separate top-level
+    switch to keep in sync with this anymore.
+
+    Unchecking an axis that's currently the active Edit target clears
+    active_axis too (rather than leaving it pointing at a plane that's
+    about to stop existing) -- _get_clip_target_plane() would also
+    catch this via the by_axis dict no longer having that key after
+    rebuild, but clearing it explicitly here keeps
+    win._section_clip_active_axis itself honest rather than relying on
+    a downstream dict-miss to paper over a stale value.
+
+    Session 130 (Doug's own report: unchecking Dir left Edit cleared
+    correctly, but Rev stayed checked -- grayed out, and un-clickable,
+    until Dir was checked again): unchecking also resets Rev for this
+    axis, not just Edit. win._section_reversed[axis] is cleared, and
+    if a plane position was already remembered for this axis
+    (win._section_plane_state, Session 120's own memory mechanism),
+    its stored normal is flipped back to match -- so a later recheck
+    of this axis starts from a normal (non-reversed) state rather than
+    silently coming back reversed the instant Rev shows unchecked.
+    Position memory itself is left untouched either way -- Doug only
+    asked about Rev, not the remembered drag position, and Session
+    120's own position-preservation behavior still applies."""
+    win._section_checked = getattr(win, "_section_checked", {})
+    win._section_checked[axis] = checked
+    if not checked:
+        if getattr(win, "_section_clip_active_axis", None) == axis:
+            win._section_clip_active_axis = None
+        win._section_reversed = getattr(win, "_section_reversed", {})
+        if win._section_reversed.get(axis):
+            win._section_reversed[axis] = False
+            stored = getattr(win, "_section_plane_state", {}).get(axis)
+            if stored is not None:
+                from OCP.gp import gp_Pln
+                loc = stored.Position().Location()
+                normal = stored.Position().Direction().Reversed()
+                _store_plane_geom(axis, gp_Pln(loc, normal))
+    _rebuild_section_clip_planes()
     _refresh_section_lower_controls()
 
 
-def _on_section_mode_clicked(mode):
-    """Handler for the lower X/Y/Z/X&Y group -- applies the mode,
-    then refreshes which row's own Enable-edit control(s) are
-    enabled and which are checked, to match the new mode."""
-    set_section_view_mode(mode)
-    _refresh_section_lower_controls()
-
-
-def _on_reverse_checkbox_toggled(checked, mode, axis):
-    """Handler for every Reverse control -- one per row, same
-    X/Y/Z/X&Y-X/X&Y-Y shape as the Enable-edit controls. Only ever
-    enabled (clickable) when its own row's mode is the current one
-    (see _refresh_section_lower_controls()), so the live plane for
-    this exact (mode, axis) is guaranteed to exist and be the one
-    win._section_clip_planes (or, for xy, win._section_clip_planes_
-    by_axis) currently holds.
+def _on_reverse_checkbox_toggled(checked, axis):
+    """Handler for every Reverse control -- one per axis (X/Y/Z),
+    only ever enabled (clickable) while that axis's own Dir checkbox
+    is checked (see _refresh_section_lower_controls()), so the live
+    plane for this axis is guaranteed to exist in
+    win._section_clip_planes_by_axis when this fires.
 
     Flips the plane's own live normal directly (SetEquation with the
     same location, reversed direction) rather than rebuilding the
     plane from scratch -- preserves whatever position it's currently
     at, including one that's already been dragged away from center.
     Stores the result via _store_plane_geom() (Session 120's own
-    position-memory mechanism, shared with drag completion) so the
-    reversed state survives a later mode switch or Normal/Section
-    View toggle too, not just this immediate change. Refreshes the
-    manipulator afterward in case it's currently attached to this
-    same plane, so its own orientation follows the new normal rather
-    than staying stale."""
+    position-memory mechanism, shared with drag completion; Session
+    129: flat, axis-only now) so the reversed state survives
+    unchecking/rechecking this axis, or checking a different axis
+    alongside it, too -- not just this immediate change. Refreshes the
+    manipulator afterward in case it's currently attached to this same
+    plane, so its own orientation follows the new normal rather than
+    staying stale."""
     win._section_reversed = getattr(win, "_section_reversed", {})
-    win._section_reversed.setdefault(mode, {})[axis] = checked
+    win._section_reversed[axis] = checked
 
-    if mode == "xy":
-        by_axis = getattr(win, "_section_clip_planes_by_axis", {})
-        plane = by_axis.get(axis)
-    else:
-        planes = getattr(win, "_section_clip_planes", [])
-        plane = planes[0] if planes else None
+    by_axis = getattr(win, "_section_clip_planes_by_axis", {})
+    plane = by_axis.get(axis)
 
     if plane is not None:
         from OCP.gp import gp_Pln
@@ -2167,82 +2121,72 @@ def _on_reverse_checkbox_toggled(checked, mode, axis):
         normal = pln.Position().Direction().Reversed()
         new_pln = gp_Pln(loc, normal)
         plane.SetEquation(new_pln)
-        _store_plane_geom(mode, axis, new_pln)
+        _store_plane_geom(axis, new_pln)
         win.canvas.view.Redraw()
         _update_clip_visibility()
 
 
-def _on_edit_checkbox_toggled(checked, axis, partner_btn=None):
-    """Handler for every Enable-edit control alike -- X/Y/Z's own
-    single checkbox each, and X&Y's own Enable-X/Enable-Y pair.
+def _on_edit_checkbox_toggled(checked, axis, other_btns=()):
+    """Handler for every Edit control -- one per axis (X/Y/Z).
     win._section_clip_active_axis is the one, shared state behind all
-    of them (see _get_clip_target_plane()'s own docstring for why a
-    single, shared value gives correct per-row persistence across
-    mode switches for free, with no separate per-mode dictionary
-    needed).
+    three (see _get_clip_target_plane()'s own docstring) -- only one
+    plane can ever be the manipulator's own drag target at a time
+    (translate_only_axis=2 manipulator mechanism), so Edit picks which
+    one of the currently-checked (Dir) planes that is.
 
-    For X&Y's own pair specifically (Doug's own, explicit
-    confirmation): mutually exclusive AND both-can-be-unchecked at
-    once, the default -- not a standard Qt exclusive group at all,
-    since QButtonGroup's own setExclusive(True) forces exactly one
-    button always checked, with no way back to zero by clicking the
-    checked one again. Wired by hand instead: checking one unchecks
-    its partner directly (only ever passed for this X&Y pair; X/Y/Z's
-    own single checkboxes pass none), via blockSignals so the
-    partner's own handler doesn't also fire and race to set
-    active_axis to something else right afterward."""
-    if checked and partner_btn is not None:
-        partner_btn.blockSignals(True)
-        partner_btn.setChecked(False)
-        partner_btn.blockSignals(False)
+    Mutually exclusive AND all-can-be-unchecked at once, the default
+    (Doug's own explicit confirmation, originally for the old X&Y
+    mode's own Enable-X/Enable-Y pair, Session 129: generalized from 2
+    rows to 3) -- not a standard Qt exclusive group, since
+    QButtonGroup's own setExclusive(True) forces exactly one button
+    always checked, with no way back to zero. Wired by hand instead:
+    checking one unchecks every OTHER currently-checked Edit box
+    directly, via blockSignals so their own handlers don't also fire
+    and race to overwrite active_axis right afterward."""
+    if checked:
+        for btn in other_btns:
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
     win._section_clip_active_axis = axis if checked else None
     _update_clip_visibility()
 
 
 def _refresh_section_lower_controls():
-    """Sync every Enable-edit AND Reverse control's own enabled/
-    disabled state, plus checked/unchecked display state, to match
-    the current mode (and, for Edit specifically,
-    win._section_clip_active_axis). Needed because switching modes
-    never touches active_axis itself (deliberately -- see
-    _get_clip_target_plane()), so each row's own control(s) must be
-    re-derived explicitly whenever the mode changes. Also called once
-    at toolbar-build time, so a freshly-built toolbar starts in a
+    """Sync every Edit and Reverse control's own enabled/disabled
+    state, plus Edit's own checked/unchecked display state, to match
+    which axes are currently checked. Session 129: replaces the old
+    mode-matching version -- there's no more "current mode" to match
+    against, just "is this row's own Dir box checked." Also called
+    once at toolbar-build time, so a freshly-built toolbar starts in a
     correct, consistent state rather than whatever Qt's own widget
     defaults happen to be.
 
-    Session 120: renamed from _refresh_section_edit_controls and
-    extended to cover Reverse too, alongside the original Edit
-    controls -- both follow the identical "only the current mode's
-    own row(s) are enabled" rule, so it made sense to sync them
-    together in one pass rather than duplicate the same mode-matching
-    logic in two separate functions. Their CHECKED state comes from
-    two different places, though: Edit's own is derived fresh each
-    time from active_axis (a single, shared "which row" value);
-    Reverse's own is read directly from win._section_reversed, an
-    independent, per-(mode, axis) flag that isn't tied to whether
-    Edit happens to be on for that same row at all."""
-    current_mode = getattr(win, "_section_clip_mode", "x")
+    Edit's own CHECKED state is derived fresh each time from
+    win._section_clip_active_axis (a single, shared "which row" value,
+    unchanged from before); Reverse's own CHECKED state is read
+    directly from win._section_reversed, an independent, per-axis flag
+    that isn't tied to whether Edit happens to be on for that same row
+    at all."""
+    checked_axes = getattr(win, "_section_checked", {})
     active_axis = getattr(win, "_section_clip_active_axis", None)
     reversed_state = getattr(win, "_section_reversed", {})
 
-    edit_by_mode = getattr(win, "_section_edit_buttons_by_mode", {})
-    for mode, axis_to_btn in edit_by_mode.items():
-        is_current = (mode == current_mode)
-        for axis, btn in axis_to_btn.items():
-            btn.setEnabled(is_current)
-            btn.blockSignals(True)
-            btn.setChecked(is_current and active_axis == axis)
-            btn.blockSignals(False)
+    edit_buttons = getattr(win, "_section_edit_buttons", {})
+    for axis, btn in edit_buttons.items():
+        is_on = checked_axes.get(axis, False)
+        btn.setEnabled(is_on)
+        btn.blockSignals(True)
+        btn.setChecked(is_on and active_axis == axis)
+        btn.blockSignals(False)
 
-    reverse_by_mode = getattr(win, "_section_reverse_buttons_by_mode", {})
-    for mode, axis_to_btn in reverse_by_mode.items():
-        is_current = (mode == current_mode)
-        for axis, btn in axis_to_btn.items():
-            btn.setEnabled(is_current)
-            btn.blockSignals(True)
-            btn.setChecked(reversed_state.get(mode, {}).get(axis, False))
-            btn.blockSignals(False)
+    reverse_buttons = getattr(win, "_section_reverse_buttons", {})
+    for axis, btn in reverse_buttons.items():
+        is_on = checked_axes.get(axis, False)
+        btn.setEnabled(is_on)
+        btn.blockSignals(True)
+        btn.setChecked(reversed_state.get(axis, False))
+        btn.blockSignals(False)
 
 
 def build_section_view_toolbar():
@@ -2250,182 +2194,81 @@ def build_section_view_toolbar():
     sectionViewToolBar, docked Qt.RightToolBarArea, stacked below
     wcToolBar/wgToolBar). Called once at startup.
 
-    Session 119: rebuilt around Doug's own, two-level design. A top-
-    level Normal View/Section View pair (QButtonGroup, exclusive,
-    Normal default) replaces "Off" as a plain member of the old,
-    single five-way mode group. Below it, in a separate container
-    widget whose own setEnabled() state Qt propagates automatically
-    to every child -- graying the whole section out at once whenever
-    Normal View is selected, with no manual per-widget work needed.
+    Session 129: rebuilt around Doug's own FreeCAD-style redesign --
+    "I had a look at the way FreeCAD implements the section view UI
+    and I decided I like their way better." The old 2-level design
+    (Session 119: a top-level Normal View/Section View switch, then a
+    lower, 5-way-exclusive X/Y/Z/XY mode selector) is gone entirely.
+    Now just one, flat Dir/Edit/Rev table, one row per principal axis
+    (X, Y, Z), each with its own independently-toggleable Dir
+    checkbox -- zero checked is Normal View, any combination of 1-3
+    gives that combination's own section view (including the 3-plane
+    case the old design never actually built). No more special-cased
+    "XY" row with label-only sub-rows either -- every row is now
+    structurally identical, since there's no longer a single
+    multi-plane "mode" that owns 2 particular axes together.
 
-    Session 120: the lower section rebuilt again, as a compact,
-    3-column table (Doug's own layout, to keep the toolbar from
-    getting too wide once Reverse needed its own control per row,
-    same as Edit): a Dir column (the X/Y/Z/X&Y mode-selector buttons,
-    unchanged QToolButtons with icons), an Edit column, and a Rev
-    column -- the latter two now plain QCheckBox widgets, no icon or
-    label needed once the column header itself says what they are.
-    X&Y's own Dir cell is a mode-selector button like the others, but
-    has no Edit/Rev of its own (blank cells) -- it isn't a single
-    plane. Its own X and Y sub-planes get their own rows right below
-    it instead, each with real Edit/Rev checkboxes but a plain,
-    non-clickable QLabel in the Dir column instead of a button, since
-    they aren't independently selectable modes, just the two
-    components of the X&Y mode itself.
+    Still the same 3 functional columns Doug asked to keep -- Dir,
+    Edit, Rev -- with a 4th, unlabeled column on the left for each
+    row's own X/Y/Z identity (previously carried by the Dir button's
+    own icon/text; now that Dir is a plain checkbox like Edit and Rev,
+    the row needs its own label instead). Only Edit/Rev are still
+    conditionally enabled (per-row, via _refresh_section_lower_
+    controls -- grayed out until that row's own Dir box is checked);
+    Dir itself is always enabled, there's no higher-level switch left
+    to gray it out at all.
 
-    Only the row(s) matching the current mode have their own Edit/Rev
-    control(s) enabled at all; the rest are grayed out, tracked via
-    win._section_edit_buttons_by_mode / win._section_reverse_buttons_
-    by_mode and kept in sync by _refresh_section_lower_controls().
-    Edit's own mutually-exclusive-but-both-can-be-off X&Y pair is
-    wired by hand (_on_edit_checkbox_toggled's own docstring); Rev's
-    own X&Y pair is fully independent of each other instead -- wanting
-    only one plane reversed and not the other is a real, named use
-    case Doug specifically raised, so no such wiring exists for Rev
-    at all.
-
-    Capping is no longer a toggle here at all (Session 120, Doug's
-    own call: always capped, not a preference). Reversed normal is
-    now built."""
-    from PySide6.QtWidgets import (QWidget, QGridLayout, QToolButton,
-                                   QButtonGroup, QFrame, QCheckBox,
-                                   QLabel)
-    from PySide6.QtCore import QSize
+    Capping is still not a toggle here at all (Session 120, Doug's own
+    call: always capped, not a preference)."""
+    from PySide6.QtWidgets import QWidget, QGridLayout, QCheckBox, QLabel
 
     _panel = QWidget()
     _grid = QGridLayout(_panel)
     _grid.setContentsMargins(2, 2, 2, 2)
     _grid.setSpacing(2)
 
-    # --- Top level: Normal View / Section View ---
-    win._section_top_level_group = QButtonGroup(win)
-    win._section_top_level_group.setExclusive(True)
-    _TOP_LEVELS = [("normal", "Normal View"), ("section", "Section View")]
-    for _trow, (_level, _label) in enumerate(_TOP_LEVELS):
-        _tbtn = QToolButton()
-        _tbtn.setCheckable(True)
-        _tbtn.setText(_label)
-        _tbtn.clicked.connect(
-            lambda checked, lv=_level: set_section_top_level(lv))
-        win._section_top_level_group.addButton(_tbtn)
-        _grid.addWidget(_tbtn, _trow, 0, 1, 3)
-        if _level == "normal":
-            _tbtn.setChecked(True)  # matches the real initial state
+    _grid.addWidget(QLabel(""), 0, 0)
+    _grid.addWidget(QLabel("Dir"), 0, 1)
+    _grid.addWidget(QLabel("Edit"), 0, 2)
+    _grid.addWidget(QLabel("Rev"), 0, 3)
 
-    _sep1 = QFrame()
-    _sep1.setFrameShape(QFrame.HLine)
-    _grid.addWidget(_sep1, len(_TOP_LEVELS), 0, 1, 3)
+    win._section_checked = {}
+    win._section_edit_buttons = {}
+    win._section_reverse_buttons = {}
+    _edit_btns_by_axis = {}
 
-    # --- Lower section: Dir | Edit | Rev table, entirely disabled
-    # while Normal View is selected.
-    _lower = QWidget()
-    _lower_grid = QGridLayout(_lower)
-    _lower_grid.setContentsMargins(0, 0, 0, 0)
-    _lower_grid.setSpacing(2)
-    win._section_lower_widget = _lower
-    _lower.setEnabled(False)  # Normal View is the default
+    for _row, _axis in enumerate(_SECTION_AXES, start=1):
+        _grid.addWidget(QLabel(_axis.upper()), _row, 0)
 
-    _lower_grid.addWidget(QLabel("Dir"), 0, 0)
-    _lower_grid.addWidget(QLabel("Edit"), 0, 1)
-    _lower_grid.addWidget(QLabel("Rev"), 0, 2)
+        _dir_cb = QCheckBox()
+        _dir_cb.setToolTip(f"Show the {_axis.upper()} section plane")
+        _dir_cb.toggled.connect(
+            lambda checked, a=_axis: _on_dir_checkbox_toggled(checked, a))
+        _grid.addWidget(_dir_cb, _row, 1)
 
-    win._section_view_group = QButtonGroup(win)
-    win._section_view_group.setExclusive(True)
-    win._section_edit_buttons_by_mode = {}
-    win._section_reverse_buttons_by_mode = {}
+        _edit_cb = QCheckBox()
+        _edit_cb.setToolTip(f"Enable dragging the {_axis.upper()} plane")
+        win._section_edit_buttons[_axis] = _edit_cb
+        _edit_btns_by_axis[_axis] = _edit_cb
+        _grid.addWidget(_edit_cb, _row, 2)
 
-    def _make_edit_checkbox(mode, axis, partner_btn=None):
-        cb = QCheckBox()
-        cb.setToolTip(f"Enable dragging the {axis.upper()} plane")
-        cb.toggled.connect(
-            lambda checked, a=axis, p=partner_btn:
-                _on_edit_checkbox_toggled(checked, a, p))
-        win._section_edit_buttons_by_mode.setdefault(mode, {})[axis] = cb
-        return cb
+        _rev_cb = QCheckBox()
+        _rev_cb.setToolTip(f"Reverse the {_axis.upper()} plane's own normal")
+        _rev_cb.toggled.connect(
+            lambda checked, a=_axis: _on_reverse_checkbox_toggled(checked, a))
+        win._section_reverse_buttons[_axis] = _rev_cb
+        _grid.addWidget(_rev_cb, _row, 3)
 
-    def _make_reverse_checkbox(mode, axis):
-        cb = QCheckBox()
-        cb.setToolTip(f"Reverse the {axis.upper()} plane's own normal")
-        cb.toggled.connect(
-            lambda checked, m=mode, a=axis:
-                _on_reverse_checkbox_toggled(checked, m, a))
-        win._section_reverse_buttons_by_mode.setdefault(mode, {})[axis] = cb
-        return cb
-
-    _MODES = [
-        ("x", "clip_x.gif", "DX normal"),
-        ("y", "clip_y.gif", "DY normal"),
-        ("z", "clip_z.gif", "DZ normal"),
-        ("xy", "clip_xy.gif", "2 planes (X and Y)"),
-    ]
-    _lrow = 1
-    for _mode, _iconfile, _tip in _MODES:
-        _btn = QToolButton()
-        _btn.setCheckable(True)
-        _pix = QPixmap(f"icons/{_iconfile}")
-        if not _pix.isNull():
-            _btn.setIcon(QIcon(_pix))
-            _btn.setIconSize(QSize(24, 24))
-        else:
-            _btn.setText(_mode.upper())
-        _btn.setToolTip(_tip)
-        _btn.clicked.connect(
-            lambda checked, m=_mode: _on_section_mode_clicked(m))
-        win._section_view_group.addButton(_btn)
-        _lower_grid.addWidget(_btn, _lrow, 0)
-        if _mode == "x":
-            _btn.setChecked(True)  # default lower-group selection
-
-        if _mode == "xy":
-            # X&Y itself: Dir only, no Edit/Rev of its own -- it isn't
-            # a single plane. Its own X/Y sub-planes get real rows
-            # right below, each with a plain label instead of a
-            # mode-selector button in the Dir column.
-            #
-            # Edit's own two checkboxes are built plain here (no
-            # signal connected yet) rather than via the shared
-            # _make_edit_checkbox helper, since each one's own partner
-            # is the OTHER one -- and that partner doesn't exist yet
-            # at the point the first one would need to be built.
-            # Registered and displayed the same way regardless; both
-            # signals connected together right after, once both boxes
-            # genuinely exist.
-            _lrow += 1
-            _ex_cb = QCheckBox()
-            _ex_cb.setToolTip("Enable dragging the X plane")
-            win._section_edit_buttons_by_mode.setdefault(
-                "xy", {})["x"] = _ex_cb
-            _ey_cb = QCheckBox()
-            _ey_cb.setToolTip("Enable dragging the Y plane")
-            win._section_edit_buttons_by_mode.setdefault(
-                "xy", {})["y"] = _ey_cb
-            _ex_cb.toggled.connect(
-                lambda checked, a="x", p=_ey_cb:
-                    _on_edit_checkbox_toggled(checked, a, p))
-            _ey_cb.toggled.connect(
-                lambda checked, a="y", p=_ex_cb:
-                    _on_edit_checkbox_toggled(checked, a, p))
-
-            _lower_grid.addWidget(QLabel("X"), _lrow, 0)
-            _lower_grid.addWidget(_ex_cb, _lrow, 1)
-            _lower_grid.addWidget(_make_reverse_checkbox("xy", "x"),
-                                  _lrow, 2)
-            _lrow += 1
-            _lower_grid.addWidget(QLabel("Y"), _lrow, 0)
-            _lower_grid.addWidget(_ey_cb, _lrow, 1)
-            _lower_grid.addWidget(_make_reverse_checkbox("xy", "y"),
-                                  _lrow, 2)
-        else:
-            _lower_grid.addWidget(
-                _make_edit_checkbox(_mode, _mode), _lrow, 1)
-            _lower_grid.addWidget(
-                _make_reverse_checkbox(_mode, _mode), _lrow, 2)
-        _lrow += 1
-
-    _grid.addWidget(_lower, len(_TOP_LEVELS) + 1, 0, 1, 3)
+    # Edit's own mutually-exclusive-but-all-can-be-off wiring needs
+    # every row's checkbox to exist first (each one's "other" list is
+    # the other two), so connected in a second pass.
+    for _axis, _cb in _edit_btns_by_axis.items():
+        _others = [b for a, b in _edit_btns_by_axis.items() if a != _axis]
+        _cb.toggled.connect(
+            lambda checked, a=_axis, o=_others:
+                _on_edit_checkbox_toggled(checked, a, o))
 
     win.sectionViewToolBar.addWidget(_panel)
-    win._section_clip_mode = "x"  # matches the lower group's own default
     _refresh_section_lower_controls()
 
 
