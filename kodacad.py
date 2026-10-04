@@ -2219,25 +2219,61 @@ def build_section_view_toolbar():
     to gray it out at all.
 
     Capping is still not a toggle here at all (Session 120, Doug's own
-    call: always capped, not a preference)."""
+    call: always capped, not a preference).
+
+    Session 131 (cosmetic pass, once the checkbox redesign had
+    decluttered this section enough to be worth polishing): a bold
+    "Clipping" title row added above the Dir/Pos/Rev header, matching
+    the "2D Tools" title Doug asked added to the toolbar stacked right
+    above this one in the same right-dock area -- subtle visual
+    separation between the two, no structural change. Also "Edit" ->
+    "Pos" in the header (Doug's own call, to keep the toolbar narrow)
+    -- display text only; the checkbox's own tooltip and every
+    internal name (_section_edit_buttons, _on_edit_checkbox_toggled)
+    are unchanged."""
     from PySide6.QtWidgets import QWidget, QGridLayout, QCheckBox, QLabel
+    from PySide6.QtGui import QFont
+    from PySide6.QtCore import Qt
 
     _panel = QWidget()
     _grid = QGridLayout(_panel)
     _grid.setContentsMargins(2, 2, 2, 2)
     _grid.setSpacing(2)
 
-    _grid.addWidget(QLabel(""), 0, 0)
-    _grid.addWidget(QLabel("Dir"), 0, 1)
-    _grid.addWidget(QLabel("Edit"), 0, 2)
-    _grid.addWidget(QLabel("Rev"), 0, 3)
+    # Session 131 (Doug's own cosmetic pass, once the checkbox
+    # redesign had decluttered this section enough to be worth
+    # polishing): a bold section title, matching the one added to the
+    # 2D tool panel right above it in the same toolbar stack -- subtle
+    # visual separation between the two stacked sections, with no
+    # structural change underneath.
+    # Session 131 addendum: Doug's live-test screenshot showed the
+    # title sitting flush against the left edge instead of centered
+    # over the (narrower) table below it -- QLabel defaults to
+    # left-aligned text. Explicitly centered now.
+    _title = QLabel("Clipping")
+    _title_font = QFont()
+    _title_font.setBold(True)
+    _title.setFont(_title_font)
+    _title.setAlignment(Qt.AlignCenter)
+    _grid.addWidget(_title, 0, 0, 1, 4)
+
+    _grid.addWidget(QLabel(""), 1, 0)
+    _grid.addWidget(QLabel("Dir"), 1, 1)
+    # Session 131: "Edit" -> "Pos" (Doug's own call, to keep the
+    # overall toolbar narrow -- 3 letters instead of 4). Only the
+    # displayed header text changes; the checkbox's own tooltip
+    # ("Enable dragging the ... plane") and every internal name
+    # (_section_edit_buttons, _on_edit_checkbox_toggled, etc.) are
+    # unchanged -- this is a label change, not a renamed concept.
+    _grid.addWidget(QLabel("Pos"), 1, 2)
+    _grid.addWidget(QLabel("Rev"), 1, 3)
 
     win._section_checked = {}
     win._section_edit_buttons = {}
     win._section_reverse_buttons = {}
     _edit_btns_by_axis = {}
 
-    for _row, _axis in enumerate(_SECTION_AXES, start=1):
+    for _row, _axis in enumerate(_SECTION_AXES, start=2):
         _grid.addWidget(QLabel(_axis.upper()), _row, 0)
 
         _dir_cb = QCheckBox()
@@ -2374,8 +2410,9 @@ if __name__ == "__main__":
     # lands. noop.gif lives in the Pyurcad icons folder -- copy it
     # over (text fallback until then). ====
     from PySide6.QtWidgets import (QWidget, QGridLayout, QToolButton,
-                                   QFrame)
-    from PySide6.QtCore import QSize
+                                   QFrame, QLabel)
+    from PySide6.QtGui import QFont
+    from PySide6.QtCore import QSize, Qt
 
     _TOOL_LAYOUT = [
         ("noop.gif", "End Operation", win.clearCallback),
@@ -2417,7 +2454,19 @@ if __name__ == "__main__":
     _grid = QGridLayout(_panel)
     _grid.setContentsMargins(2, 2, 2, 2)
     _grid.setSpacing(2)
-    _row = 0
+
+    # Session 131 (Doug's own cosmetic pass): a bold section title,
+    # matching the "Clipping" title added to the Section View toolbar
+    # stacked right below this one in the same right-dock area --
+    # subtle visual separation between the two, no structural change.
+    _title = QLabel("2D Tools")
+    _title_font = QFont()
+    _title_font.setBold(True)
+    _title.setFont(_title_font)
+    _title.setAlignment(Qt.AlignCenter)
+    _grid.addWidget(_title, 0, 0, 1, 2)
+
+    _row = 1
     _col = 0
     for _item in _TOOL_LAYOUT:
         if _item == "SEP":

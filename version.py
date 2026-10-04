@@ -1,5 +1,8 @@
 """Single source of truth for the KodaCAD application version.
 
+2.1.1 -- 2026-10-04 (Session 131)
+* Polished toolbar visually, especially clipping section.
+
 2.1.0 -- 2026-10-03 (Session 129) including:
 * Pull (Linear/Angular, Add/Remove material, +/- Direction)
 * Chamfer
@@ -27,4 +30,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
