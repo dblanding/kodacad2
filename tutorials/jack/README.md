@@ -188,16 +188,16 @@ in this project against both this pumpkin shape and a plain filleted
 bottle. It's also not a problem for this particular build, since the
 face will be cut through entirely in the next step regardless.
 
-In order to verify that the punpkin was properly shelled, click on the 
-**Section View** button near the bottom of the toolbar.
+In order to verify that the pumpkin was properly shelled, click on the 
+**X** Direction button in the **Clipping** section of the toolbar.
 
 ![Section View of Pumpkin](imgs/section-view.png)
 
-Initially, the clipped "face" of the section view will be in the X direction.
+This will show the clipped "face" of the section view in the X direction.
 Click on other directions to explore the way section views are displayed.
-Once in a section view, you can edit the location of the clipping plane.
-If you select **Normal View** again, then return to the section view
-just edited, the clipping plane you set will be remembered.
+Once in a section view, you can edit the position of the clipping plane.
+Unclicking all the **Dir** column options returns to the normal view.
+Any adjustments made to clipping plane positions will be remembered.
 
 *Exercises: Shell on a form whose only candidate open face is entirely
 tangent-bounded, Section Views, and how to adjust the position of the 
