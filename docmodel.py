@@ -1636,10 +1636,11 @@ class DocModel:
         """Export self.doc to STEP file."""
         prompt = 'Specify name for saved step file.'
         fname, __ = QFileDialog.getSaveFileName(None, prompt, './',
-                                                "STEP files (*.stp *.STP *.step)")
+                                                "STEP files (*.stp *.STP *.step *.STEP)")
         if not fname:
             print("Save step cancelled.")
             return
+        fname = ensure_step_extension(fname)
 
         # DIAGNOSTIC (temporary, reinstated from Session 14 -- the
         # Session 16 fix did not resolve the regression in real
@@ -2394,14 +2395,27 @@ def copy_label(source_label, target_label):
     XLinkTool.Copy(target_label, source_label)
 
 
+def ensure_step_extension(fname):
+    """Return fname unchanged if it already ends in .stp or .step (any
+    case); otherwise append the default ".stp". QFileDialog on Linux
+    does not add an extension from the filter, so a bare "myfile" used
+    to be written with no extension at all (Session 134, Doug's
+    request). A name with some OTHER extension ("part.v2") gets ".stp"
+    appended too rather than being guessed at."""
+    if fname.lower().endswith((".stp", ".step")):
+        return fname
+    return fname + ".stp"
+
+
 def save_step_doc(doc):
     """Export doc to STEP file."""
     prompt = 'Specify name for saved step file.'
     fname, __ = QFileDialog.getSaveFileName(None, prompt, './',
-                                            "STEP files (*.stp *.STP *.step)")
+                                            "STEP files (*.stp *.STP *.step *.STEP)")
     if not fname:
         print("Save step cancelled.")
         return
+    fname = ensure_step_extension(fname)
     WS = XSControl_WorkSession()
     # Same PCURVE-suppression fix as the method version above --
     # this module-level save_step_doc is a second, separate writer

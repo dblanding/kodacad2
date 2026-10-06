@@ -315,6 +315,24 @@ def find_common_pt(apair, bpair):
     return (cp, opa, opb)
 
 
+def arc_extent_points(ctr, r, a0, a1):
+    """Points that bound an arc (center ctr, radius r, CCW from angle
+    a0 to a1, radians): both endpoints plus any axis-extreme point
+    (angle 0, 90, 180, 270 deg) the sweep passes through. Pure
+    Python. Session 135."""
+    import math
+    pts = [(ctr[0] + r * math.cos(a), ctr[1] + r * math.sin(a))
+           for a in (a0, a1)]
+    two_pi = 2.0 * math.pi
+    sweep = a1 - a0
+    for k in range(4):
+        ang = k * math.pi / 2.0
+        if (ang - a0) % two_pi <= sweep:
+            pts.append((ctr[0] + r * math.cos(ang),
+                        ctr[1] + r * math.sin(ang)))
+    return pts
+
+
 def cr_from_3p(p1, p2, p3):
     """Return ctr pt and radius of circle on which 3 pts reside.
     From Paul Bourke's web page."""
@@ -612,9 +630,20 @@ class WorkPlane():
             pts_u.extend((pc_[0] - r_, pc_[0] + r_))
             pts_v.extend((pc_[1] - r_, pc_[1] + r_))
             n_content += 1
-        for (pc_, r_, _a0, _a1) in self.carcs:
-            pts_u.extend((pc_[0] - r_, pc_[0] + r_))
-            pts_v.extend((pc_[1] - r_, pc_[1] + r_))
+        for (pc_, r_, a0_, a1_) in self.carcs:
+            if (a1_ - a0_) < 0.002:
+                # Nearly-straight arc (sweep < ~0.1 deg): its FULL
+                # circle's bounding box can be enormous (Session 135:
+                # a projected edge-on circle once became a huge-radius
+                # arc, the auto-fit border ballooned to match, and its
+                # translucent pane washed out the parts behind it).
+                # Use the arc's own extent instead.
+                for (u_, v_) in arc_extent_points(pc_, r_, a0_, a1_):
+                    pts_u.append(u_)
+                    pts_v.append(v_)
+            else:
+                pts_u.extend((pc_[0] - r_, pc_[0] + r_))
+                pts_v.extend((pc_[1] - r_, pc_[1] + r_))
             n_content += 1
         for (p1_, p2_) in self.csegs:
             pts_u.extend((p1_[0], p2_[0]))

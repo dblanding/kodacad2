@@ -11,6 +11,68 @@ from OCP.BRep import BRep_Tool
 from OCP.TopoDS import TopoDS, TopoDS_Vertex
 
 
+import math as _math
+
+
+def collinear_direction(uvs, rel_tol=1.0e-4, abs_tol=1.0e-6):
+    """Do these 2D sample points lie along one straight line?
+
+    Returns (unit_dir, (mean_u, mean_v)) if so, else None (also None
+    when all points coincide). Pure Python. Principal-axis fit: the
+    max perpendicular deviation from the fitted line must be within
+    max(abs_tol, extent * rel_tol), extent being the spread ALONG the
+    line. Unlike an end-to-end chord test this works for a CLOSED edge
+    (a circle seen edge-on, whose first and last samples coincide).
+    Session 135."""
+    n = len(uvs)
+    if n < 2:
+        return None
+    mu = sum(p[0] for p in uvs) / n
+    mv = sum(p[1] for p in uvs) / n
+    suu = svv = suv = 0.0
+    for (u, v) in uvs:
+        du, dv = u - mu, v - mv
+        suu += du * du
+        svv += dv * dv
+        suv += du * dv
+    theta = 0.5 * _math.atan2(2.0 * suv, suu - svv)
+    d = (_math.cos(theta), _math.sin(theta))
+    ts = []
+    dev = 0.0
+    for (u, v) in uvs:
+        du, dv = u - mu, v - mv
+        ts.append(du * d[0] + dv * d[1])
+        dev = max(dev, abs(-du * d[1] + dv * d[0]))
+    extent = max(ts) - min(ts)
+    if extent < 1.0e-9:
+        return None
+    if dev <= max(abs_tol, extent * rel_tol):
+        return d, (mu, mv)
+    return None
+
+
+def golden_extreme(fn, lo, hi, maximize=True, iters=50):
+    """Parameter in [lo, hi] where fn is (locally) max/min --
+    golden-section search; assumes fn is unimodal on the bracket.
+    Pure Python. Session 135."""
+    gr = (5.0 ** 0.5 - 1.0) / 2.0
+    sign = 1.0 if maximize else -1.0
+    a, b = lo, hi
+    c = b - gr * (b - a)
+    d = a + gr * (b - a)
+    fc, fd = sign * fn(c), sign * fn(d)
+    for _ in range(iters):
+        if fc > fd:
+            b, d, fd = d, c, fc
+            c = b - gr * (b - a)
+            fc = sign * fn(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + gr * (b - a)
+            fd = sign * fn(d)
+    return 0.5 * (a + b)
+
+
 class M2D:
     """Methods for creating and drawing elements on 2D workplanes"""
 
@@ -123,9 +185,62 @@ class M2D:
     # with a count in the status bar -- honest v1 scope. Both tools
     # chain (pick face after face); middle-click ends. ---
 
-    def _project_edge_onto_wp(self, wp, edge):
+    def _project_edge_as_segment(self, wp, crv, n=256):
+        """If edge curve crv projects onto wp as a STRAIGHT line --
+        a straight edge, or a circle/B-spline seen edge-on -- add one
+        construction segment spanning its full projected extent.
+        Returns (is_collinear, kind): (False, None) if the projection
+        is not straight (or collapses to a single point); (True,
+        'cseg') if a segment was added. Session 135 (Doug's lofted
+        vase: the top end-face circle seen edge-on should project as a
+        line one diameter long, not an oblique, huge-radius arc).
+        Extremes are located by dense sampling, then refined by
+        golden-section search, so a full circle gives its exact
+        diameter rather than the nearest sample."""
+        from snap_engine import _elslib
+        param = _elslib("Parameters")
+
+        def uv(f):
+            return param(wp.gpPlane, crv.Value(f))
+
+        f0, f1 = crv.FirstParameter(), crv.LastParameter()
+        fs = [f0 + (f1 - f0) * i / (n - 1) for i in range(n)]
+        uvs = [uv(f) for f in fs]
+        res = collinear_direction(uvs)
+        if res is None:
+            return (False, None)
+        d, (mu, mv) = res
+
+        def tval(f):
+            u, v = uv(f)
+            return (u - mu) * d[0] + (v - mv) * d[1]
+
+        ts = [(u - mu) * d[0] + (v - mv) * d[1] for (u, v) in uvs]
+        step = (f1 - f0) / (n - 1)
+
+        def best(i, maximize):
+            brackets = [(max(f0, fs[i] - step), min(f1, fs[i] + step))]
+            # closed edge: the true extreme may straddle the seam
+            if i == 0:
+                brackets.append((max(f0, f1 - step), f1))
+            if i == n - 1:
+                brackets.append((f0, min(f1, f0 + step)))
+            cands = [fs[i]] + [golden_extreme(tval, lo, hi, maximize)
+                               for (lo, hi) in brackets]
+            return (max if maximize else min)(cands, key=tval)
+
+        f_hi = best(max(range(n), key=lambda i: ts[i]), True)
+        f_lo = best(min(range(n), key=lambda i: ts[i]), False)
+        p1, p2 = uv(f_lo), uv(f_hi)
+        if abs(p2[0] - p1[0]) < 1.0e-9 and abs(p2[1] - p1[1]) < 1.0e-9:
+            return (True, None)
+        wp.cseg(p1, p2)
+        return (True, 'cseg')
+
+    def _project_edge_onto_wp(self, wp, edge, verbose=False):
         """Project one TopoDS edge onto the active wp. Returns
-        'cseg', 'ccirc', or None (skipped)."""
+        'cseg', 'ccirc', 'carc', or None (skipped). verbose=True
+        prints the edge's curve type (single-edge pick)."""
         from OCP.BRepAdaptor import BRepAdaptor_Curve
         from OCP.GeomAbs import GeomAbs_CurveType
         from snap_engine import _elslib
@@ -134,6 +249,8 @@ class M2D:
         try:
             crv = BRepAdaptor_Curve(edge)
             ctype = crv.GetType()
+            if verbose:
+                print(f"[proj] edge curve type: {ctype}")
             if ctype == GeomAbs_CurveType.GeomAbs_Line:
                 p1 = crv.Value(crv.FirstParameter())
                 p2 = crv.Value(crv.LastParameter())
@@ -151,6 +268,13 @@ class M2D:
                 dot = (cdir.X() * ndir.X() + cdir.Y() * ndir.Y()
                        + cdir.Z() * ndir.Z())
                 if abs(dot) < 0.9999:
+                    if abs(dot) < 1.0e-4:
+                        # edge-on: projects to a straight line, one
+                        # diameter long (Session 135)
+                        straight, kind = self._project_edge_as_segment(
+                            wp, crv)
+                        if straight:
+                            return kind
                     print(f"[proj]   skipped circle: oblique "
                           f"(|dot|={abs(dot):.4f})")
                     return None
@@ -173,29 +297,21 @@ class M2D:
             # geometry declare itself -- circle fit (Doug's own
             # cr_from_3p) -> c-circle; straight fit -> cseg; neither
             # -> honest skip with reason.
+            # Straight in projection? (a straight B-spline, or a closed
+            # B-spline circle seen edge-on -- Session 135: the old
+            # end-to-end chord test could not see the closed case, and
+            # the circle fit below then turned its near-collinear
+            # samples into a huge-radius arc.)
+            straight, kind = self._project_edge_as_segment(wp, crv)
+            if straight:
+                return kind
             f0, f1 = crv.FirstParameter(), crv.LastParameter()
             n_s = 9
             uvs = []
             for i in range(n_s):
                 p = crv.Value(f0 + (f1 - f0) * i / (n_s - 1))
                 uvs.append(_elslib("Parameters")(wp.gpPlane, p))
-            span = max(abs(uvs[-1][0] - uvs[0][0]),
-                       abs(uvs[-1][1] - uvs[0][1]),
-                       1.0e-9)
-            # straight? max deviation of samples from the end-chord
             import math as _m
-            x1, y1 = uvs[0]
-            x2, y2 = uvs[-1]
-            chord = _m.hypot(x2 - x1, y2 - y1)
-            if chord > 1.0e-6:
-                devmax = 0.0
-                for (u, v) in uvs[1:-1]:
-                    devmax = max(devmax, abs((x2 - x1) * (y1 - v)
-                                             - (x1 - u) * (y2 - y1))
-                                 / chord)
-                if devmax < max(1.0e-6, chord * 1.0e-4):
-                    wp.cseg(uvs[0], uvs[-1])
-                    return 'cseg'
             # circular? fit through 3 spread samples, verify all
             try:
                 ctr, rad = wpm_cr3p(uvs[0], uvs[n_s // 3],
@@ -203,7 +319,11 @@ class M2D:
                 ok = all(abs(_m.hypot(u - ctr[0], v - ctr[1]) - rad)
                          < max(1.0e-6, rad * 1.0e-4)
                          for (u, v) in uvs)
-                if ok and rad > 1.0e-6:
+                ext = max(max(p[0] for p in uvs) - min(p[0] for p in uvs),
+                          max(p[1] for p in uvs) - min(p[1] for p in uvs))
+                # reject absurd radii (near-collinear samples fit a
+                # gigantic circle that "verifies" trivially)
+                if ok and 1.0e-6 < rad < 1.0e3 * max(ext, 1.0e-6):
                     a0, a1, span = self._uv_arc_span(uvs, ctr)
                     if span >= 2.0 * _m.pi - 5.0e-2:
                         # full circle -- dedupe (0.1um apart is the
@@ -365,7 +485,8 @@ class M2D:
                 self.win.statusBar().showMessage(
                     "That pick wasn't an edge -- try again.", 3000)
                 continue
-            kind = self._project_edge_onto_wp(wp, edge)
+            kind = self._project_edge_onto_wp(wp, edge, verbose=True)
+            print(f"[proj] edge -> {kind}")
             if kind is not None:
                 self.win.statusBar().showMessage(
                     f"Edge projected ({kind}). Pick another edge "

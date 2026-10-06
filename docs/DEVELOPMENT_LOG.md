@@ -6799,3 +6799,37 @@ Doug found Loft "finicky" about how it identified the set. Two opposite failures
 Fix in `loftWpSet()`: the set now comes from (1) the tree's current/clicked item if that is a set node or a member workplane -- an explicit choice still wins -- else (2) the active workplane's set via `wp_parent_set`. Any other tree item (part, assembly, root) is ignored rather than reported. If neither yields a set, the message now says what to do (make a set workplane active, or select the set). Stale tree-item wrappers after a rebuild are skipped. `require_active_part("Loft")` still applies, since the loft goes into the active part.
 
 One behavior to be aware of: a set left selected in the tree beats the active workplane, so if you select s1 and then make a workplane from s2 active, Loft uses s1.
+
+# Session 134: Save Session defaults to the .stp extension
+
+Doug asked that a Save Session filename typed without a STEP extension automatically get ".stp". QFileDialog on Linux doesn't append an extension from the selected filter, so a bare name was written with none. New module-level `ensure_step_extension(fname)` in docmodel.py: names already ending in .stp or .step (any case, so .STP/.STEP too) are untouched; anything else gets ".stp" appended (including "part.v2" -> "part.v2.stp", rather than guessing which dot-suffix was meant). Called in both STEP writers -- the `DocModel.save_step_doc` method the File menu uses, and the module-level `save_step_doc(doc)` -- right after the cancel check. The dialog filters in both gained `*.STEP` so it matches the accepted list (the Load filter already had it). The .xbf native save already did the same thing for its own extension.
+
+# Session 135: Project Edge -- edge-on circles, and the huge-arc / washed-out-parts bug
+
+Doug's lofted vase (loaded from a saved session): projecting the top end-face's circular edge onto an X-Z workplane, expecting a horizontal line one diameter long, produced oblique dashed lines instead -- and both parts then looked semi-transparent. Delete ALL Construction on the workplane restored them.
+
+## Diagnosis (reading the code; OCP is not installable in the assistant's sandbox, so no headless reproduction)
+
+- Terminal showed no `[proj]` line, which is informative: the "skipped circle: oblique" message would have printed had the edge been a true Circle seen edge-on, and success paths print nothing. The status bar said "carc". The only silent path to a `carc` for this edge is the sample-and-recognize fallback for non-line, non-circle curves -- so after the STEP round trip the loft's end-face circle is evidently a B-spline (consistent with Session-134-era finding that free-form geometry doesn't round-trip exactly; not yet confirmed directly).
+- The fallback's straight-line test compared first and last samples. A CLOSED edge's first and last samples coincide, so the test was skipped, and the 3-point circle fit then received nearly collinear samples (an edge-on circle projects onto a line), fit a huge-radius circle, and its "verify all samples" check passed trivially. Result: a `carc` of enormous radius and tiny sweep.
+- `WorkPlane.update_border()` fits the border to each carc's FULL-circle bounding box, so the border ballooned; the pane (92% transparent) then sat in front of both parts like frosted glass. That is why the parts looked transparent -- nothing touched part transparency (`transparency_dict` is only set by the RMB action).
+- Analytic parts never showed it because their end circles stay true Circle edges, which were skipped (not projected) when edge-on.
+
+## Fix
+
+- m2d.py: new pure helpers `collinear_direction()` (principal-axis straightness test that works for closed edges) and `golden_extreme()`. New `_project_edge_as_segment()`: densely samples the edge's projection; if straight, adds ONE construction segment spanning its full extent, with the extremes refined by golden-section search so a full circle gives exactly its diameter. Used for (a) true Circle edges that are edge-on (|dot| < 1e-4; previously skipped), and (b) the B-spline fallback, replacing its old end-to-end chord test. Genuinely oblique circles (ellipses) are still skipped.
+- Circle fit in the fallback now rejects radii over 1000x the sample extent.
+- workplane.py: new pure `arc_extent_points()`; `update_border()` uses an arc's own extent (endpoints + axis extremes in its sweep) instead of its full circle when the sweep is under 0.002 rad, so a near-straight arc can never balloon the border. Normal arcs keep the full-circle extent as specified in Session 63.
+- Single-edge Project Edge now prints the edge's curve type and result (`[proj] edge curve type: ...`, `[proj] edge -> cseg`), which will confirm the B-spline theory next time.
+
+## Testing
+
+Pure-Python tests with stubbed OCP: full circle edge-on gives 40.000000 for R=20 (also with 1e-8 noise and with the seam at an arbitrary angle), half and quarter arcs give 40 and 20, a tilted circle (0.1 rad) and a square-on circle are correctly NOT treated as straight, a straight diagonal gives its true length, a point is rejected. `arc_extent_points` checked for sweeps through 90 deg and across 0. First run caught a real bug (the "minimum" extreme picked the wrong end); fixed. Not yet exercised against real OCP edges -- needs Doug's run.
+
+## Not changed
+
+The underlying loft-edge-type change on STEP round trip itself (still just a hypothesis, see Session 134 discussion).
+
+## Session 135 addendum: confirmed on real geometry
+
+Doug's run on the reloaded vase session: `[proj] edge curve type: GeomAbs_CurveType.GeomAbs_BSplineCurve` for the lofted part's circular edges, confirming the Session 135 diagnosis that loft edges arrive as B-splines after the STEP round trip. One B-spline circle square-on projected as a full construction circle (`ccirc`), the edge-on end-face circle as a single diameter-length segment (`cseg`), and Project Face Edges on the end faces also worked (2 projected / 0 skipped). No oversized border or washed-out parts.
