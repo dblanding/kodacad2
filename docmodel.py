@@ -1928,6 +1928,20 @@ class DocModel:
         # either one.
         color_tool.SetColor(modshape, color, XCAFDoc_ColorSurf)
         color_tool.SetColor(modshape, color, XCAFDoc_ColorGen)
+        # Session 137: the shape-keyed SetColor above is a SILENT no-op
+        # if XDE cannot find a label for modshape (Doug's loft-parts.stp
+        # contained zero color entities even though replace_shape had
+        # certainly run). Verify the write; if it did not land, say so
+        # loudly and set it label-keyed on the prototype label itself,
+        # which cannot miss.
+        _chk = Quantity_Color()
+        if not (color_tool.GetColor(modshape, XCAFDoc_ColorSurf, _chk)
+                or color_tool.GetColor(modshape, XCAFDoc_ColorGen, _chk)):
+            print(f"[replace_shape] WARNING: shape-keyed SetColor did "
+                  f"NOT take for ref_entry={ref_entry!r} -- setting "
+                  f"color on the prototype label directly.")
+            color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
+            color_tool.SetColor(label, color, XCAFDoc_ColorGen)
         shape_tool.UpdateAssemblies()
         # Session 78, Doug: undoing a fillet left the fillet visibly
         # in place -- exactly the accepted-risk boundary named when

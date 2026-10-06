@@ -6853,3 +6853,17 @@ Same latent bug class as Session 78. `replace_shape` updates the shared prototyp
 ## Investigation: lost beige color and per-save file growth
 
 Probes (`probe_loft_roundtrip.py`, `probe_step_files.py`) could not reproduce either. Color stayed beige through loft, shell, hole, fillets and save/load, including shared instances; file sizes were stable apart from a one-time shift on first reload. Earlier hypotheses (B-spline re-approximation each cycle; color not set in `replace_shape`) were not supported. No fix made; if it recurs, run `probe_step_files.py` on the before/after files.
+
+# Session 137 -- Lost part color: what loft-parts.stp shows, and a tripwire
+
+## Evidence
+
+Doug's saved session `loft-parts.stp` (two shared instances at x=0 and x=60 of one lofted/shelled/holed product, 11 faces) was read as raw text: it contains NO `COLOUR_RGB`, `STYLED_ITEM`, `PRESENTATION_STYLE_ASSIGNMENT` or `SURFACE_STYLE_USAGE` entities at all. So the color was already absent from the XDE document when the file was written -- it was not lost on reading. The display gray (0.72) is only the display-only fallback for "no color found".
+
+## Reasoning
+
+`replace_shape` always writes `part_dict[uid]['color']` (a real color, even the gray fallback) with shape-keyed `SetColor`. A file with zero color entities means that write never landed. Shape-keyed `SetColor` silently does nothing if XDE can't find a label for the shape; the earlier probes never hit that case, so the trigger is some specific operation sequence not yet identified.
+
+## Change (diagnostic + safety net, not yet a confirmed fix)
+
+docmodel.py `replace_shape`: after the two shape-keyed `SetColor` calls, read the color back; if neither kind is found, print `[replace_shape] WARNING: shape-keyed SetColor did NOT take for ref_entry=...` and set both kinds label-keyed on the prototype label. Next time the color vanishes, the terminal should name the operation that did it.
