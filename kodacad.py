@@ -482,8 +482,9 @@ def loftWpSet():
     loft operation on a workplane set, et Voila! we get a lofted
     shape.").
 
-    Select the Set's own tree node ('s1') OR any workplane that
-    belongs to one, then choose Create/Modify -> Loft. Each member
+    The set is taken from the tree selection if that is a Workplane
+    Set node ('s1') or one of its workplanes, else from the ACTIVE
+    workplane's set (Session 133); then choose Create/Modify -> Loft. Each member
     workplane must have exactly one closed profile sketched on it
     (WorkPlane.outer_profile_wire() -- holes/multiple profiles per
     plane aren't supported yet, same "simple and lean first" call
@@ -502,21 +503,37 @@ def loftWpSet():
     if not require_active_part("Loft"):
         return
 
-    item = win.treeView.currentItem() or win.itemClicked
-    if not item:
+    # Which set? (Session 133, Doug: "finicky" -- it demanded a FRESH
+    # tree selection of the set or a member, rejected an active
+    # workplane, and complained about whatever else happened to be
+    # selected, e.g. the active part.) Now:
+    #   1. If the tree's current/clicked item happens to be a
+    #      Workplane Set node or a member workplane, that explicit
+    #      choice wins.
+    #   2. Otherwise the ACTIVE workplane's set is used.
+    # Anything else in the tree (a part, an assembly, the root nodes)
+    # is simply not considered -- never an error in itself.
+    set_uid = None
+    for item in (win.treeView.currentItem(), win.itemClicked):
+        if not item:
+            continue
+        try:
+            item_uid = item.text(1)
+        except RuntimeError:  # stale wrapper after a tree rebuild
+            continue
+        if item_uid in win.wp_set_dict:
+            set_uid = item_uid
+        elif item_uid in win.wp_parent_set:
+            set_uid = win.wp_parent_set[item_uid]
+        if set_uid is not None:
+            break
+    if set_uid is None and win.activeWpUID in win.wp_parent_set:
+        set_uid = win.wp_parent_set[win.activeWpUID]
+    if set_uid is None:
         win.statusBar().showMessage(
-            "Select a Workplane Set (or one of its workplanes) in "
-            "the tree, then choose Loft.", 5000)
-        return
-    item_uid = item.text(1)
-    if item_uid in win.wp_set_dict:
-        set_uid = item_uid
-    elif item_uid in win.wp_parent_set:
-        set_uid = win.wp_parent_set[item_uid]
-    else:
-        win.statusBar().showMessage(
-            f"'{item.text(0)}' is not a Workplane Set (or a member of "
-            f"one) -- select one, then choose Loft.", 5000)
+            "Loft needs a Workplane Set: make one of its workplanes "
+            "active (or select the set in the tree), then choose "
+            "Loft.", 5000)
         return
 
     wp_uids = win.wp_set_dict.get(set_uid, [])

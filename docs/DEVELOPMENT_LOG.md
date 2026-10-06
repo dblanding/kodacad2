@@ -6791,3 +6791,11 @@ Doug reported two symptoms: hiding or showing a Workplane Set flashed the viewpo
 ## Not changed
 
 `redraw()` still prints the view-cube message each time it runs; it just runs far less often now.
+
+# Session 133: Loft -- accept the active workplane, ignore parts
+
+Doug found Loft "finicky" about how it identified the set. Two opposite failures, both from reading only the tree's current/clicked item: with a member workplane merely ACTIVE (not freshly selected) it said '"WP" is not a Workplane Set' (the current item was the root node); and after selecting the set and then making the empty part active, it said "'part_1' is not a Workplane Set" -- the tree selection is ephemeral and had moved to the part, which Loft should never have been judging at all.
+
+Fix in `loftWpSet()`: the set now comes from (1) the tree's current/clicked item if that is a set node or a member workplane -- an explicit choice still wins -- else (2) the active workplane's set via `wp_parent_set`. Any other tree item (part, assembly, root) is ignored rather than reported. If neither yields a set, the message now says what to do (make a set workplane active, or select the set). Stale tree-item wrappers after a rebuild are skipped. `require_active_part("Loft")` still applies, since the loft goes into the active part.
+
+One behavior to be aware of: a set left selected in the tree beats the active workplane, so if you select s1 and then make a workplane from s2 active, Loft uses s1.
