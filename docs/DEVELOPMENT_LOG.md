@@ -6833,3 +6833,23 @@ The underlying loft-edge-type change on STEP round trip itself (still just a hyp
 ## Session 135 addendum: confirmed on real geometry
 
 Doug's run on the reloaded vase session: `[proj] edge curve type: GeomAbs_CurveType.GeomAbs_BSplineCurve` for the lofted part's circular edges, confirming the Session 135 diagnosis that loft edges arrive as B-splines after the STEP round trip. One B-spline circle square-on projected as a full construction circle (`ccirc`), the edge-on end-face circle as a single diameter-length segment (`cseg`), and Project Face Edges on the end faces also worked (2 projected / 0 skipped). No oversized border or washed-out parts.
+
+# Session 136 -- Shared instances not redrawn after Pull / Mill-Pull; color/size probes negative
+
+## Symptom
+
+Doug: lofted a part, made a shared instance, shelled the original (shared instance updated), then cut a hole into the original -- the hole did not appear in the shared instance's display. After save and reload, the hole was in both instances. So the document was right and only the display was stale.
+
+## Cause
+
+Same latent bug class as Session 78. `replace_shape` updates the shared prototype, but each instance has its own AIS object. Loft/fillet/shell go through `_redraw_after_shape_replace` (force-redraws every instance sharing the prototype); Pull (Add/Remove Material) and Mill/Pull only did `erase_shape(uid)` / `draw_shape(uid)` for the one picked uid.
+
+## Fix
+
+- mainwindow.py: new `MainWindow.redraw_after_shape_replace(ref_entry, old_uids)` holding the shared logic (kept on the main window, not imported from kodacad.py, because kodacad runs as a script and importing it would create a second module copy with unset `win`/`dm`).
+- kodacad.py: `_redraw_after_shape_replace` now delegates to it.
+- pull_dialog.py, mill_pull_dialog.py: capture `ref_entry` and `old_uids` before `replace_shape`, then call `win.redraw_after_shape_replace(...)` instead of `draw_shape(uid)`.
+
+## Investigation: lost beige color and per-save file growth
+
+Probes (`probe_loft_roundtrip.py`, `probe_step_files.py`) could not reproduce either. Color stayed beige through loft, shell, hole, fillets and save/load, including shared instances; file sizes were stable apart from a one-time shift on first reload. Earlier hypotheses (B-spline re-approximation each cycle; color not set in `replace_shape`) were not supported. No fix made; if it recurs, run `probe_step_files.py` on the before/after files.

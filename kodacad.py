@@ -629,13 +629,7 @@ def _redraw_after_shape_replace(ref_entry, old_uids):
     entry+serial, and serial is a per-parse counter -- see Session
     72's reparenting investigation), so this takes the STABLE entry
     string, resolved fresh against the just-updated label_dict."""
-    win.build_tree()
-    if ref_entry:
-        force = {u for u, info in dm.label_dict.items()
-                if info.get('ref_entry') == ref_entry and u in dm.part_dict}
-    else:
-        force = set()
-    win._incremental_reconcile(old_uids, force_redraw_uids=force)
+    win.redraw_after_shape_replace(ref_entry, old_uids)
 
 
 def _match_analytic_subshape(picked, analytic_shape, pairs, shape_type):

@@ -478,10 +478,14 @@ class PullDialog(QDialog):
             return
 
         # Each Done = ONE undo transaction (a complete operation)
+        # Capture the stable prototype entry + old uids BEFORE the
+        # replace so every shared instance gets redrawn (Session 136).
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+        old_uids = set(dm.part_dict.keys())
         win.erase_shape(uid)
         with docmodel.undo_transaction(dm):
             dm.replace_shape(uid, newPart)
-        win.draw_shape(uid)
+        win.redraw_after_shape_replace(ref_entry, old_uids)
         win.setActivePart(uid)
         n_prof = len(faces)
         verb = "Added" if adding else "Removed"

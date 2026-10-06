@@ -2123,6 +2123,23 @@ class MainWindow(QMainWindow):
         """Fit all displayed parts and wp's to the screen"""
         self.canvas._display.FitAll()
 
+    def redraw_after_shape_replace(self, ref_entry, old_uids):
+        """After dm.replace_shape() (which calls parse_doc()), rebuild
+        the tree and redraw the modified part AND every other instance
+        sharing the same prototype (each instance has its own AIS
+        object; the document data is already right for all of them).
+        Session 136/78. ref_entry/old_uids MUST be captured BEFORE
+        replace_shape: uids are entry+serial and the serial changes
+        on every parse_doc()."""
+        self.build_tree()
+        if ref_entry:
+            force = {u for u, info in dm.label_dict.items()
+                     if info.get('ref_entry') == ref_entry
+                     and u in dm.part_dict}
+        else:
+            force = set()
+        self._incremental_reconcile(old_uids, force_redraw_uids=force)
+
     def _incremental_reconcile(self, old_uids, redraw_all_survivors=False,
                                force_redraw_uids=None, reason_map=None):
         """Reconciles the viewer against dm.part_dict AFTER an
