@@ -19,6 +19,39 @@ def nyi():
     print("Not yet implemented")
 
 
+DISPLAY_WIDTH = 18  # chars -- the register displays' setMaxLength()
+DISPLAY_DECIMALS = 10  # far finer than KodaCAD's TOLERANCE of 1e-7
+
+
+def fmt(value):
+    """Format a register value for its display: never exponent
+    notation (unless the number is too large to fit at all), and
+    rounded to DISPLAY_DECIMALS places with trailing zeros dropped.
+
+    Why: str(float) switches to exponent notation for tiny values
+    (3.076117674474894e-16, i.e. floating-point noise for what is
+    really 0), and QLineEdit.setMaxLength(18) then silently chops the
+    text mid-number -- "3.076117674474894e" -- hiding the exponent,
+    the one part that says how big the number is. Rounding at 10
+    decimals shows such noise as plain 0, and also tidies things like
+    0.30000000000000004 -> 0.3. Only the DISPLAY is rounded; the
+    registers themselves keep full float precision."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        return str(v)
+    text = f"{v:.{DISPLAY_DECIMALS}f}".rstrip("0").rstrip(".")
+    if text in ("", "-0"):
+        text = "0"
+    if len(text) > DISPLAY_WIDTH:
+        # Too big to show positionally in the available room; use a
+        # short exponent form (always fits) rather than get truncated.
+        text = f"{v:.6e}"
+    return text
+
+
 class Button(QToolButton):
     """Convenience class for buttons"""
 
@@ -275,10 +308,10 @@ class Calculator(QDialog):
         self.needrup = True
 
     def updateDisplays(self):
-        self.xdisplay.setText(str(self.x))
-        self.ydisplay.setText(str(self.y))
-        self.zdisplay.setText(str(self.z))
-        self.tdisplay.setText(str(self.t))
+        self.xdisplay.setText(fmt(self.x))
+        self.ydisplay.setText(fmt(self.y))
+        self.zdisplay.setText(fmt(self.z))
+        self.tdisplay.setText(fmt(self.t))
 
     def enter(self):
         self.t = self.z
@@ -294,7 +327,7 @@ class Calculator(QDialog):
         try:
             if op == "+/-":
                 self.x = self.x * -1
-                self.xdisplay.setText(str(self.x))
+                self.xdisplay.setText(fmt(self.x))
             else:
                 if op == "+":
                     res = self.y + self.x
@@ -325,21 +358,21 @@ class Calculator(QDialog):
         if out_cnvrt:
             result = result * 180 / math.pi
         self.x = result
-        self.xdisplay.setText(str(self.x))
+        self.xdisplay.setText(fmt(self.x))
         self.keip = False
         self.needrup = True
 
     def mm2in(self):
         if self.xdisplay.text():
             self.x = self.x / 25.4
-            self.xdisplay.setText(str(self.x))
+            self.xdisplay.setText(fmt(self.x))
             self.keip = False
             self.needrup = True
 
     def in2mm(self):
         if self.xdisplay.text():
             self.x = self.x * 25.4
-            self.xdisplay.setText(str(self.x))
+            self.xdisplay.setText(fmt(self.x))
             self.keip = False
             self.needrup = True
 
@@ -350,7 +383,7 @@ class Calculator(QDialog):
 
     def recallx(self):
         self.rotateup()
-        self.xdisplay.setText(str(self.mem))
+        self.xdisplay.setText(fmt(self.mem))
         self.keip = False
         self.needrup = True
 
@@ -395,7 +428,7 @@ class Calculator(QDialog):
         if self.needrup:
             self.rotateup(loop=0)
         self.x = value
-        self.xdisplay.setText(str(value))
+        self.xdisplay.setText(fmt(value))
         self.keip = False
         self.needrup = True
 
