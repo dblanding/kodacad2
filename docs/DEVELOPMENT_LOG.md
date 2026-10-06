@@ -6770,3 +6770,24 @@ Both titles are a single bold `QLabel` spanning the panel's own column count, ad
 Doug's own live-test screenshot (KodaCAD 2.1.0) caught what the description above missed: "the 'Clipping' heading is visibly too far left of center." Cause was simply that `QLabel` defaults to left-aligned text, and nothing in the Session 131 change had called `setAlignment()` -- the title row span (`1, 0, 1, 4` for Clipping; `1, 0, 1, 2` for 2D Tools) only controls how much horizontal space the label occupies, not where its text sits inside that space.
 
 Fix: `_title.setAlignment(Qt.AlignCenter)` on both titles, for the same consistent look Doug was going for in the first place -- `Clipping` over its narrower Dir/Pos/Rev table, and `2D Tools` over its wider icon grid, now both genuinely centered rather than one of them merely reading as "close enough" by accident of a wider, more square layout. `Qt` wasn't yet in scope in either function's local imports (`build_section_view_toolbar()` had no `QtCore` import at all; the 2D tool panel's block only pulled in `QSize`), so `Qt` was added alongside each.
+
+# Session 132: workplane flashing -- hide/show a set, and change the active wp
+
+Doug reported two symptoms: hiding or showing a Workplane Set flashed the viewport repeatedly with a run of "AIS_ViewCube added to corner (RGB axes)." messages on the terminal; and making a different workplane active flashed every workplane (one view-cube message).
+
+## Diagnosis (by reading, no probe needed -- no new OCP API involved)
+
+- **Hide/show a set:** unchecking a set's box unchecks every member wp, and `adjust_draw_hide()` handled each newly unchecked wp by calling a full `redraw()` (`RemoveAll`, redraw every part and wp, re-add the view cube) -- once per member. N members meant N complete teardown/rebuild cycles, and N view-cube messages.
+- **Make a wp active:** `setItemActive()` called a full `redraw()` just to change the old and new active wp's border color.
+- **Both:** `draw_wp()` also forced a viewer refresh 4 times per workplane (`update=True` on Display/SetColor/SetTransparency/HilightWithColor) plus a `Repaint()` at its end, so every full redraw showed many half-built intermediate frames.
+
+## Fix
+
+- New `_erase_wp(uid)`: removes just that wp's AIS objects, tracked per-uid in `_wp_ais_reg` since Session 63 (same mechanism `deleteItem()` uses). `adjust_draw_hide()` now hides wps with it and refreshes once at the end; the docstring's old claim that per-wp tracking "isn't practical" was out of date.
+- `setItemActive()` redraws only the previously active and newly active wp (skipping hidden ones), refreshing once.
+- `draw_wp(uid, repaint=True)`: the four immediate-update flags are now False; the final `Repaint()` is skipped when `repaint=False`. `redraw_workplanes()` passes False and does one `Repaint()` for the whole batch, so standalone callers (`wp_set_dialog.py`, `kodacad.py`) are unaffected.
+- Default `repaint=True` leaves all other `draw_wp` callers (m2d.py, wp_position_dialog.py) unchanged.
+
+## Not changed
+
+`redraw()` still prints the view-cube message each time it runs; it just runs far less often now.

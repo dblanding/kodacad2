@@ -980,20 +980,33 @@ class MainWindow(QMainWindow):
         hide_set = set(hide_list)
         newly_unchecked = unchecked_set - hide_set
         newly_checked = hide_set - unchecked_set
+        # Session 132 (Doug: hiding/showing a Workplane Set flashed the
+        # viewport repeatedly, with one "AIS_ViewCube added" message per
+        # workplane). Unchecking a set unchecks every member wp, and
+        # this method used to call a FULL redraw() (RemoveAll + redraw
+        # every part and wp + re-add the view cube) once PER wp -- N
+        # members meant N complete teardown/rebuild cycles. Every wp's
+        # AIS objects are already tracked per-uid in _wp_ais_reg (since
+        # Session 63), so a workplane is now hidden by removing just its
+        # own objects, exactly like deleteItem() does, and the viewer
+        # is refreshed once at the end.
+        changed_wp = False
         for uid in newly_unchecked:
-            # If a workplane is newly unchecked, redraw is needed
             if uid in self.wp_dict:
-                self.hide_list.append(uid)
-                self.redraw()
-            # Otherwise, we can do an incremental change in the display
+                self._erase_wp(uid)
+                changed_wp = True
             elif uid in dm.part_dict:
                 self.erase_shape(uid)  # Erase the shape
         for uid in newly_checked:
             if uid in dm.part_dict:
                 self.draw_shape(uid)  # Draw the shape
             elif uid in self.wp_dict:
-                self.draw_wp(uid)  # Draw the workplane
+                self.draw_wp(uid, repaint=False)  # Draw the workplane
+                changed_wp = True
         self.hide_list = unchecked
+        if changed_wp:
+            self.canvas._display.Context.UpdateCurrentViewer()
+            self.canvas.update()
 
     def syncUncheckedToHideList(self):
         """Use this method after building a new treeView to make sure items
@@ -1117,9 +1130,20 @@ class MainWindow(QMainWindow):
                 self.setActivePart(uid)
                 sbText = f"{name} [uid={uid}] is now the active part"
             elif uid in wd:
+                old_uid = self.activeWpUID
                 self.setActiveWp(uid)
                 sbText = f"{name} [uid={uid}] is now the active workplane"
-                self.redraw()  # update color of new active wp
+                # Session 132 (Doug: every workplane flashed when a new
+                # one was made active). Only the border COLOR differs
+                # between active and inactive, so only the previously
+                # active wp and the newly active one need redrawing --
+                # not a full redraw() of every part and workplane.
+                for wp_uid in (old_uid, uid):
+                    if (wp_uid and wp_uid in self.wp_dict
+                            and wp_uid not in self.hide_list):
+                        self.draw_wp(wp_uid, repaint=False)
+                self.canvas._display.Context.UpdateCurrentViewer()
+                self.canvas.update()
             elif uid in ad:
                 self.setActiveAsy(uid)
                 sbText = f"{name} [uid={uid}] is now the active assembly"
@@ -2316,10 +2340,29 @@ class MainWindow(QMainWindow):
 
         for uid in self.wp_dict:
             if uid not in self.hide_list:
-                self.draw_wp(uid)
+                self.draw_wp(uid, repaint=False)
+        # One refresh for the whole batch (standalone callers such as
+        # wp_set_dialog.py relied on draw_wp's per-wp repaint before).
+        self.canvas._display.Repaint()
 
-    def draw_wp(self, uid):
-        """Draw the workplane with uid."""
+    def _erase_wp(self, uid):
+        """Remove every AIS object displayed for workplane uid (tracked
+        in _wp_ais_reg) without touching anything else in the viewer.
+        Does not refresh the viewer -- caller does that once."""
+        context = self.canvas._display.Context
+        for ais in getattr(self, "_wp_ais_reg", {}).pop(uid, []):
+            try:
+                context.Remove(ais, False)
+            except Exception:
+                pass
+            self.canvas._display.remove_never_pick(ais)
+
+    def draw_wp(self, uid, repaint=True):
+        """Draw the workplane with uid. repaint=False skips this
+        method's own final Repaint() so a caller drawing several
+        workplanes (or one wp among other changes) can refresh the
+        viewer exactly once afterwards (Session 132: the per-wp
+        repaints were the visible flashing)."""
         context = self.canvas._display.Context
         if uid:
             wp = self.wp_dict[uid]
@@ -2349,7 +2392,10 @@ class MainWindow(QMainWindow):
                 borderColor = Quantity_Color(Quantity_NOC_GRAY)
             aisBorder = AIS_Shape(border)
             _reg.append(aisBorder)
-            context.Display(aisBorder, True)
+            # (update flags below are False -- Session 132: each True
+            # forced an immediate viewer refresh, 4 per workplane,
+            # showing half-built states; one refresh happens at the end)
+            context.Display(aisBorder, False)
             # NON-PICKABLE (Session 63, Doug's 'pick barrier' report):
             # the translucent pane was a selectable face, competing
             # with part faces behind it in face-selection mode --
@@ -2357,12 +2403,12 @@ class MainWindow(QMainWindow):
             # highlight winning outright. The pane is scenery, not an
             # entity; it never participates in selection.
             self.canvas._display.add_never_pick(aisBorder)
-            context.SetColor(aisBorder, borderColor, True)
+            context.SetColor(aisBorder, borderColor, False)
             # 0.92: barely-there interior, CoCreate-like (Session 63)
             transp = 0.92  # 0.0 <= transparency <= 1.0
-            context.SetTransparency(aisBorder, transp, True)
+            context.SetTransparency(aisBorder, transp, False)
             drawer = aisBorder.DynamicHilightAttributes()
-            context.HilightWithColor(aisBorder, drawer, True)
+            context.HilightWithColor(aisBorder, drawer, False)
             # Explicit BORDER OUTLINE (Session 63, Doug: the CoCreate
             # pane has a visible boundary line; ours never did -- the
             # translucent fill was the only cue, invisible against
@@ -2553,7 +2599,8 @@ class MainWindow(QMainWindow):
                         context.SetWidth(ais_geom, 3.0, False)
                     except Exception:
                         pass
-            self.canvas._display.Repaint()
+            if repaint:
+                self.canvas._display.Repaint()
 
     def draw_shape(self, uid):
         """Draw the part (shape) with uid."""
