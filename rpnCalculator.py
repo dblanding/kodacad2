@@ -71,7 +71,7 @@ class Button(QToolButton):
 class Calculator(QDialog):
     """RPN calculator styled after the one in CoCreate SolidDesigner CAD."""
 
-    mem = ""
+    mem = 0  # numeric, so RCL before any STO yields 0, not ""
     keip = False  # Flag set when keyboard entry is in progress
     needrup = False  # Flag signaling need to rotate up with next keyboard entry
 
@@ -382,8 +382,14 @@ class Calculator(QDialog):
         self.needrup = True
 
     def recallx(self):
-        self.rotateup()
-        self.xdisplay.setText(fmt(self.mem))
+        # Push the stack up (loop=0: T falls off, like putx/keyin do),
+        # then load X from memory. Previously this only wrote the
+        # display text, leaving self.x holding whatever rotateup()
+        # wrapped around from T -- so the next calculation used the
+        # wrong value, not the recalled one shown on screen.
+        self.rotateup(loop=0)
+        self.x = self.mem
+        self.updateDisplays()
         self.keip = False
         self.needrup = True
 
