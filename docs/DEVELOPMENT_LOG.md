@@ -6867,3 +6867,17 @@ Doug's saved session `loft-parts.stp` (two shared instances at x=0 and x=60 of o
 ## Change (diagnostic + safety net, not yet a confirmed fix)
 
 docmodel.py `replace_shape`: after the two shape-keyed `SetColor` calls, read the color back; if neither kind is found, print `[replace_shape] WARNING: shape-keyed SetColor did NOT take for ref_entry=...` and set both kinds label-keyed on the prototype label. Next time the color vanishes, the terminal should name the operation that did it.
+
+# Session 138 -- Copy of a lofted part: no checkbox/icon, can't be positioned
+
+## Symptom
+
+Doug copied part_2 (a loaded, shared, defeatured loft). Terminal: `[copy_part] 'part_3' created...` then `KeyError: 'is_assy'` in `build_tree`. part_3 appeared in the tree without checkbox or part icon, did not highlight on selection, and Position > Dynamic showed no manipulator. The same sequence with a pulled part worked, so something about the copied loft's referred label is unusual.
+
+## Cause (proximate)
+
+`parse_components` only set `label_dict[uid]['is_assy']` inside `if IsSimpleShape_s(ref_label)` / `elif IsAssembly_s(ref_label)`. The copy's prototype label was neither, so the entry was left without `is_assy`; `build_tree` then raised and the part never got an AIS object or tree item. WHY XDE classifies that label as neither is not yet known.
+
+## Fix + probe
+
+docmodel.py `parse_components`: a referred label that is neither simple nor assembly is treated as a simple part (it holds a real shape), and a line `[parse_components] ... neither simple nor assembly per XDE (IsShape=..., shape type=..., null=...)` is printed so the underlying reason can be identified next time.

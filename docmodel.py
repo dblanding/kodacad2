@@ -592,7 +592,29 @@ class DocModel:
                                           'name': c_name,
                                           'parent_uid': self.parent_uid_stack[-1],
                                           'ref_entry': ref_entry}
-                if shape_tool.IsSimpleShape_s(ref_label):
+                is_simple = shape_tool.IsSimpleShape_s(ref_label)
+                if not is_simple and not shape_tool.IsAssembly_s(ref_label):
+                    # Session 137 (Doug: a COPY of a lofted part showed
+                    # in the tree without checkbox/icon, could not be
+                    # picked or positioned; build_tree died with
+                    # KeyError 'is_assy'). The referred label was
+                    # neither "simple shape" nor "assembly" per XDE, so
+                    # neither branch below ran and 'is_assy' was never
+                    # set. It still holds a real shape, so treat it as
+                    # a simple part, and report what XDE thinks it is.
+                    try:
+                        print(f"[parse_components] {c_name!r} refers to "
+                              f"{ref_entry} which is neither simple nor "
+                              f"assembly per XDE (IsShape="
+                              f"{shape_tool.IsShape_s(ref_label)}, "
+                              f"shape type={ref_shape.ShapeType()}, "
+                              f"null={ref_shape.IsNull()}) -- treating "
+                              f"as a simple part.")
+                    except Exception as de:
+                        print(f"[parse_components] {c_name!r}: unclassified "
+                              f"referred label ({de}) -- treating as simple.")
+                    is_simple = True
+                if is_simple:
                     self.label_dict[c_uid].update({'is_assy': False})
                     temp_assy_loc_stack = list(self.assy_loc_stack)
                     if len(temp_assy_loc_stack) > 1:
