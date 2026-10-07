@@ -6881,3 +6881,25 @@ Doug copied part_2 (a loaded, shared, defeatured loft). Terminal: `[copy_part] '
 ## Fix + probe
 
 docmodel.py `parse_components`: a referred label that is neither simple nor assembly is treated as a simple part (it holds a real shape), and a line `[parse_components] ... neither simple nor assembly per XDE (IsShape=..., shape type=..., null=...)` is printed so the underlying reason can be identified next time.
+
+# Session 139 -- Defeaturing diagnostics (fillets next to the shelled inner surface)
+
+## Question
+
+Doug: fillets/chamfers adjacent to the inner shelled surface cannot be removed with Defeaturing; ones next to the outer lofted surface can. Expected limitation?
+
+## Answer so far
+
+Not an app rule. Hypothesis (unverified): `BRepAlgoAPI_Defeaturing` must extend neighboring faces to close the gap; for the offset-of-B-spline inner surface in a thin wall it cannot, and it silently skips the feature while reporting `IsDone=True` (earlier logs: faces 11->11).
+
+## Change
+
+kodacad.py: new `_defeaturing_report()`, called from `_defeaturing_execute` right after `IsDone`. Prints how many requested faces the algorithm reports deleted (`IsDeleted`), `HasWarnings`/`HasErrors`, and any warning/error alert keys from `GetReport()`. Every probe is try/except-wrapped; each one that fails says so, which also tells us which OCP calls this binding supports. Behavior of the operation itself is unchanged.
+
+## Session 139 result
+
+Doug's run: outer fillet -- IsDone=True, 1 of 1 requested face reported deleted, faces 11->10 (worked). Inner fillet (next to the shelled inner surface) -- IsDone=True, 0 of 1 deleted, faces 10->10. So OCCT itself declines to remove the inner fillet without reporting any failure; the app is not mishandling the result. `HasWarnings()` and `GetReport()` do not exist on `BRepAlgoAPI_Defeaturing` in this binding, so `_defeaturing_report` now lists the object's diagnostic-capable members instead (to find another route to OCCT's warnings).
+
+## Session 139 conclusion
+
+Member listing on `BRepAlgoAPI_Defeaturing` in this binding: only `Check`, `HasHistory`, `History`, `SetToFillHistory`. No way to read OCCT's warnings, so the reason the inner fillet is skipped cannot be obtained from the algorithm. Listing probe removed; `_defeaturing_report` keeps only the per-face "deleted by the algorithm" line (useful: IsDone=True plus faces-unchanged is now explained as "algorithm declined"). Doug's correction: the 'defeature before shelling' workaround I first suggested is impossible -- the problem fillets/chamfers are the ones on edges of the face that gets shelled, so they can't be removed before the shell exists. There is no known workaround; accepted as a discovered limitation.

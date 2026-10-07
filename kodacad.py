@@ -1161,6 +1161,34 @@ def _defeaturing_hole_faces(workPart, seed_face):
     return matching_faces, None
 
 
+def _defeaturing_report(dfr, faces_to_remove, label=""):
+    """Session 139 diagnostic: IsDone=True alone doesn't say whether
+    OCCT actually removed what was asked (Doug: fillets next to the
+    shelled inner surface silently survive). Print per-face removal
+    status. (This OCP binding exposes no warning/error flags or
+    report on BRepAlgoAPI_Defeaturing -- only Check, HasHistory,
+    History, SetToFillHistory -- so per-face deletion is the only
+    reason-signal available.) Wrapped so it can never break the
+    operation."""
+    try:
+        n_gone = 0
+        for f in faces_to_remove:
+            try:
+                if dfr.IsDeleted(f):
+                    n_gone += 1
+            except Exception:
+                n_gone = -1
+                break
+        if n_gone >= 0:
+            print(f"[Defeaturing:{label}] {n_gone} of "
+                  f"{len(faces_to_remove)} requested face(s) reported "
+                  f"deleted by the algorithm")
+        else:
+            print(f"[Defeaturing:{label}] IsDeleted() not usable here")
+    except Exception as e:
+        print(f"[Defeaturing:{label}] removal check failed: {e}")
+
+
 def _defeaturing_execute(uid, workPart, faces_to_remove, label=""):
     """Run BRepAlgoAPI_Defeaturing on workPart, removing
     faces_to_remove, and write the result back to the active part as
@@ -1174,6 +1202,7 @@ def _defeaturing_execute(uid, workPart, faces_to_remove, label=""):
         dfr.AddFaceToRemove(f)
     dfr.Build()
     print(f"[Defeaturing:{label}] IsDone={dfr.IsDone()}")
+    _defeaturing_report(dfr, faces_to_remove, label)
     if not dfr.IsDone():
         return False, ("Unable to remove this feature -- the "
                        "surrounding geometry couldn't be healed.")
