@@ -60,7 +60,8 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
-from OCP.gp import gp_Ax1, gp_Dir, gp_Vec
+from OCP.gp import gp_Ax1, gp_Dir, gp_Vec, gp_Trsf
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 
 import docmodel
 # dm is created in mainwindow (module-global there); importing it at
@@ -118,7 +119,7 @@ class PullDialog(QDialog):
         # merely redundant. Matches Creo's own reference screenshot:
         # its Angular configuration shows no Direction row at all.
         self.dir_combo = QComboBox()
-        self.dir_combo.addItems(["+W", "-W"])
+        self.dir_combo.addItems(["+W", "-W", "Both"])
         self._dir_touched = False
         self.dir_combo.activated.connect(self._mark_dir_touched)
         self.op_combo.currentIndexChanged.connect(self._op_changed)
@@ -148,9 +149,7 @@ class PullDialog(QDialog):
         row_dir.addWidget(self.dir_combo)
         linear_lay.addLayout(row_dir)
         dist_row = QHBoxLayout()
-        self.dist_units_label = QLabel(
-            f"Distance ({getattr(main_win, 'units', 'mm')}):")
-        dist_row.addWidget(self.dist_units_label)
+        dist_row.addWidget(QLabel("Total Distance:"))
         self.dist_edit = QLineEdit()
         self.dist_edit.setPlaceholderText("e.g. 12.0")
         self.dist_edit.textChanged.connect(self._dist_changed)
@@ -222,10 +221,6 @@ class PullDialog(QDialog):
                     f"Distance set -- click Done.", 4000)
         except ValueError:
             pass
-
-    def _refresh_units_label(self):
-        self.dist_units_label.setText(
-            f"Distance ({getattr(self.main_win, 'units', 'mm')}):")
 
     def _refresh_labels(self):
         win = self.main_win
@@ -381,7 +376,6 @@ class PullDialog(QDialog):
     def _on_done(self):
         win = self.main_win
         self._refresh_labels()
-        self._refresh_units_label()
         uid = win.activePartUID
         part = win.activePart
         wp = win.activeWp
@@ -422,7 +416,9 @@ class PullDialog(QDialog):
             angle_rad = math.radians(angle_deg)
             summary = f"{angle_deg:g} degrees"
         else:
-            sign = 1.0 if self.dir_combo.currentText() == "+W" else -1.0
+            direction = self.dir_combo.currentText()
+            both = (direction == "Both")
+            sign = -1.0 if direction == "-W" else 1.0
             try:
                 dist = float(self.dist_edit.text())
             except ValueError:
@@ -430,9 +426,15 @@ class PullDialog(QDialog):
                 return
             if dist <= 0.0:
                 self._say("Distance must be positive (choose -W for "
-                          "the other direction).")
+                          "the other direction, or Both for symmetric).")
                 return
             vec = wp.wVec * (sign * dist * win.unitscale)
+            # Both: Total Distance split equally -- start half the
+            # distance on the -W side, sweep the full distance +W.
+            if both:
+                back = gp_Trsf()
+                back.SetTranslation(
+                    wp.wVec * (-0.5 * dist * win.unitscale))
             summary = (f"{dist:g} {getattr(win, 'units', 'mm')} "
                       f"{self.dir_combo.currentText()}")
 
@@ -443,7 +445,11 @@ class PullDialog(QDialog):
                     piece = BRepPrimAPI_MakeRevol(
                         f, self._picked_axis, angle_rad).Shape()
                 else:
-                    piece = BRepPrimAPI_MakePrism(f, vec).Shape()
+                    start = f
+                    if both:
+                        start = BRepBuilderAPI_Transform(
+                            f, back, True).Shape()
+                    piece = BRepPrimAPI_MakePrism(start, vec).Shape()
                 tool = piece if tool is None else \
                     BRepAlgoAPI_Fuse(tool, piece).Shape()
 

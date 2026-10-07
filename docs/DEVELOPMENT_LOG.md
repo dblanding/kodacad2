@@ -6903,3 +6903,18 @@ Doug's run: outer fillet -- IsDone=True, 1 of 1 requested face reported deleted,
 ## Session 139 conclusion
 
 Member listing on `BRepAlgoAPI_Defeaturing` in this binding: only `Check`, `HasHistory`, `History`, `SetToFillHistory`. No way to read OCCT's warnings, so the reason the inner fillet is skipped cannot be obtained from the algorithm. Listing probe removed; `_defeaturing_report` keeps only the per-face "deleted by the algorithm" line (useful: IsDone=True plus faces-unchanged is now explained as "algorithm declined"). Doug's correction: the 'defeature before shelling' workaround I first suggested is impossible -- the problem fillets/chamfers are the ones on edges of the face that gets shelled, so they can't be removed before the shell exists. There is no known workaround; accepted as a discovered limitation.
+
+# Session 140 -- Pull dialog: "Both" direction and "Total Distance" label
+
+## Request
+
+Doug: in the Pull dialog's Linear mode add **Both** as a third Direction option, splitting the Pull Distance equally between +W and -W, for both Add Material and Remove Material; and relabel "Distance (mm)" as "Total Distance" (clarifies the symmetric split, drops the unit reference).
+
+## Change (pull_dialog.py)
+
+- Direction combo now `+W / -W / Both`. For Both, each profile face is translated half the distance toward -W (`BRepBuilderAPI_Transform` with a `gp_Trsf` translation) and then prismed the full distance toward +W, so the result straddles the workplane symmetrically. The rest of the pipeline (fuse of pieces, empty-part handling, Add/Cut boolean, undo transaction, shared-instance redraw) is unchanged, so it applies to both operations.
+- Label is now the fixed text "Total Distance:"; `dist_units_label` and `_refresh_units_label()` (and its call in `_on_done`) removed as dead code. The status summary still names the units.
+- Auto direction default when switching operation (Add -> +W, Remove -> -W) is unchanged; Both is only chosen by the user.
+- Angular mode is untouched (it has no Direction row).
+
+Not run against real OCP (not installable in the assistant's sandbox); syntax-checked only.
