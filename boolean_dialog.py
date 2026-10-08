@@ -1,13 +1,18 @@
-"""Fuse dialog (Create/Modify > Fuse...) -- Session 141.
+"""Boolean dialog (Create/Modify > Boolean...) -- Session 141, extended
+in Session 143 from Fuse-only to Fuse / Subtract.
 
-Boolean-union a TOOL part into the ACTIVE part (the target / blank),
-then remove the tool from the assembly -- the tool is consumed, as with
-a CAD "join" where the tool body ceases to exist as a separate part.
-One undo step: Ctrl+Z restores both parts.
+Combine a TOOL part with the ACTIVE part (the target / blank): Fuse
+unions them; Subtract removes the tool's volume from the target. The
+tool is then removed from the assembly -- it is consumed, as in the
+usual CAD "join"/"cut with a tool body". One undo step: Ctrl+Z restores
+both parts.
 
 Doug's use case: lengthen a part by copying it, trimming the bottom off
 one copy and the top off the other, then fusing the two halves.
-Because that leaves a visible seam where the halves meet (same-surface
+Subtract's motivating use (Session 143): loft an outer and an inner
+profile set as two separate parts and subtract the inner from the
+outer, making a hollow body whose inner surface is an ordinary cut.
+Because a join leaves a visible seam where the halves meet (same-surface
 faces split in two), "Merge seam faces" (on by default) runs
 ShapeUpgrade_UnifySameDomain on the result; if that fails or returns an
 invalid shape the plain fuse is kept and the status line says so.
@@ -21,7 +26,9 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                QComboBox, QPushButton, QCheckBox)
 from PySide6.QtGui import QFont
 
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut
+from OCP.GProp import GProp_GProps
+from OCP.BRepGProp import BRepGProp
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -42,6 +49,16 @@ def _count(shape, kind):
     return n
 
 
+def _volume(shape):
+    """Volume of shape, or None if it can't be computed."""
+    try:
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape, props)
+        return props.Mass()
+    except Exception:
+        return None
+
+
 def _unify(shape):
     """Merge faces/edges lying on the same surface/curve. Returns the
     unified shape, or None if it failed or produced an invalid shape."""
@@ -57,11 +74,11 @@ def _unify(shape):
         return None
 
 
-class FuseDialog(QDialog):
+class BooleanDialog(QDialog):
     def __init__(self, main_win):
         super().__init__(main_win)
         self.main_win = main_win
-        self.setWindowTitle("Fuse")
+        self.setWindowTitle("Boolean")
         self.setModal(True)
 
         lay = QVBoxLayout(self)
@@ -71,6 +88,13 @@ class FuseDialog(QDialog):
         f.setBold(True)
         self.target_label.setFont(f)
         lay.addWidget(self.target_label)
+
+        row_op = QHBoxLayout()
+        row_op.addWidget(QLabel("Operation:"))
+        self.op_combo = QComboBox()
+        self.op_combo.addItems(["Fuse", "Subtract"])
+        row_op.addWidget(self.op_combo)
+        lay.addLayout(row_op)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Tool part:"))
@@ -133,22 +157,45 @@ class FuseDialog(QDialog):
         part = dm.part_dict[uid]['shape']
         tool = dm.part_dict[tool_uid]['shape']
         tool_name = dm.label_dict.get(tool_uid, {}).get('name', tool_uid)
+        subtracting = (self.op_combo.currentText() == "Subtract")
+        verb = "Subtract" if subtracting else "Fuse"
 
         try:
-            if _count(part, TopAbs_FACE) == 0:
+            if subtracting:
+                if _count(part, TopAbs_FACE) == 0:
+                    self._say("Target is empty -- nothing to subtract from.")
+                    return
+                op = BRepAlgoAPI_Cut(part, tool)
+                if not op.IsDone():
+                    self._say("Subtract failed -- the parts could not be "
+                              "combined.")
+                    return
+                newPart = op.Shape()
+                if _count(newPart, TopAbs_FACE) == 0:
+                    self._say("Subtract would remove the entire target -- "
+                              "nothing changed.")
+                    return
+            elif _count(part, TopAbs_FACE) == 0:
                 newPart = tool
             else:
-                fuse = BRepAlgoAPI_Fuse(part, tool)
-                if not fuse.IsDone():
+                op = BRepAlgoAPI_Fuse(part, tool)
+                if not op.IsDone():
                     self._say("Fuse failed -- the parts could not be "
                               "combined.")
                     return
-                newPart = fuse.Shape()
+                newPart = op.Shape()
         except Exception as e:
-            self._say(f"Fuse failed: {e}")
+            self._say(f"{verb} failed: {e}")
             return
 
         note = ""
+        if subtracting:
+            v0, v1 = _volume(part), _volume(newPart)
+            if v0 is not None and v1 is not None and abs(v0 - v1) <= \
+                    1e-9 * max(abs(v0), 1.0):
+                self._say("The tool does not overlap the target -- "
+                          "nothing was removed, nothing changed.")
+                return
         if self.unify_check.isChecked():
             merged = _unify(newPart)
             if merged is not None:
@@ -159,7 +206,7 @@ class FuseDialog(QDialog):
         n_solids = _count(newPart, TopAbs_SOLID)
         if n_solids != 1:
             note += (f" Note: result has {n_solids} separate solids "
-                     f"(the parts do not touch or overlap).")
+                     f"(the {'cut split the target in two' if subtracting else 'parts do not touch or overlap'}).")
 
         # Capture stable info BEFORE changing the document: uids are
         # entry+per-entry serial, but the shared-prototype entry and
@@ -181,10 +228,11 @@ class FuseDialog(QDialog):
         win.redraw_after_shape_replace(ref_entry, old_uids)
         win.setActivePart(uid)
         self.main_win.statusBar().showMessage(
-            f"Fused '{tool_name}' into the active part{note} "
+            f"{'Subtracted' if subtracting else 'Fused'} '{tool_name}' "
+            f"{'from' if subtracting else 'into'} the active part{note} "
             f"(Ctrl+Z undoes).", 8000)
         self.accept()
 
 
-def show_fuse_dialog(main_win):
-    FuseDialog(main_win).exec()
+def show_boolean_dialog(main_win):
+    BooleanDialog(main_win).exec()

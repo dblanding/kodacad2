@@ -6965,3 +6965,29 @@ Test: repeat copy, move, fuse, save, reload (expect the printed Location identit
 Doug ran a lofted part through loft1, shell2, share3, pull4, fillet5 in one session, saving after each step, then reloaded the saved files in another session: part names and colors were fine throughout. Together with the plate (copy, move, fuse) test, this confirms the baked-location fix in `replace_shape`.
 
 Side finding: a Loft whose workplanes each contain two circular profiles (inner 5 mm smaller) uses only the outer profile of each (`WorkPlane.outer_profile_wire()`); `BRepOffsetAPI_ThruSections` takes one wire per section, so inner profiles are ignored silently. A hollow loft would need two lofts and a cut (not built; offered to Doug).
+
+# Session 143 -- Create/Modify > Boolean... (Fuse + Subtract)
+
+## Request / decision
+
+Doug wants to try making a hollow lofted body by lofting the outer and inner profile sets as two separate parts and subtracting one from the other (standard CAD practice), partly to see whether inner fillets then become removable by Defeaturing (they weren't on a shelled part; cause uncertain -- offset surface vs thin wall vs OCCT in general). Chosen design: generalize the Session 141 Fuse dialog rather than add a Loft "remove material" switch -- a standalone boolean works on any bodies.
+
+## Change
+
+- fuse_dialog.py replaced by boolean_dialog.py (old file deleted, no remaining references). Dialog "Boolean": Operation (Fuse / Subtract), Tool part, Merge seam faces (default on), Done. Active part = target; tool consumed; one undo step; shared-instance redraw as before.
+- Subtract uses `BRepAlgoAPI_Cut(target, tool)` in world space. Guards: empty target; would remove the entire target (no faces left) -> refuse; tool does not overlap the target (volume via `BRepGProp.VolumeProperties_s` unchanged) -> refuse and say so rather than silently consuming the tool; result with more than one solid -> status-line note that the cut split the target.
+- kodacad.py menu entry "Fuse..." -> "Boolean...".
+
+Not run against real OCP (not installable in the assistant's sandbox); syntax-checked only. Intersect left out deliberately (easy to add).
+
+## Workflow to try
+
+Outer circles on one workplane set, inner circles on another; Loft each set to its own part; make the outer part active; Boolean... > Subtract with the inner part as the tool; then fillet the edges and try Defeaturing on the inner ones.
+
+## Session 143 result: hollow loft via Boolean Subtract, and what it settled
+
+Doug's test: outer and inner loft parts, inner subtracted from outer (Boolean... > Subtract), result shared and moved, a transverse hole pulled through, fillets on the ends and the hole edges. ALL fillets, including those adjacent to the inner face, were removable with Defeaturing. Conclusion: the earlier failure (Session 139) was specific to the SHELLED inner surface (the shell's offset surface), not to thin walls or lofted B-spline inner surfaces in general. Practical rule: for a hollow lofted body that will need blends removable later, build it as outer loft minus inner loft rather than Shell.
+
+Observation: removing a group of fillets in one Defeaturing pass leaves "scar lines" on the lofted face at the circle of tangency; removing them one at a time leaves no scars. Not investigated. Possible follow-up (not built): run ShapeUpgrade_UnifySameDomain on the defeatured result (as the Boolean dialog's seam merge does).
+
+Doug's decision on the scar lines: no change. He already clears any leftover seam with the second option in the Defeaturing dialog (click the smaller face and the seam is gone), which works well. No automatic same-domain merge is being added to Defeaturing.
