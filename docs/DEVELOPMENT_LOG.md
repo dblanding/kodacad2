@@ -6991,3 +6991,9 @@ Doug's test: outer and inner loft parts, inner subtracted from outer (Boolean...
 Observation: removing a group of fillets in one Defeaturing pass leaves "scar lines" on the lofted face at the circle of tangency; removing them one at a time leaves no scars. Not investigated. Possible follow-up (not built): run ShapeUpgrade_UnifySameDomain on the defeatured result (as the Boolean dialog's seam merge does).
 
 Doug's decision on the scar lines: no change. He already clears any leftover seam with the second option in the Defeaturing dialog (click the smaller face and the seam is gone), which works well. No automatic same-domain merge is being added to Defeaturing.
+
+# Session 144 -- Lofting tutorial review; Boolean dialog wording
+
+Reviewed Doug's first-draft Lofting tutorial (README + 14 screenshots + `loft-demo.stp`) against the app and the other tutorials' format, and reformatted it (`Tutorial:` title, What you'll need / What this exercises, numbered `Step N --` sections with italic `Exercises:` lines, Notes for whoever runs this next with cross-links). Corrections: typos; menu name is `Create/Modify -> Defeaturing...` (draft said Defeature...); explicit Pull settings (Remove Material, Linear, +W, Total Distance 30); wp1 must be made active again before creating s2; each workplane must be made active before drawing on it; part shows as `inner-loft_1`; the "why not Shell" paragraph now states the tested finding (Session 139/143) instead of "for some reason"; the seam-merge explanation reworded; Step 10 records the one-at-a-time vs group scar-line behavior and the Manual seam cleanup; the Boolean/Pull "Both" tip added. Doug's in-text comment was acted on and removed.
+
+boolean_dialog.py: the note label "The tool part is consumed by the fuse." (wrong for Subtract) is now "The tool part will be consumed by this operation." The tutorial's `imgs/subtract-dialog.png` still shows the old wording and should be retaken.

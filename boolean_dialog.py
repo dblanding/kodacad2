@@ -105,7 +105,7 @@ class BooleanDialog(QDialog):
         self.unify_check = QCheckBox("Merge seam faces")
         self.unify_check.setChecked(True)
         lay.addWidget(self.unify_check)
-        lay.addWidget(QLabel("The tool part is consumed by the fuse."))
+        lay.addWidget(QLabel("The tool part will be consumed by this operation."))
 
         self.msg_label = QLabel("")
         self.msg_label.setWordWrap(True)

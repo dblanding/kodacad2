@@ -1,116 +1,292 @@
-# Lofting Tutorial
+# Tutorial: Lofting a Hollow Part Through a Workplane Set (`loft-demo.stp`)
 
-In a typical workflow, a profile on a workplane is **pulled** so that it sweeps through 3D space. As it sweeps through space, it will add or remove material to/from a 3-Dimensional shape. By contrast, in lofting, a stationary **Set** of multiple workplanes, each containing a profile, is used to define a smooth surface such as the hull of a boat or the skin of an airplane fuselage. The process of using such a **workplane set** to define the shape of a part is referred to as **lofting**. Other uses of lofting are an airplane wing or a turbine blade.
+In a typical workflow, a profile on a workplane is **pulled** so that it
+sweeps through 3D space, adding material to a part or removing it. In
+**lofting**, a stationary **Workplane Set** -- several workplanes, each
+holding a profile -- defines a smooth surface that passes through all of
+the profiles, like the hull of a boat or the skin of an airplane
+fuselage. Other typical uses are an airplane wing or a turbine blade.
 
-In this tutorial, it will be shown how to build a simple lofted part using a workplane set.
+This tutorial builds a simple lofted vase and then works it over: a
+hollow wall made by subtracting one lofted part from another, a
+transverse hole, fillets, and finally Defeaturing to take the fillets
+back off. It doubles as a regression test for the Workplane Set, Loft and
+Boolean tools.
 
-We start by creating a *Reference workplane* which will be used to *anchor* the new workplane set. The Reference workplane is not actually going to be part of the set. It just defines the location of the set. 
+## What you'll need
 
-For this example, we will use **Workplane -> At Origin, XY Plane**
+A fresh (empty) KodaCAD session. `loft-demo.stp`, in this folder, is the
+finished part (fillets included) for comparison, or for trying the
+Defeaturing and Other Tests steps without rebuilding the part first.
 
-![WP1, the Reference workplane that anchors the new workplane set](imgs/wp1.png)
+## What this exercises
 
-Once wp1 is created, we will draw a construction circle with its center at the origin and radius = 30. We won't need that construction circle yet, but will use it later in the tutorial.
+Workplane creation, construction circles, **Workplane -> Set...**,
+drawing profiles on the individual workplanes of a set, Create Empty
+Part, **Loft**, **Boolean** (Subtract, with seam merging), Save Session
+and the Undo/Redo caveat that goes with it, **Workplane -> By 3 points**,
+**Pull** (Remove Material, Linear), Fillet, **Defeaturing** (including
+what happens to the surface seam), and afterwards Create Shared Instance
+and Copy Part on a lofted part.
 
-### Create the Workplane Set
+---
 
-Next, click **Workplane -> Set...**
+## Step 1 -- Create the reference workplane
 
-![Create WP Set Menubar item](imgs/set.png)
+We start with a *Reference workplane*, which *anchors* the new workplane
+set. It is not itself a member of the set -- it only defines where the
+set goes.
 
-This launches a dialog which will allow us to specfy:
-1. The total number of parallel workplanes that will be contianed in the set
-2. The uniform spacing between the workplanes, starting with the space between the "Reference workplane" and the first of the workplanes in the set.
+**Workplane -> At Origin, XY Plane**
 
-![Create WP Set Dialog](imgs/set-dialog.png)
+![wp1, the Reference workplane that anchors the new workplane set](imgs/wp1.png)
 
-Clicking the "Done" button creates "s1", the set containing workplanes numbered wp2 through wp6. They are shown both in the viewport and in the tree. The last one created is currently shown "active", indicated by the green highlighting in the tree. Only the **Active workplane** can be drawn on. You are going to need to pay attention to this when you create the circular profiles in the next step.
+Once wp1 exists, draw a construction circle on it with its center at the
+origin and radius = 30. We don't need it yet, but we will use it in Step
+8 to place another workplane.
 
-![WP set1 before profiles](imgs/s1start.png)
+*Exercises: workplane creation; construction circle.*
 
-In this step, a circular profile is drawn on each of the workplanes. The centers are all located at the wp origin (where the horizontal and vertical construction lines intersect). The circle radii start at 15 mm (on wp2 & wp6) then go to 20 mm (on wp3 & wp5), and 25 mm on wp4.
+## Step 2 -- Create the Workplane Set
 
-![WP set1 profiles](imgs/s1-profiles.png)
+**Workplane -> Set...**
 
-### Create the Empty Part for Lofting
+![Workplane -> Set... menu item](imgs/set.png)
 
-After all the profiles are drawn, we need to create an empty part. RMB click on the **'/'** symbol in the tree, then choose **Create Empty Part**. Name it "inner-loft". It will be shown highlighted in yellow, indicating that it is the active part.
+The dialog asks for:
+
+1. **Number of workplanes (N)** -- how many parallel workplanes the set
+   will contain.
+2. **Spacing along +W** -- the uniform spacing between workplanes,
+   starting with the space between the Reference workplane and the
+   first workplane of the set.
+
+For this tutorial use **N = 5** and **Spacing = 20** mm.
+
+![Create Workplane Set dialog](imgs/set-dialog.png)
+
+Click **Done**. This creates `s1`, the set containing `wp2` through
+`wp6`. They appear both in the viewport and in the tree. The last one
+created is **active**, shown with green highlighting in the tree. Only
+the active workplane can be drawn on, so keep an eye on this in the next
+step.
+
+![Workplane set s1, before any profiles](imgs/s1start.png)
+
+*Exercises: Workplane Set creation; the active workplane.*
+
+## Step 3 -- Draw the inner profiles
+
+Draw one circular profile on each workplane of `s1`. To draw on a
+workplane, first make it active (RMB the workplane in the tree, then
+**Set Active**). Each circle is centered on the workplane's origin (where
+the horizontal and vertical construction lines cross). The radii are:
+
+| Workplane | wp2 | wp3 | wp4 | wp5 | wp6 |
+|-----------|-----|-----|-----|-----|-----|
+| Radius (mm) | 15 | 20 | 25 | 20 | 15 |
+
+![The five inner profiles on s1](imgs/s1-profiles.png)
+
+*Exercises: switching the active workplane; circle profiles.*
+
+## Step 4 -- Loft the inner part
+
+Lofting needs an empty part to receive the result. RMB the **'/'** in
+the tree and choose **Create Empty Part**. Name it `inner-loft`. (The
+tree shows it as `inner-loft_1`, as usual for a part's occurrence name.)
+It is highlighted in yellow, which means it is the **active part**.
 
 ![Create Empty Part](imgs/create-empty-inner-loft.png)
 
-Once we have an active part and have a set containing an active workplane, go to the menubar and click **Create/Modify**. Then, click on **Loft** to generate the resulting lofted part.
+With an active part, and with a workplane of the set active, click
+**Create/Modify -> Loft**. The loft passes a smooth surface through all
+five profiles.
 
-This part will actually be used as a **subtractive** tool in the construction of the final result. The outer surface of this part will end up being the inner surface of the final resulting shape. We'll talk more later about why it's being done this way.
+![The inner part, lofted](imgs/inner-lofted.png)
 
-![Inner Part lofted](imgs/inner-lofted.png)
+This part is a **subtractive tool**: its outer surface becomes the
+*inner* surface of the finished shape. The reason for doing it this way
+instead of using Shell is explained in Step 6.
 
-### Repeat the process to Loft the Outer Part
+*Exercises: Create Empty Part; Loft (workplane set identified by its
+active workplane).*
 
-Next we are going to repeat the steps that went into creating the inner-loft and we will create the outer-loft part. In the screenshot below, you can see that we have created a 2nd set, s2, with circular profiles whose radii are 5 mm larger than the profiles used to create the inner-loft. The values of the new radii range from 20 mm at the ends to 30 mm in the center.
+## Step 5 -- Loft the outer part
 
-![WP set2 profiles](imgs/s2-profiles.png)
+Repeat the process for the outer surface. First make **wp1** the active
+workplane again -- it is the Reference workplane for the next set -- and
+create a second set, `s2`, with **Workplane -> Set...** using the same N
+= 5 and Spacing = 20. Then draw circles whose radii are 5 mm larger than
+the inner ones:
 
-Again, once the profiles are drawn, the steps to create the loft are the same.
-1. Create an empty part, and give it a name. It must be active.
-2. Make sure one of the workplanes in the set to be be used is active.
+| Workplane | wp7 | wp8 | wp9 | wp10 | wp11 |
+|-----------|-----|-----|-----|------|------|
+| Radius (mm) | 20 | 25 | 30 | 25 | 20 |
+
+![The five outer profiles on s2](imgs/s2-profiles.png)
+
+Then, as before:
+
+1. Create an empty part and name it `outer-loft`. It must be active.
+2. Make sure one of the workplanes of `s2` is active.
 3. **Create/Modify -> Loft**
 
-At this point, we have created 2 lofted parts superimposed. We will do a boolean subtraction operation to *subtract* the inner one from the outer one, resulting in a 5 mm thick shell whose outer face and inner face were both created by lofting. Why go to the trouble of lofting the inner face? Why not just use the shell operation and set the thickness equal to 5 mm? The reason, as it turns out, is that when we subsequently add more features (operations) to the part, we may still want to be able to remove or modify those features using our **Defeaturing** functionality. For some reason, fillets and chamfers adjacent to a shelled face do not cooperate with the defeaturing operation. So we loft the inner face, just to be on the safe side.
+We now have two lofted parts, superimposed.
 
-### The Boolean Subtraction
+*Exercises: a second Workplane Set; Loft again with a different set.*
 
-With the outer part active, click **Create/Modify -> Boolean...**
+## Step 6 -- Subtract the inner part from the outer part
 
-This will launch the Boolean Dialog.
-1. Choose Operation: Subtract
-2. Choose Tool part: inner-loft_1
-3. Make sure "Merge seam faces" is checked. This heals any "scar lines" that might occur where part edges of one part land on an otherwise smooth, continuous face of the finished part.
+The next operation subtracts the inner part from the outer part,
+leaving a 5 mm wall whose outer and inner surfaces were both created by
+lofting.
 
+*Why not simply Shell the outer part with a thickness of 5 mm?* Because
+later we will want to remove or modify features such as fillets using
+**Defeaturing**. In our testing, fillets and chamfers adjacent to a
+*shelled* surface cannot be removed by Defeaturing -- the operation
+reports success but leaves the feature in place -- whereas the same
+fillets next to a *lofted* inner surface can. We don't know exactly why
+Shell causes this, but lofting the inner surface avoids it.
 
-*Claude- I noticed that this dialog warns "The tool part is consumed by the fuse." even though we have chosen **Subtract** and not **Fuse**. I suggest we change this wording to "The tool part will be consumed by this operation." so that it will be applicable regardless of the operation selected.*
+With the outer part active, click **Create/Modify -> Boolean...**, which
+opens the Boolean dialog.
 
+1. **Operation:** Subtract.
+2. **Tool part:** `inner-loft_1`.
+3. Leave **Merge seam faces** checked. This heals "scar lines" that can
+   appear where the edges of the original parts land on what should be
+   one smooth, continuous face of the result.
 
-![Boolean Subtraction Dialog](imgs/subtract-dialog.png)
+![Boolean dialog, Subtract](imgs/subtract-dialog.png)
 
-Clicking on the **Done** button completes the boolean subtract operation.
+Click **Done**. The tool part is consumed by the operation, so only the
+hollow `outer-loft_1` remains.
 
-1. Now would be an excellent time to save the session. Saving the session creates a step file, which does a really nice job of saving 3D geometry and assembly hierarchy, but workplanes are not saved.
-2. It would also be a good time to make sure the Undo steps that went into creating this lofted part are all available. Undo/Redo steps won't be available when re-loading a saved session file.
+![The lofted part after subtraction](imgs/subtract-done.png)
 
-**Warning!!** If you click on the **Very Last Undo**, this wession will be **toast**. You won't be happy. Be sure to do step 1 before playing with this lit stick of dynamite!
+*Exercises: Boolean Subtract with a part as the tool; seam merging; the
+tool part being removed from the tree.*
 
-The good news is that all the following steps in the tutorial can be easily performed by starting with the re-loaded session file.
+## Step 7 -- Save the session
 
-![Lofted Part afer Subtraction](imgs/subtract-done.png)
+Two things worth doing right now:
 
-### Punching a transverse hole in the lofted part
+1. **File -> Save Session.** A STEP file stores 3D geometry and the
+   assembly hierarchy very well, but it does not store workplanes.
+2. If you want to look back, this is also the time to check that the
+   Undo steps that built the part are available. Undo/Redo history is
+   **not** saved in the file, so it is gone after a reload.
 
-At the beginning of the tutorial, when we created wp1, we made a construction circle, noting that we would use it later. Well, it's time. After making wp1 active, click **Workplane -> By 3 points**. Click first on the center of the construction circle on wp1 to specify the origin, then on the lower intersection of the circle and the vertical consruction line to specify the +W direction of the new workplane. Third, specify the +U direction by clicking on the right-side intersection of the circle with the horizontal consruction line.
+**Warning:** if you click Undo all the way back to the very first
+operation, this session is toast -- you will be back to an empty
+session. Save first (step 1) before experimenting with that particular
+stick of dynamite.
 
-After creating the new workplane, we want to draw a 10 mm radius circle profile on it, located at the center of the lofted part, as shown in the screenshot below. To aid in finding the center of the part, you can project the top and bottom faces of the part, then construct the bisector between them.
+The good news is that every remaining step can be done just as well
+starting from the reloaded session file.
 
-![New Workplane with Pull Profile](imgs/pull-profile.png)
+*Exercises: Save Session; the Undo/Redo limits across a save/reload.*
 
-Now, with the new workplane active and with the lofted part active, click **Create/Modify -> Pull**. This will display the Pull Dialog. Complete the option selections as shown in the screenshot below.
+## Step 8 -- Punch a transverse hole
 
-![Pull Dialog](imgs/pull-dialog.png)
+Back in Step 1 we drew a construction circle on wp1 and said we would use
+it. Now is the time. Make wp1 active, then click **Workplane -> By 3
+points** and pick, in order:
 
-Click Done to create the transverse hole in the front face of the lofted part, as shown in the section view below.
+1. the **center** of the construction circle -- the origin of the new
+   workplane;
+2. the **lower intersection** of the circle with the vertical
+   construction line -- this sets the **+W** direction;
+3. the **right-hand intersection** of the circle with the horizontal
+   construction line -- this sets the **+U** direction.
 
-![Lofted Part in section view](imgs/section-view.png)
+On the new workplane, draw a circle profile of **radius 10 mm** at the
+center of the lofted part. To find the center, project the top and bottom
+faces of the part onto the workplane and construct the bisector between
+them.
 
-### Apply Fillets
+![The new workplane with its pull profile](imgs/pull-profile.png)
 
-It's now time to apply fillets (or chamfers) to all the sharp edges of the part, including the top, the bottom, and also around the perimeter of the transverse hole.
+Now, with the new workplane and the lofted part both active, click
+**Create/Modify -> Pull** and choose:
 
-![Lofted Part complete](imgs/fillets.png)
+* **Operation:** Remove Material
+* **Mode:** Linear
+* **Direction:** +W
+* **Total Distance:** 35
 
-### Test Defeaturing
+![The Pull dialog](imgs/pull-dialog.png)
 
-Once these fillets are applied, test that they can be removed using the defeaturing tools available by clicking **Create/Modify -> Defeature...**.
+Click **Done**. The hole goes through the front wall of the part, as the
+section view below shows.
 
-### Other Tests
-Other tests include:
-* Save/Load session
-* Create shared Instance
-* Create copy
+![The lofted part in section view](imgs/section-view.png)
+
+*Tip:* choose **Direction: Both** to cut through both walls at once. The
+Total Distance is split equally between +W and -W, so a Total Distance
+above 70 clears both walls.
+
+*Exercises: Workplane -> By 3 points; projecting faces onto a workplane;
+Pull, Remove Material, Linear, +W (and Both).*
+
+## Step 9 -- Apply fillets
+
+Apply fillets (or chamfers) to all the sharp edges of the part: the top,
+the bottom, and both rims of the transverse hole. The wall is only 5 mm
+thick, so choose a radius comfortably under that (1.5 mm, say).
+
+![The lofted part, complete](imgs/fillets.png)
+
+*Exercises: Fillet, including edges next to lofted (B-spline) surfaces.*
+
+## Step 10 -- Test Defeaturing
+
+Now check that the fillets can be taken back off. Open
+**Create/Modify -> Defeaturing...**, choose **Manual (pick every face)**,
+click the faces of one fillet, then Apply. Repeat for the others.
+
+Two things to notice:
+
+* All of the fillets should be removable, including those next to the
+  *inner* lofted surface -- which is exactly why Step 6 went to the
+  trouble of lofting it.
+* If you remove several fillets together as one group, "scar lines" can
+  be left on the lofted face along the circle where each fillet met it.
+  Removing the fillets one at a time does not leave them. If a seam does
+  remain, pick the smaller of the two faces with the **Manual** method
+  and Apply, and the seam is gone.
+
+*Exercises: Defeaturing (Manual); fillets next to a lofted surface; seam
+cleanup.*
+
+## Step 11 -- Other tests
+
+Repeat any of these on the finished lofted part:
+
+* **Save Session**, then **Load Session**: names and color should
+  survive.
+* **Create Shared Instance** (RMB the part), move the instance, then
+  modify the original (for example, cut the hole with Pull): both
+  instances should update.
+* **Copy Part** (RMB), move the copy with **Position**, then remove a
+  fillet from the copy only: the original and its shared siblings should
+  stay unchanged.
+
+*Exercises: STEP round trip of lofted geometry; shared-instance redraw;
+independent copies.*
+
+---
+
+## Notes for whoever runs this next
+
+- If any menu label, dialog control name, or message has drifted from
+  what is written here, fix it in this document directly -- catching
+  that drift is exactly what this tutorial is for.
+- Fillet and chamfer radii in Step 9 are a suggestion, not a requirement;
+  anything that fits within the 5 mm wall works.
+- See the [OCC Bottle tutorial](../occ-bottle/README.md) for the Shell
+  operation, which is the road not taken in Step 6.
+- See the [Jack-o'-Lantern tutorial](../jack/README.md) for more of
+  Pull and the 2D sketch toolbar.
