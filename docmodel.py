@@ -1936,8 +1936,30 @@ class DocModel:
                  f"-> n={n}, but shape_tool.GetShapes() returned only "
                  f"{labels.Length()} label(s) total.")
             label = labels.Value(n)
-        if self.part_dict[uid]['loc']:
-            modshape.Move(self.part_dict[uid]['loc'].Inverted())
+        # Session 142: store the prototype with the part's placement
+        # BAKED OUT of the geometry, not parked on the TopoDS_Shape's
+        # Location. modshape arrives in WORLD space (identity
+        # Location); the old code did modshape.Move(loc.Inverted()),
+        # which leaves a non-identity Location riding on the stored
+        # prototype shape. The STEP writer ties a prototype's NAME and
+        # COLOR to what it writes by matching shapes, and a prototype
+        # carrying its own Location breaks that match: the file then
+        # has the placeholder product name and no color. Evidence:
+        # Doug's lost-color files (fused plate; loft-parts at x=60)
+        # lost both together, and the component location printed as
+        # (-0.000, -0.000, -0.000) in the save dump only AFTER the
+        # replace (it was (0.000, ...) before), i.e. a residue Location
+        # was left on the prototype. (Hypothesis: the earlier idea
+        # that the compound wrapper mattered was tested and rejected --
+        # a bare solid was stored and the color was still lost.)
+        loc = self.part_dict[uid]['loc']
+        if loc and not loc.IsIdentity():
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            modshape = BRepBuilderAPI_Transform(
+                modshape, loc.Inverted().Transformation(), True).Shape()
+        print(f"[replace_shape] storing {modshape.ShapeType()}, "
+              f"stored Location identity="
+              f"{modshape.Location().IsIdentity()}")
         shape_tool.SetShape(label, modshape)
         # Session 122 fix (Doug's own report: a part modified and
         # re-colored correctly in-session lost its color specifically
@@ -1956,6 +1978,12 @@ class DocModel:
         # certainly run). Verify the write; if it did not land, say so
         # loudly and set it label-keyed on the prototype label itself,
         # which cannot miss.
+        # Always ALSO set it label-keyed on the prototype label:
+        # shape-keyed SetColor resolves the label via Search(), which
+        # may legitimately land on a different label (e.g. an instance)
+        # and still read back fine, hiding a wrong-label write.
+        color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
+        color_tool.SetColor(label, color, XCAFDoc_ColorGen)
         _chk = Quantity_Color()
         if not (color_tool.GetColor(modshape, XCAFDoc_ColorSurf, _chk)
                 or color_tool.GetColor(modshape, XCAFDoc_ColorGen, _chk)):

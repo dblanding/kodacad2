@@ -6918,3 +6918,44 @@ Doug: in the Pull dialog's Linear mode add **Both** as a third Direction option,
 - Angular mode is untouched (it has no Direction row).
 
 Not run against real OCP (not installable in the assistant's sandbox); syntax-checked only.
+
+# Session 141 -- Create/Modify > Fuse...
+
+## Request
+
+Doug cut a part into two pieces and the tree still showed one part. Rather than auto-splitting disjoint solids (discussed: true split into sibling parts, shared-instance caveats), he decided to avoid that case: to lengthen a part, copy it, trim the bottom off one copy and the top off the other, and fuse the halves. What's needed is a general way to fuse a tool body into a target (blank), in the Create/Modify menu.
+
+## Change
+
+- New fuse_dialog.py: modal dialog. Target = the Active Part; Tool = combo of the other parts (shared instances of the target excluded); checkbox "Merge seam faces" (default on); Done. Fuse runs in world space (`part_dict` shapes), `BRepAlgoAPI_Fuse` (target empty -> result is the tool). The tool part is consumed: `replace_shape` on the target and `delete_component` on the tool run inside ONE undo transaction. The redraw uses `win.redraw_after_shape_replace`, so shared instances of the target refresh.
+- Seam merge: `ShapeUpgrade_UnifySameDomain` on the result (the use case leaves the joint seam splitting same-surface faces); if it raises or yields an invalid shape the plain fuse is kept and the status line says "seam merge skipped".
+- Status line also warns if the result has more than one solid (tool didn't touch/overlap the target).
+- kodacad.py: "Fuse..." added to the Create/Modify menu after Loft.
+
+Not run against real OCP (not installable in the assistant's sandbox); syntax-checked only. Auto-splitting disjoint solids was NOT implemented (decision: avoid the situation).
+
+## Session 141 addendum: Fuse confirmed; one color-loss data point
+
+Doug's test: as1-oc-214 plate, copied, moved by its width, fused; then the double plate copied, moved by its length, fused again. Worked cleanly with no scars at the joints (seam merge effective). The fused part lost its color across save/reload. NOTE: this is a plain imported plate, not a loft, so color loss is not specific to lofted parts; common factor so far is a part whose shape was replaced (replace_shape) and then saved. Not investigated (Doug: color can be reassigned, not worth chasing). If it is revisited: check the terminal for the Session 137 `[replace_shape] WARNING: shape-keyed SetColor did NOT take` line right after the fuse, and compare before/after files with probe_step_files.py.
+
+# Session 142 -- Color (and name) lost on save after replace_shape: a located prototype
+
+## Evidence
+
+Doug's plate test (as1-oc-214, everything deleted but `plate`, saved `plate.stp`; plate copied, moved, fused, saved `plate2.stp`). Raw-text comparison: `plate.stp` has STYLED_ITEM / COLOUR_RGB and PRODUCT 'plate'; `plate2.stp` has NO color and its prototype PRODUCT carries the writer's placeholder name ('Open CASCADE STEP translator 7.9 1.1.1'). Earlier lost-color `loft-parts.stp` showed the same pair. No `[replace_shape]` warning, so the color was in the document right after the replace -- the writer failed to tie the prototype's attributes (name AND color) to what it wrote.
+
+## Wrong turn
+
+First guess: booleans return a Compound around the solid and the writer can't map a compound. Implemented unwrap-to-bare-solid; Doug's rerun printed `storing SOLID (was COMPOUND)` and the color was STILL lost. Hypothesis rejected and the unwrap removed.
+
+## Clue that survived
+
+The pre-write dump printed the component location as `(0.000, 0.000, 0.000)` before the replace and `(-0.000, -0.000, -0.000)` after it. `replace_shape` did `modshape.Move(part_loc.Inverted())`, which leaves a non-identity Location riding on the shape stored in the prototype label (here, tiny residue; for an instance placed at x=60, a real -60). A located prototype is the one thing earlier probes never had (they ran at identity placement), which is why they never reproduced the loss.
+
+## Change (docmodel.py replace_shape)
+
+- The inverse placement is now BAKED into the geometry (`BRepBuilderAPI_Transform(..., copy=True)`) when the part's location is not identity, so the stored prototype shape has an identity Location. Prints `[replace_shape] storing <type>, stored Location identity=<bool>` every time.
+- Color is also set label-keyed on the prototype label in addition to shape-keyed (kept from the previous attempt; cheap).
+- Read-back tripwire (Session 137) kept.
+
+Test: repeat copy, move, fuse, save, reload (expect the printed Location identity=True, COLOUR_RGB and PRODUCT 'plate' in the saved file). Also worth rechecking: shell/fillet/pull on an instance placed away from the origin, then save/reload.

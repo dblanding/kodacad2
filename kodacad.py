@@ -2388,6 +2388,9 @@ if __name__ == "__main__":
     win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
     win.add_function_to_menu("Create/Modify", "Shell", shell)
     win.add_function_to_menu("Create/Modify", "Loft", loftWpSet)
+    from fuse_dialog import show_fuse_dialog
+    win.add_function_to_menu(
+        "Create/Modify", "Fuse...", lambda: show_fuse_dialog(win))
     win.add_function_to_menu(
         "Create/Modify", "Defeaturing...",
         lambda: show_defeaturing_dialog(win))
