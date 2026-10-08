@@ -6959,3 +6959,9 @@ The pre-write dump printed the component location as `(0.000, 0.000, 0.000)` bef
 - Read-back tripwire (Session 137) kept.
 
 Test: repeat copy, move, fuse, save, reload (expect the printed Location identity=True, COLOUR_RGB and PRODUCT 'plate' in the saved file). Also worth rechecking: shell/fillet/pull on an instance placed away from the origin, then save/reload.
+
+## Session 142 confirmation
+
+Doug ran a lofted part through loft1, shell2, share3, pull4, fillet5 in one session, saving after each step, then reloaded the saved files in another session: part names and colors were fine throughout. Together with the plate (copy, move, fuse) test, this confirms the baked-location fix in `replace_shape`.
+
+Side finding: a Loft whose workplanes each contain two circular profiles (inner 5 mm smaller) uses only the outer profile of each (`WorkPlane.outer_profile_wire()`); `BRepOffsetAPI_ThruSections` takes one wire per section, so inner profiles are ignored silently. A hollow loft would need two lofts and a cut (not built; offered to Doug).
