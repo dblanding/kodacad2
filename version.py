@@ -1,5 +1,9 @@
 """Single source of truth for the KodaCAD application version.
 
+2.1.2 -- 2026-10-08 (Session 143)
+* Bi-directional Pull
+* Boolean (Fuse + Subtract)
+
 2.1.1 -- 2026-10-04 (Session 131)
 * Polished toolbar visually, especially clipping section.
 
@@ -30,4 +34,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.2"
