@@ -173,10 +173,13 @@ what it exercises in KodaCAD's own code.
   face, then reusing the OCC Bottle's extrude-then-heavily-fillet
   technique to carve that same face into a pumpkin with a real,
   multi-profile Pull operation.
-- **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** --
-   Builds a simple lofted part then works it over:  subtracting one lofted part
-   from another, a transverse hole, fillets, and finally Defeaturing to take the
-   fillets back off.
+- **[Defeaturing a Part](tutorials/defeaturing/README.md)** --
+  demonstrating the ability to remove holes and faces and to extend
+  adjacent faces to heal the gap.
+- **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** -- building a simple lofted part then working it over:
+  subtracting one lofted part from another, a transverse hole, fillets,
+  and finally defeaturing to take the fillets back off.
+  
 
 ## Tested workflows
 
