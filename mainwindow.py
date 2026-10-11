@@ -564,6 +564,13 @@ class MainWindow(QMainWindow):
         # {uid: [list of ancestor shapes]}
         self.ancestor_dict = defaultdict(list)
         self.ais_shape_dict = {}  # {uid: <AIS_Shape> object}
+        # Session 145: DISPLAY-ONLY per-face colors (tutorial
+        # illustrations). {uid: (displayed_shape, [(face, (r,g,b)),..])}
+        # -- faces are faces of the cached DISPLAY-PREPARED shape, so
+        # they are valid only while that shape is still the one drawn;
+        # draw_shape drops the entry the moment it is not (part
+        # modified/moved). Never written to the XDE doc or STEP.
+        self.face_colors = {}
         self._display_prep_cache = {}  # {uid: (src_shape,
         # prepared_shape)} -- Session 61 draw-prep cache
         self._face_prep_map = {}  # {uid: (analytic_shape, [(analytic_face,
@@ -893,6 +900,8 @@ class MainWindow(QMainWindow):
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
+        menu.addAction("Color Faces (display only)...",
+                       self.colorFaces)
         menu.addSeparator()
         menu.addAction("Delete", self.deleteItem)
 
@@ -1298,6 +1307,47 @@ class MainWindow(QMainWindow):
             self.itemClicked = None
         else:
             print("No item selected. Try first left clicking item then right clicking.")
+
+    def colorFaces(self):
+        """RMB: open the display-only Color Faces dialog (Session 145)
+        for the clicked part, making it the active part first."""
+        try:
+            self.setClickedActive()
+        except Exception:
+            pass
+        if not self.activePartUID:
+            self.statusBar().showMessage("Set a part active first.", 4000)
+            return
+        from face_color_dialog import show_face_color_dialog
+        show_face_color_dialog(self)
+
+    def set_face_colors(self, uid, faces, rgb):
+        """Add (or, rgb=None, remove) display-only colors for faces of
+        uid's displayed shape, then redraw that part."""
+        cached = self._display_prep_cache.get(uid)
+        if cached is None:
+            return False
+        disp = cached[1]
+        cur = self.face_colors.get(uid)
+        entries = list(cur[1]) if cur is not None and cur[0].IsSame(disp) \
+            else []
+        for f in faces:
+            entries = [e for e in entries if not e[0].IsSame(f)]
+            if rgb is not None:
+                entries.append((f, rgb))
+        if entries:
+            self.face_colors[uid] = (disp, entries)
+        else:
+            self.face_colors.pop(uid, None)
+        self.erase_shape(uid)
+        self.draw_shape(uid)
+        return True
+
+    def clear_face_colors(self, uid):
+        if uid in self.face_colors:
+            self.face_colors.pop(uid, None)
+            self.erase_shape(uid)
+            self.draw_shape(uid)
 
     def setPartColor(self):
         """RMB: open a color picker and set the clicked part's own
@@ -2862,7 +2912,15 @@ class MainWindow(QMainWindow):
                             print(f"[draw_shape] pre-mesh failed: {me}")
                             self._mesh_warned = True
                     self._display_prep_cache[uid] = (src_shape, shape)
-                aisShape = AIS_Shape(shape)
+                _fc = self.face_colors.get(uid)
+                if _fc is not None and not _fc[0].IsSame(shape):
+                    del self.face_colors[uid]   # stale: part changed
+                    _fc = None
+                if _fc is not None and _fc[1]:
+                    from OCP.AIS import AIS_ColoredShape
+                    aisShape = AIS_ColoredShape(shape)
+                else:
+                    aisShape = AIS_Shape(shape)
                 # Tag the AIS object with its OWN uid directly
                 # (selection-sync fix). Reverse-lookup used to match
                 # by SHAPE IDENTITY (ais.Shape().IsSame(...)) -- an
@@ -2901,6 +2959,18 @@ class MainWindow(QMainWindow):
                     context.SetColor(aisShape, color, False)
                 if transp > 0:
                     context.SetTransparency(aisShape, transp, False)
+                if _fc is not None and _fc[1]:
+                    # Custom colors AFTER the base color/transparency
+                    # so context.SetColor cannot override them.
+                    try:
+                        from OCP.Quantity import (Quantity_Color as _QC,
+                            Quantity_TypeOfColor as _QT)
+                        for _f, (_r, _g, _b) in _fc[1]:
+                            aisShape.SetCustomColor(
+                                _f, _QC(_r, _g, _b,
+                                        _QT.Quantity_TOC_RGB))
+                    except Exception as fe:
+                        print(f"[draw_shape] face colors failed: {fe}")
                 # Black face boundary edges
                 from OCP.Aspect import Aspect_TypeOfLine
                 from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
@@ -2912,6 +2982,22 @@ class MainWindow(QMainWindow):
                 drawer.FaceBoundaryAspect().SetWidth(1.0)
                 drawer.FaceBoundaryAspect().SetTypeOfLine(
                     Aspect_TypeOfLine.Aspect_TOL_SOLID)
+                # Session 145b: AIS_ColoredShape gives every custom-
+                # colored face its OWN drawer, which does not inherit
+                # the part's face-boundary setting -- colored faces lost
+                # their black outline. Style each per-face drawer too.
+                if _fc is not None and _fc[1]:
+                    try:
+                        for _f, _c in _fc[1]:
+                            _cd = aisShape.CustomAspects(_f)
+                            _cd.SetFaceBoundaryDraw(True)
+                            _cd.FaceBoundaryAspect().SetColor(black)
+                            _cd.FaceBoundaryAspect().SetWidth(1.0)
+                            _cd.FaceBoundaryAspect().SetTypeOfLine(
+                                Aspect_TypeOfLine.Aspect_TOL_SOLID)
+                    except Exception as be:
+                        print(f"[draw_shape] face-color boundary "
+                              f"styling failed: {be}")
                 context.Redisplay(aisShape, False)
             except Exception as e:
                 print(f"draw_shape error for {uid}: {e}")

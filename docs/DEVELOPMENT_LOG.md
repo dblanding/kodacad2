@@ -6997,3 +6997,26 @@ Doug's decision on the scar lines: no change. He already clears any leftover sea
 Reviewed Doug's first-draft Lofting tutorial (README + 14 screenshots + `loft-demo.stp`) against the app and the other tutorials' format, and reformatted it (`Tutorial:` title, What you'll need / What this exercises, numbered `Step N --` sections with italic `Exercises:` lines, Notes for whoever runs this next with cross-links). Corrections: typos; menu name is `Create/Modify -> Defeaturing...` (draft said Defeature...); explicit Pull settings (Remove Material, Linear, +W, Total Distance 30); wp1 must be made active again before creating s2; each workplane must be made active before drawing on it; part shows as `inner-loft_1`; the "why not Shell" paragraph now states the tested finding (Session 139/143) instead of "for some reason"; the seam-merge explanation reworded; Step 10 records the one-at-a-time vs group scar-line behavior and the Manual seam cleanup; the Boolean/Pull "Both" tip added. Doug's in-text comment was acted on and removed.
 
 boolean_dialog.py: the note label "The tool part is consumed by the fuse." (wrong for Subtract) is now "The tool part will be consumed by this operation." The tutorial's `imgs/subtract-dialog.png` still shows the old wording and should be retaken.
+
+## Session 145 -- Display-only per-face coloring (tutorial illustrations)
+
+Doug asked for a way to color selected faces to illustrate the Defeaturing
+tutorial; chose the display-only version (not saved to STEP).
+
+- mainwindow.py: `face_colors {uid: (displayed_shape, [(face,(r,g,b))])}`;
+  `draw_shape` uses `AIS_ColoredShape` only when a uid has valid face colors,
+  applying `SetCustomColor` AFTER base color/transparency. Entry is dropped
+  automatically when the cached display-prepared shape is no longer the one
+  drawn (part modified/moved). New `colorFaces`, `set_face_colors`,
+  `clear_face_colors`; RMB item "Color Faces (display only)...".
+- face_color_dialog.py (new): non-modal pick/Choose Color/Apply/Clear
+  Selection/Clear Face Colors/Done; pick validation like DefeaturingDialog.
+- Untested in OCP (not installable in the sandbox); only ast-checked.
+  Watch: whether SetCustomColor survives hover/selection highlight, and
+  whether erase+draw redraw shows the colors immediately.
+
+- 145b: colored faces lost black boundary edges (AIS_ColoredShape per-face
+  drawers don't inherit FaceBoundaryDraw). draw_shape now styles each
+  `aisShape.CustomAspects(face)` drawer with black 1.0 solid boundary before
+  Redisplay. Untested; if it fails it prints "face-color boundary styling
+  failed". Fallback idea: overlay black wire AIS_Shapes of the colored faces.
