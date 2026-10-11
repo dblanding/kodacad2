@@ -61,6 +61,22 @@ class FaceColorDialog(QDialog):
         self._swatch()
         self._refresh()
         self._start()
+        self.win._history_listeners.append(self._after_history)
+
+    def _after_history(self):
+        # Undo/Redo redraws parts and ends face picking: re-arm it
+        # (unless another tool took over) and drop stale picks.
+        cb = self.win.registeredCallback
+        if cb is None or cb == self._on_pick:
+            self.faces = []
+            self._refresh()
+            self._start()
+
+    def _detach_history(self):
+        try:
+            self.win._history_listeners.remove(self._after_history)
+        except ValueError:
+            pass
 
     def _uid(self):
         return self.win.activePartUID
@@ -137,10 +153,12 @@ class FaceColorDialog(QDialog):
         self._start()
 
     def _done(self):
+        self._detach_history()
         self.win.clearCallback()
         self.close()
 
     def closeEvent(self, event):
+        self._detach_history()
         self.win.clearCallback()
         super().closeEvent(event)
 

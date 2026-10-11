@@ -571,6 +571,7 @@ class MainWindow(QMainWindow):
         # draw_shape drops the entry the moment it is not (part
         # modified/moved). Never written to the XDE doc or STEP.
         self.face_colors = {}
+        self._history_listeners = []  # Session 148: called after Undo/Redo
         self._display_prep_cache = {}  # {uid: (src_shape,
         # prepared_shape)} -- Session 61 draw-prep cache
         self._face_prep_map = {}  # {uid: (analytic_shape, [(analytic_face,
@@ -2028,6 +2029,16 @@ class MainWindow(QMainWindow):
         shape identity and needs no clearing. NOTE (scope, logged):
         workplanes and 2D sketch state live OUTSIDE the OCAF document
         and are not affected by Undo/Redo."""
+        # Session 147: remember the active part by its full breadcrumb
+        # path (uids are per-parse and unstable) so it can be made
+        # active again after the refresh if it still exists, instead of
+        # forcing a manual Set Active after every Undo/Redo.
+        _active_path = None
+        if self.activePartUID:
+            try:
+                _active_path = dm.get_full_path_name(self.activePartUID)
+            except Exception:
+                _active_path = None
         self.activePartUID = 0
         self.activePart = None
         self.activeAsyUID = 0
@@ -2133,6 +2144,23 @@ class MainWindow(QMainWindow):
         self._incremental_reconcile(old_uids,
                                     force_redraw_uids=changed_survivors,
                                     reason_map=redraw_reasons)
+        if _active_path:
+            try:
+                _matches = [u for u in dm.part_dict
+                            if dm.get_full_path_name(u) == _active_path]
+                if len(_matches) == 1:   # unambiguous only
+                    self.setActivePart(_matches[0])
+            except Exception as ae:
+                print(f"[{verb}] could not restore active part: {ae}")
+        # Session 148: non-modal pick dialogs (Defeaturing, Color
+        # Faces) register here so they can re-arm face picking -- the
+        # redraw above re-activates the default selection mode on the
+        # redisplayed parts, which silently ended their picking.
+        for _cb in list(getattr(self, '_history_listeners', [])):
+            try:
+                _cb()
+            except Exception as he:
+                print(f"[{verb}] history listener failed: {he}")
         n_undo = dm.doc.GetAvailableUndos()
         n_redo = dm.doc.GetAvailableRedos()
         self.statusBar().showMessage(

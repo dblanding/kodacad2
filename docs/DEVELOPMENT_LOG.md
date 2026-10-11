@@ -7020,3 +7020,36 @@ tutorial; chose the display-only version (not saved to STEP).
   `aisShape.CustomAspects(face)` drawer with black 1.0 solid boundary before
   Redisplay. Untested; if it fails it prints "face-color boundary styling
   failed". Fallback idea: overlay black wire AIS_Shapes of the colored faces.
+
+## Session 146 -- Defeaturing tutorial review; Auto diagnostics
+
+Auto (Defeaturing) test with two picked faces removed only the D-shaped
+pocket (3 faces, 86 -> 83), not the open-ended slot: the slot's opening runs
+into a face edge, so it is no inner wire of any picked face and Auto has
+nothing to grow from (documented behavior, not a bug). kodacad.py: Auto now
+prints the seed/inner-wire counts and tells the user to use Manual when no
+picked face has an inner loop. Reformatted Doug's Defeaturing tutorial
+(Step N sections, Remove Hole mechanism written up, Auto algorithm
+corrected to multi-seed, new Step 7 "When Auto can't see a feature", Notes).
+
+## Session 147 -- Active part survives Undo/Redo
+
+Doug: the part is left inactive after Undo/Redo, so tutorials needed a
+repeated Set Active. `_refresh_after_history` cleared the active part
+(uids are per-parse). It now remembers the active part's full breadcrumb
+path first and, after parse/rebuild/reconcile, re-activates it if exactly
+one part has that path (if the part no longer exists, e.g. undoing its
+creation, nothing is activated). Untested in OCP. Tutorial: Doug's
+repeated Set Active steps were correct for the old behavior; with this fix
+they are only needed once.
+
+## Session 148 -- Pick dialogs survive Undo/Redo
+
+Doug (Defeaturing tutorial): leaving the dialog open across Undo/Redo
+ended face picking; he had to close/reopen it. Cause (inferred from code,
+unconfirmed): the undo/redo redraw redisplays parts with the default
+selection mode, replacing the dialog's face mode (the dialog only re-armed
+after its own Apply). Fix: MainWindow._history_listeners, called at the end
+of _refresh_after_history; DefeaturingDialog and FaceColorDialog register
+`_after_history`, which clears stale picks and re-arms picking if no other
+tool owns the callback. Listener removed on Done/close. Untested in OCP.

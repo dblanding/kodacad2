@@ -1342,6 +1342,23 @@ class DefeaturingDialog(QDialog):
         self._refresh_header()
         self._on_mode_changed()
         self._start_picking()
+        win._history_listeners.append(self._after_history)
+
+    def _after_history(self):
+        """Undo/Redo redraws the part and ends face picking; re-arm it
+        (unless another tool has since taken over) and drop stale picks."""
+        if win.registeredCallback is None or \
+                win.registeredCallback == self._on_pick:
+            self.face_stack = []
+            self._refresh_header()
+            self._update_status()
+            self._start_picking()
+
+    def _detach_history(self):
+        try:
+            win._history_listeners.remove(self._after_history)
+        except ValueError:
+            pass
 
     def _refresh_header(self):
         uid = win.activePartUID
@@ -1428,6 +1445,17 @@ class DefeaturingDialog(QDialog):
         elif idx == 1:  # Manual
             faces_to_remove = seed_faces
         else:  # Auto
+            n_inner = sum(len(isolated_features.seed_inner_wires(f))
+                          for f in seed_faces)
+            print(f"[Defeaturing:Auto] {len(seed_faces)} seed face(s), "
+                  f"{n_inner} inner wire(s) among them")
+            if n_inner == 0:
+                self._update_status(
+                    "Auto needs a capping face with the feature's "
+                    "opening as a closed INNER loop. None of the picked "
+                    "faces has one (the opening likely runs into the "
+                    "face's edge) -- use Manual instead.")
+                return
             try:
                 faces_to_remove = \
                     isolated_features.find_isolated_feature_faces(
@@ -1451,10 +1479,12 @@ class DefeaturingDialog(QDialog):
         self._start_picking()
 
     def _on_done(self):
+        self._detach_history()
         win.clearCallback()
         self.close()
 
     def closeEvent(self, event):
+        self._detach_history()
         win.clearCallback()
         super().closeEvent(event)
 
