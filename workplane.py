@@ -515,7 +515,16 @@ class WorkPlane():
         # feature): projected part edges must be finite, or every
         # projected edge extended to infinity floods the layout with
         # clutter and false catches far from the part.
-        self.edgeList = []  # List of profile lines type: <TopoDS_Edge>
+        # Session 149: PROFILE geometry is stored as plain-data
+        # "prims" (what the user entered: line/circle/arcc2p/arc3p with
+        # 2D uv coordinates), each paired with the TopoDS_Edge built from
+        # it. The prim is the source of truth; the edge is derived. One
+        # (prim, edge) pair is one object in this list, so removing an
+        # element removes both -- nothing to keep in sync. `edgeList` is
+        # now a read-only view (a tuple of edges); edit through
+        # clear_profile() / remove_edge(edge). profile_prims() is what a
+        # saved file stores.
+        self._elements = []  # [(prim_dict, TopoDS_Edge), ...]
         self.wire = None
         self.accuracy = 1e-6   # min distance between two points
         # Session 63: creation-time H&V origin clines briefly
@@ -879,41 +888,102 @@ class WorkPlane():
     # to extrude or cut a solid body.
     # =======================================================================
 
+    # ------------------------------------------------------------------
+    # PROFILE ELEMENTS (Session 149): plain-data prims -> derived edges
+    # ------------------------------------------------------------------
+
+    @property
+    def edgeList(self):
+        """Read-only view: the profile edges, in creation order. A tuple
+        on purpose -- mutating it would silently not affect the workplane
+        (use clear_profile / remove_edge)."""
+        return tuple(e for (_p, e) in self._elements)
+
+    def profile_prims(self):
+        """Plain-data description of the profile geometry (JSON-ready:
+        dicts of str / float / [u, v] lists), in creation order."""
+        return [dict(p) for (p, _e) in self._elements]
+
+    def clear_profile(self):
+        """Delete ALL profile geometry. Returns how many were removed."""
+        n = len(self._elements)
+        self._elements.clear()
+        return n
+
+    def remove_edge(self, edge):
+        """Delete the profile element whose edge IsSame as `edge`
+        (TopoDS shapes may be different Python objects for the same
+        geometry). Returns True if one was removed."""
+        for i, (_p, e) in enumerate(self._elements):
+            if e.IsSame(edge):
+                del self._elements[i]
+                return True
+        return False
+
+    def rebuild_edges(self):
+        """Re-derive every profile edge from its plain-data prim under
+        the CURRENT self.Trsf. Used after the workplane's placement is
+        changed in place (wp_position_dialog): the prims are plane-
+        relative (u,v), so repositioning needs no edge transforms."""
+        self._elements = [(p, self._edge_from_prim(p))
+                          for (p, _e) in self._elements]
+
+    def add_prim(self, prim):
+        """Build the edge for one prim dict and add the element. This is
+        the single place profile geometry enters the workplane -- the
+        creation methods below and loading a saved file both use it."""
+        edge = self._edge_from_prim(prim)
+        self._elements.append((prim, edge))
+
+    def _edge_from_prim(self, prim):
+        t = prim["type"]
+        if t == "line":
+            p1 = gp_Pnt(prim["p1"][0], prim["p1"][1], 0).Transformed(
+                self.Trsf)
+            p2 = gp_Pnt(prim["p2"][0], prim["p2"][1], 0).Transformed(
+                self.Trsf)
+            seg = GC_MakeSegment(p1, p2).Value()  # Geom_TrimmedCurve
+            return BRepBuilderAPI_MakeEdge(seg).Edge()
+        if t == "circle":
+            circ = ((prim["c"][0], prim["c"][1]), prim["r"])
+            return BRepBuilderAPI_MakeEdge(
+                self.convert_circ_to_geomCirc(circ)).Edge()
+        if t == "arcc2p":
+            pc, ps, pe = prim["pc"], prim["ps"], prim["pe"]
+            rad = p2p_dist(pc, ps)
+            geom_circ = self.convert_circ_to_geomCirc((pc, rad))
+            gp_circ = geom_circ.Circ()
+            gp_ps = gp_Pnt(ps[0], ps[1], 0).Transformed(self.Trsf)
+            gp_pe = gp_Pnt(pe[0], pe[1], 0).Transformed(self.Trsf)
+            geom_arc = GC_MakeArcOfCircle(gp_circ, gp_ps, gp_pe,
+                                          True).Value()
+            return BRepBuilderAPI_MakeEdge(geom_arc).Edge()
+        if t == "arc3p":
+            ps, pe, p3 = prim["ps"], prim["pe"], prim["p3"]
+            gp_ps = gp_Pnt(ps[0], ps[1], 0).Transformed(self.Trsf)
+            gp_pe = gp_Pnt(pe[0], pe[1], 0).Transformed(self.Trsf)
+            gp_p3 = gp_Pnt(p3[0], p3[1], 0).Transformed(self.Trsf)
+            geom_arc = GC_MakeArcOfCircle(gp_ps, gp_pe, gp_p3).Value()
+            return BRepBuilderAPI_MakeEdge(geom_arc).Edge()
+        raise ValueError(f"unknown profile element type {t!r}")
+
+    @staticmethod
+    def _uv(pnt):
+        return [float(pnt[0]), float(pnt[1])]
+
     def line(self, pnt1, pnt2):
         """Create a line between two end points."""
-        # Two 2d end points
-        x1, y1 = pnt1
-        x2, y2 = pnt2
-        p1 = gp_Pnt(x1, y1, 0).Transformed(self.Trsf)
-        p2 = gp_Pnt(x2, y2, 0).Transformed(self.Trsf)
-        seg = GC_MakeSegment(p1, p2).Value()  # Geom_TrimmedCurve
-        # Build the edge
-        edge = BRepBuilderAPI_MakeEdge(seg).Edge()  # TopoDS_Edge
-        self.edgeList.append(edge)
+        self.add_prim({"type": "line", "p1": self._uv(pnt1),
+                       "p2": self._uv(pnt2)})
 
     def rect(self, pnt1, pnt2):
-        """Create a rectangle from two diagonally opposite corners."""
-        # 2 diagonally opposite corners
+        """Create a rectangle from two diagonally opposite corners
+        (stored as its four sides)."""
         x1, y1 = pnt1
         x2, y2 = pnt2
-        # 4 corners of rectangle
-        p1 = gp_Pnt(x1, y1, 0).Transformed(self.Trsf)
-        p2 = gp_Pnt(x2, y1, 0).Transformed(self.Trsf)
-        p3 = gp_Pnt(x2, y2, 0).Transformed(self.Trsf)
-        p4 = gp_Pnt(x1, y2, 0).Transformed(self.Trsf)
-        # 4 sides (segments) of rectangle
-        seg1 = GC_MakeSegment(p1, p2).Value()  # Geom_TrimmedCurve
-        seg2 = GC_MakeSegment(p2, p3).Value()
-        seg3 = GC_MakeSegment(p3, p4).Value()
-        seg4 = GC_MakeSegment(p4, p1).Value()
-        # Build the edges
-        e1 = BRepBuilderAPI_MakeEdge(seg1).Edge()  # TopoDS_Edge
-        e2 = BRepBuilderAPI_MakeEdge(seg2).Edge()
-        e3 = BRepBuilderAPI_MakeEdge(seg3).Edge()
-        e4 = BRepBuilderAPI_MakeEdge(seg4).Edge()
-        edges = (e1, e2, e3, e4)
-        for edge in edges:
-            self.edgeList.append(edge)
+        c1, c2, c3, c4 = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
+        for a, b in ((c1, c2), (c2, c3), (c3, c4), (c4, c1)):
+            self.line(a, b)
 
     def circle(self, cntr, rad, constr=False):
         """Create a circle (constr or profile)"""
@@ -925,9 +995,8 @@ class WorkPlane():
             # pickable by intersection in the pre-engine era, and
             # Ctrl+Shift center catching has made them pure clutter.
         else:
-            edge = BRepBuilderAPI_MakeEdge(
-                self.convert_circ_to_geomCirc(circ)).Edge()
-            self.edgeList.append(edge)
+            self.add_prim({"type": "circle", "c": self._uv(cntr),
+                           "r": float(rad)})
 
     def convert_circ_to_geomCirc(self, circ):
         """Convert 2d circle ((cx, cy), r) to type <Geom_Circle>"""
@@ -950,24 +1019,13 @@ class WorkPlane():
 
     def arcc2p(self, pc, ps, pe):
         """Create an arc from center pt, start pt and end pt."""
-        rad = p2p_dist(pc, ps)
-        circ2d = (pc, rad)
-        geom_circ = self.convert_circ_to_geomCirc(circ2d)
-        gp_circ = geom_circ.Circ()
-        gp_ps = gp_Pnt(ps[0], ps[1], 0).Transformed(self.Trsf)
-        gp_pe = gp_Pnt(pe[0], pe[1], 0).Transformed(self.Trsf)
-        geom_arc = GC_MakeArcOfCircle(gp_circ, gp_ps, gp_pe, True).Value()
-        edge = BRepBuilderAPI_MakeEdge(geom_arc).Edge()
-        self.edgeList.append(edge)
+        self.add_prim({"type": "arcc2p", "pc": self._uv(pc),
+                       "ps": self._uv(ps), "pe": self._uv(pe)})
 
     def arc3p(self, ps, pe, p3):
         """Create an arc from start pt, end pt, and 3rd pt on the arc."""
-        gp_ps = gp_Pnt(ps[0], ps[1], 0).Transformed(self.Trsf)
-        gp_pe = gp_Pnt(pe[0], pe[1], 0).Transformed(self.Trsf)
-        gp_p3 = gp_Pnt(p3[0], p3[1], 0).Transformed(self.Trsf)
-        geom_arc = GC_MakeArcOfCircle(gp_ps, gp_pe, gp_p3).Value()
-        edge = BRepBuilderAPI_MakeEdge(geom_arc).Edge()
-        self.edgeList.append(edge)
+        self.add_prim({"type": "arc3p", "ps": self._uv(ps),
+                       "pe": self._uv(pe), "p3": self._uv(p3)})
 
     # =======================================================================
     # Topo_DS_Wire

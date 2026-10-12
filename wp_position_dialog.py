@@ -226,18 +226,11 @@ class WpPositionDialog(QDialog):
         old_wp.wVec = scratch.wVec
         old_wp.face = scratch.face
 
-        delta = old_wp.Trsf.Multiplied(old_trsf.Inverted())
-        new_edges = []
-        for edge in old_wp.edgeList:
-            try:
-                moved = BRepBuilderAPI_Transform(
-                    edge, delta, True).Shape()
-                new_edges.append(TopoDS.Edge_s(moved))
-            except Exception as e:
-                print(f"[WpPositionDialog] failed to re-transform "
-                     f"an edge: {e}")
-                new_edges.append(edge)  # keep it rather than lose it
-        old_wp.edgeList = new_edges
+        # Session 149: profile geometry is now stored as plane-relative
+        # (u,v) prims (see WorkPlane.add_prim), so the edges are simply
+        # re-derived under the new placement -- no delta transform of
+        # world-space edges needed any more.
+        old_wp.rebuild_edges()
 
         # Creo behavior (Session 63's own precedent, wpOnFace()):
         # pane sized to the picked face + margins, floored there.

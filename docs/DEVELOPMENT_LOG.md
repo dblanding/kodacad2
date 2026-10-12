@@ -7053,3 +7053,22 @@ after its own Apply). Fix: MainWindow._history_listeners, called at the end
 of _refresh_after_history; DefeaturingDialog and FaceColorDialog register
 `_after_history`, which clears stale picks and re-arms picking if no other
 tool owns the callback. Listener removed on Done/close. Untested in OCP.
+
+## Session 149 -- Workplane profile geometry stored as plain-data prims (step 1 of the .kcad plan)
+
+Design (Doug's choice "B"): profile geometry is stored as plain data
+(what the user entered), edges are DERIVED. Motivation: a future saved
+workplane format (JSON next to the STEP in a zip, "kcad"), and future
+NURBS elements (a spline's entered definition can't be recovered from its
+edge). workplane.py: `_elements = [(prim_dict, TopoDS_Edge)]`; prims are
+line / circle / arcc2p / arc3p with [u, v] lists; `add_prim` is the single
+entry point; `_edge_from_prim` dispatches on `type` (unknown type ->
+ValueError, so a new curve type = one new prim + one builder branch);
+`edgeList` is now a READ-ONLY tuple property (stray mutation fails
+loudly); `profile_prims()` (JSON-ready), `clear_profile()`,
+`remove_edge(edge)` (IsSame match), `rebuild_edges()`. rect() = 4 line
+prims. m2d.py: delete-all, delete-element and the 2D fillet corner now use
+clear_profile()/remove_edge(). wp_position_dialog.py: repositioning no
+longer transforms world-space edges by a delta; it calls rebuild_edges()
+(prims are plane-relative). No behavior change intended. Step 2 (not
+built): wp_io.py + .kcad zip. Untested in OCP.

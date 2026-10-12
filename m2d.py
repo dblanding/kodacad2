@@ -169,8 +169,7 @@ class M2D:
             self.win.statusBar().showMessage(
                 "No active workplane.", 3000)
             return
-        n = len(wp.edgeList)
-        wp.edgeList.clear()
+        n = wp.clear_profile()
         self.win.draw_wp(self.win.activeWpUID)
         self.win.statusBar().showMessage(
             f"{n} geometry element(s) deleted.", 4000)
@@ -1610,10 +1609,7 @@ class M2D:
                 "Fillet radius too large for that corner.", 4000)
             return
         for edge, _q in hits:
-            matching = next(
-                (e for e in wp.edgeList if e.IsSame(edge)), None)
-            if matching is not None:
-                wp.edgeList.remove(matching)
+            wp.remove_edge(edge)
         wp.line(ep1, tp1)
         wp.line(ep2, tp2)
         a1 = _m.atan2(tp1[1] - ctr[1], tp1[0] - ctr[0])
@@ -2360,9 +2356,7 @@ class M2D:
                 # in kodacad.py's fillet()). Confirmed directly: the
                 # pick worked, but 'shape in wp.edgeList' silently never
                 # matched, so nothing was ever actually removed.
-                matching = next((e for e in wp.edgeList if e.IsSame(shape)), None)
-                if matching is not None:
-                    wp.edgeList.remove(matching)
+                wp.remove_edge(shape)
             self.win.redraw()
         else:
             self.win.registerCallback(self.delElC)
