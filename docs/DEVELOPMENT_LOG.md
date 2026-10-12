@@ -7072,3 +7072,76 @@ clear_profile()/remove_edge(). wp_position_dialog.py: repositioning no
 longer transforms world-space edges by a delta; it calls rebuild_edges()
 (prims are plane-relative). No behavior change intended. Step 2 (not
 built): wp_io.py + .kcad zip. Untested in OCP.
+
+## Session 150 -- .kcad session files: model + workplanes (step 2)
+
+New `wp_io.py`. A .kcad is a zip: `<name>.stp` (identical to Export STEP) +
+`workplanes.json` (plain data only -- no pickle: loading one runs code).
+Per workplane: origin/U/W floats, size, min_bounds, clines/ccircs/carcs/
+csegs (tuples restored from JSON lists), profile prims (Session 149, edges
+derived on load via add_prim), plus sets, uid counters, active wp, hidden
+wps. Not saved: wp `face` link, anything keyed by part uid, undo history,
+display-only face colors. `format` int: newer-than-known is refused with a
+message; read_kcad validates names (members written under their base name
+only). write_kcad writes to `<path>.tmp` then os.replace.
+docmodel: `save_step_doc(*, fname=None)` (keyword-only so a menu
+triggered(bool) can't be taken for a name; returns True/False),
+`_load_step(f_path=None)`, `load_stp_at_top(dm, f_path=None)` (returns
+True/False). kodacad: `save_session()` (.kcad), `export_step()` (new File ->
+Export STEP, plain STEP), `load_session()` accepts .kcad or STEP (a plain
+STEP leaves current workplanes alone, as before), shared body
+`_load_session_from`. Pure-Python parts (JSON, zip, error paths) were
+exercised with stubs in the sandbox; everything touching OCP is untested.
+
+## Session 151 -- Pumpkin shell anomaly: diagnostic added
+
+Doug's pumpkin tutorial (pull -> fillet-ish COMPOUND -> shell, 20 mm): Shell
+reports SUCCESS / valid SOLID, but in the X+Y clipped section the cap fills
+the whole cross-section (interior looks solid, faint inner-surface line
+~20 mm in). Two candidates: (1) display-only (clip capping fills the void)
+or (2) wrongly oriented inner shell (filled in the model). Added
+Utility -> Check Active Part (kodacad.checkActivePart): validity, counts,
+volume, per-shell orientation/volume, and a BRepClass3d_SolidClassifier
+test of the bbox center (OUT = hollow is real). Same session: Doug
+confirmed .kcad round trip of wp1 and repositioning a workplane onto a face
+(rebuild_edges path) work. Untested in OCP.
+
+## Session 152 -- Pumpkin: shelled part looks superimposed on the unshelled one
+
+Doug: after Pull -> Fillet (12 box-selected edges; result stored as
+COMPOUND) -> Shell 20, the viewport shows the shelled AND unshelled pumpkin
+superimposed (inner edge visible even with one clip plane; section cap
+fills the interior). Repeating after Undo gave the same. After Save Session
++ reload (.kcad) only the correct shelled pumpkin shows (reloaded part: 52
+faces, hollow section looks right) => the stored model is fine; the
+duplicate is a viewport leftover (a displayed object for the pre-shell
+shape not removed). Cause not yet found. Added `_display_audit` (prints
+displayed-object count / tracked parts / wp objects) before and after
+`redraw_after_shape_replace`, to see which step leaves an extra object.
+Untested in OCP.
+
+- 152b: [display-audit] result (Doug's Pull -> Fillet -> Shell run): displayed
+  count goes N-1 -> N at each step (viewer holds exactly one object for the
+  pumpkin after Shell; 1 = view cube) => NO orphaned display object; the
+  orphan hypothesis is rejected. Remaining hypothesis: the live shell result
+  has inconsistently oriented faces (cap/section fills the cavity) that the
+  STEP save/reload normalizes. kodacad: checkActivePart refactored into
+  `_report_shape(shape, label)`; shell() now prints it for its INPUT and its
+  RESULT automatically.
+
+- 152c: CheckPart on the live shell result: INPUT valid, 1 solid/1 shell/26
+  faces, 22.93e6 mm3, center IN. RESULT: valid=False, 1 solid / 2 shells /
+  52 faces, volume 7.08e6 (= 22.93e6 - 15.84e6, correct), center OUT
+  (cavity real), shell 1 FORWARD (+22.93e6), shell 2 FORWARD with volume
+  -15.84e6 (inner shell's flag and face directions disagree). So the model
+  is right numerically but flagged invalid, hence the wrong section cap;
+  the STEP reader's repair pass explains why reload looked right. Fix:
+  `_heal_if_invalid` (ShapeFix_Shape) applied to shell's result; healed
+  shape used only if it is valid, else original kept; prints either way.
+  Open question: the underlying reason BRepCheck rejects the shell result.
+
+## Session 152d -- pumpkin shell fixed; diagnostics retired
+- Doug's test: MakeThickSolid result was valid=False (inner shell flagged FORWARD, faces inward, volume right). `_heal_if_invalid` (ShapeFix_Shape) produced a valid shape and the section view is correct. Heal stays in shell() permanently; it prints only when it acts.
+- The HEALED report still shows shell 2 FORWARD / negative volume yet valid=True, so the per-shell volume line in `_report_shape` is not a reliable validity signal; trust `valid=`.
+- Root cause (why MakeThickSolid rejects the filleted COMPOUND input) still unknown. If healing ever fails: unwrap the compound to its solid before shelling.
+- Retired noise: the `[display-audit]` calls in redraw_after_shape_replace and the automatic INPUT/RESULT `[CheckPart]` reports in shell(). `_display_audit` and `_report_shape` remain; Utility -> Check Active Part still reports on demand.

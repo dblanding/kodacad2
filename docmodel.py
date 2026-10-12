@@ -1654,15 +1654,21 @@ class DocModel:
             itr.Next()
         return None
 
-    def save_step_doc(self):
-        """Export self.doc to STEP file."""
-        prompt = 'Specify name for saved step file.'
-        fname, __ = QFileDialog.getSaveFileName(None, prompt, './',
-                                                "STEP files (*.stp *.STP *.step *.STEP)")
-        if not fname:
-            print("Save step cancelled.")
-            return
-        fname = ensure_step_extension(fname)
+    def save_step_doc(self, *, fname=None):
+        """Export self.doc to STEP file. With fname=None, asks the user
+        for a name; otherwise writes to fname without any dialog
+        (Session 150: used by the .kcad session save). Keyword-only on
+        purpose: a menu action's triggered(bool) must never be taken
+        for a file name."""
+        if fname is None:
+            prompt = 'Specify name for saved step file.'
+            fname, __ = QFileDialog.getSaveFileName(
+                None, prompt, './',
+                "STEP files (*.stp *.STP *.step *.STEP)")
+            if not fname:
+                print("Save step cancelled.")
+                return False
+            fname = ensure_step_extension(fname)
 
         # DIAGNOSTIC (temporary, reinstated from Session 14 -- the
         # Session 16 fix did not resolve the regression in real
@@ -1846,6 +1852,7 @@ class DocModel:
                       f"{head[start:end + 1]}")
         except Exception:
             pass
+        return True
 
     def open_doc(self):
         """Open a previously saved .xbf file (stub -- use load_stp_at_top instead)."""
@@ -2498,8 +2505,10 @@ def save_step_doc(doc):
     assert status == IFSelect_RetDone
 
 
-def _load_step():
+def _load_step(f_path=None):
     """Allow user to select step file to load, return step_file_name, doc, app
+    (Session 150: pass f_path to skip the file dialog -- used when
+    loading the STEP inside a .kcad session file.)
 
     Shows a busy dialog during the (blocking) read+transfer -- big
     STEP files can take many seconds and the app otherwise looks
@@ -2517,12 +2526,13 @@ def _load_step():
     """
     from PySide6.QtWidgets import QProgressDialog, QApplication
     from PySide6.QtCore import Qt
-    prompt = 'Select STEP file to import'
-    f_path, __ = QFileDialog.getOpenFileName(
-        None, prompt, './', "STEP files (*.stp *.STP *.step *.STEP)")
-    if not f_path:
-        print("Load step cancelled")
-        return None, None, None
+    if f_path is None:
+        prompt = 'Select STEP file to import'
+        f_path, __ = QFileDialog.getOpenFileName(
+            None, prompt, './', "STEP files (*.stp *.STP *.step *.STEP)")
+        if not f_path:
+            print("Load step cancelled")
+            return None, None, None
     base = os.path.basename(f_path)
     step_file_name, ext = os.path.splitext(base)
 
@@ -2632,12 +2642,14 @@ def repair_unnamed_products(doc, context=""):
     return repaired
 
 
-def load_stp_at_top(dm):
-    """Get OCAF document from STEP file and assign it directly to dm.doc."""
+def load_stp_at_top(dm, f_path=None):
+    """Get OCAF document from STEP file and assign it directly to dm.doc.
+    Returns True if a document was loaded (False if cancelled/failed).
+    f_path=None asks the user for the file."""
     print("[load_stp_at_top] calling _load_step...")
-    f_name, doc, app = _load_step()
+    f_name, doc, app = _load_step(f_path)
     if doc is None:
-        return
+        return False
     print("[load_stp_at_top] assigning doc...")
     # CONFIRMED (Session 81, via Doug's own reproducible testing --
     # a crash that was 100% reproducible on the first reload attempt
@@ -2708,6 +2720,7 @@ def load_stp_at_top(dm):
     except Exception as _de:
         print(f"[load_stp_at_top] post-load dump failed: {_de}")
     print("[load_stp_at_top] done")
+    return True
 
 
 def load_stp_cmpnt(dm):

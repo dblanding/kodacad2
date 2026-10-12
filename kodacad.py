@@ -964,6 +964,7 @@ def shell(event=None):
         mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
         try:
             newPart = mkShell.Shape()
+            newPart = _heal_if_invalid(newPart, "shell")
             print(f"[shell] SUCCESS -- result ShapeType="
                  f"{newPart.ShapeType()} (analytic mapping "
                  f"{'used' if face_prep is not None else 'not needed'})")
@@ -1517,14 +1518,78 @@ def save_doc():
     dm.save_doc()
 
 
+def save_session():
+    """Save the session as a .kcad file: a zip holding the STEP model
+    (same bytes as Export STEP) plus workplanes.json (see wp_io.py).
+    The STEP is written to a temporary folder first; the .kcad is
+    written to a temporary name and renamed, so a failure never damages
+    an existing file."""
+    import os
+    import tempfile
+    import wp_io
+    from PySide6.QtWidgets import QFileDialog
+    fname, _ = QFileDialog.getSaveFileName(
+        win, "Save session", "./", "KodaCAD session (*.kcad)")
+    if not fname:
+        print("Save session cancelled.")
+        return
+    if not fname.lower().endswith(".kcad"):
+        fname += ".kcad"
+    stem = os.path.splitext(os.path.basename(fname))[0]
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            stp = os.path.join(td, stem + ".stp")
+            if not dm.save_step_doc(fname=stp):
+                return
+            wp_io.write_kcad(fname, stp, wp_io.collect_wp_state(win))
+    except Exception as e:
+        print(f"[save_session] failed: {e}")
+        win.statusBar().showMessage(
+            f"Save failed -- see terminal ({e})", 8000)
+        return
+    win.statusBar().showMessage(f"Session saved: {fname}", 5000)
+
+
+def export_step():
+    """File -> Export STEP: the model alone, as a plain STEP file."""
+    dm.save_step_doc()
+
+
 def load_session():
-    """Load a previously saved session from STEP file.
+    """Load a session: a .kcad file (model + workplanes) or a plain
+    STEP file (model only; the current workplanes are left alone).
 
     Replaces the entire document with the loaded file.
     The '/' root is preserved -- if the loaded file has its own root
     assembly it appears under '/'. Repeated save/load cycles do not
     accumulate extra '/' levels (same fix as Basicad item 30).
     """
+    import tempfile
+    import wp_io
+    from PySide6.QtWidgets import QFileDialog
+    f_path, _ = QFileDialog.getOpenFileName(
+        win, "Load session", "./",
+        "KodaCAD sessions and STEP files "
+        "(*.kcad *.stp *.STP *.step *.STEP);;"
+        "KodaCAD session (*.kcad);;STEP files (*.stp *.STP *.step *.STEP)")
+    if not f_path:
+        print("Load session cancelled.")
+        return
+    if f_path.lower().endswith(".kcad"):
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                stp_path, state = wp_io.read_kcad(f_path, td)
+                _load_session_from(stp_path, state)
+        except wp_io.KcadError as e:
+            win.statusBar().showMessage(str(e), 8000)
+            print(f"[load_session] {e}")
+    else:
+        _load_session_from(f_path, None)
+
+
+def _load_session_from(stp_path, wp_state):
+    """Shared body of load_session. wp_state is None for a plain STEP."""
+    import wp_io
     win.setActivePart(0)
     win.setActiveAsy(0)
     # Session 81, cont'd: clear the viewport's own AIS objects BEFORE
@@ -1553,8 +1618,12 @@ def load_session():
     except Exception as ce:
         print(f"[load_session] could not clear the viewport before "
              f"loading ({ce}) -- continuing regardless")
-    docmodel.load_stp_at_top(dm)
+    loaded = docmodel.load_stp_at_top(dm, stp_path)
+    if wp_state is not None and loaded:
+        wp_io.restore_wp_state(win, wp_state)
     win.build_tree()
+    if wp_state is not None and loaded:
+        wp_io.activate_saved_wp(win, wp_state)
     # DIAGNOSTIC (Doug's empty-part-then-Pull test: correct geometry
     # confirmed present after reload -- IsNull=False, faces=6 -- but
     # nothing draws). load_session() never clears self.hide_list,
@@ -1624,6 +1693,107 @@ def dumpDoc():
 def topoDumpAP():
     if win.activePart:
         Topology.dumpTopology(win.activePart)
+
+
+def _report_shape(shape, label):
+    """Print validity, solid / shell / face counts, volume, per-shell
+    orientation + volume, and whether the CENTER of the bounding box is
+    inside the material (a proper hollow reports OUT; filled reports IN).
+    Session 151/152 diagnostic; prints only, never raises."""
+    try:
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_SOLID, TopAbs_SHELL, TopAbs_FACE
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+        from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+        from OCP.gp import gp_Pnt
+
+        def _count(shp, kind):
+            n, e = 0, TopExp_Explorer(shp, kind)
+            while e.More():
+                n += 1
+                e.Next()
+            return n
+
+        def _vol(shp):
+            props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(shp, props)
+            return props.Mass()
+
+        print(f"[CheckPart] {label}: type={shape.ShapeType()} "
+              f"valid={BRepCheck_Analyzer(shape).IsValid()} "
+              f"solids={_count(shape, TopAbs_SOLID)} "
+              f"shells={_count(shape, TopAbs_SHELL)} "
+              f"faces={_count(shape, TopAbs_FACE)} "
+              f"volume={_vol(shape):.3f}")
+        box = Bnd_Box()
+        BRepBndLib.Add_s(shape, box)
+        x0, y0, z0, x1, y1, z1 = box.Get()
+        ctr = gp_Pnt((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
+        print(f"[CheckPart]   bbox center = ({ctr.X():.2f}, "
+              f"{ctr.Y():.2f}, {ctr.Z():.2f})")
+        se = TopExp_Explorer(shape, TopAbs_SOLID)
+        i = 0
+        while se.More():
+            i += 1
+            solid = se.Current()
+            st = BRepClass3d_SolidClassifier(solid, ctr, 1.0e-6).State()
+            print(f"[CheckPart]   solid {i}: volume={_vol(solid):.3f} "
+                  f"center is {st}")
+            he = TopExp_Explorer(solid, TopAbs_SHELL)
+            j = 0
+            while he.More():
+                j += 1
+                sh = he.Current()
+                print(f"[CheckPart]     shell {j}: orientation="
+                      f"{sh.Orientation()} volume={_vol(sh):.3f} "
+                      f"faces={_count(sh, TopAbs_FACE)}")
+                he.Next()
+            se.Next()
+    except Exception as e:
+        print(f"[CheckPart] {label}: report failed: {e}")
+
+
+def _heal_if_invalid(shape, label):
+    """If BRepCheck calls `shape` invalid, run ShapeFix_Shape on it and
+    return the repaired shape ONLY if that is valid; otherwise return the
+    original. (Session 152: MakeThickSolid's result on a filleted pumpkin
+    had its inner shell flagged FORWARD with inward faces -- right volume,
+    but valid=False and a wrong section cap; the STEP reader's own
+    ShapeFix pass is why a save/reload looked right.) Prints what it
+    did. Never raises."""
+    try:
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        from OCP.ShapeFix import ShapeFix_Shape
+        if BRepCheck_Analyzer(shape).IsValid():
+            return shape
+        sf = ShapeFix_Shape(shape)
+        sf.Perform()
+        fixed = sf.Shape()
+        ok = BRepCheck_Analyzer(fixed).IsValid()
+        print(f"[{label}] result was INVALID -- ShapeFix_Shape: "
+              f"repaired result valid={ok} "
+              f"({'using repaired shape' if ok else 'keeping original'})")
+        if ok:
+            _report_shape(fixed, f"{label} HEALED")
+            return fixed
+    except Exception as e:
+        print(f"[{label}] heal attempt failed: {e}")
+    return shape
+
+
+def checkActivePart():
+    """Utility -> Check Active Part (Session 151)."""
+    shape = win.activePart
+    if shape is None:
+        win.statusBar().showMessage("No active part.", 4000)
+        return
+    name = dm.label_dict.get(win.activePartUID, {}).get("name", "?")
+    _report_shape(shape, f"'{name}'")
+    win.statusBar().showMessage("Check Active Part: see terminal.", 4000)
 
 
 def printActiveAsyInfo():
@@ -2384,7 +2554,8 @@ if __name__ == "__main__":
     menu = win.menuBar()
     file_menu = win.add_menu("File")
     win.add_function_to_menu("File", "Load Session", load_session)
-    win.add_function_to_menu("File", "Save Session", dm.save_step_doc)
+    win.add_function_to_menu("File", "Save Session", save_session)
+    win.add_function_to_menu("File", "Export STEP", export_step)
     file_menu.addSeparator()
     win.add_function_to_menu("File", "Import STEP", import_step)
     edit_menu = win.add_menu("Edit")
@@ -2438,6 +2609,8 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
     win.add_function_to_menu("Utility", "dump doc", dumpDoc)
     win.add_function_to_menu("Utility", "Topology of Act Prt", topoDumpAP)
+    win.add_function_to_menu("Utility", "Check Active Part",
+                             checkActivePart)
     win.add_function_to_menu(
         "Utility", "print(Active Wp Info)", printActiveWpInfo)
     win.add_function_to_menu(

@@ -2209,6 +2209,9 @@ class MainWindow(QMainWindow):
         Session 136/78. ref_entry/old_uids MUST be captured BEFORE
         replace_shape: uids are entry+serial and the serial changes
         on every parse_doc()."""
+        # Session 152d: the _display_audit() calls that used to bracket
+        # this were retired once they disproved the orphaned-object theory.
+        # The method is kept below; call it here again if needed.
         self.build_tree()
         if ref_entry:
             force = {u for u, info in dm.label_dict.items()
@@ -2217,6 +2220,30 @@ class MainWindow(QMainWindow):
         else:
             force = set()
         self._incremental_reconcile(old_uids, force_redraw_uids=force)
+
+    def _display_audit(self, where):
+        """Session 152 diagnostic: how many interactive objects the
+        viewer is displaying right now, versus the part AIS objects we
+        track. Looking for an operation that leaves an extra (orphaned)
+        object on screen -- e.g. the pre-shell shape still drawn
+        under the shelled one. Prints; changes nothing."""
+        try:
+            from OCP.AIS import AIS_ListOfInteractive
+            lst = AIS_ListOfInteractive()
+            self.canvas._display.Context.DisplayedObjects(lst)
+            try:
+                n = len(lst)
+            except TypeError:
+                n = lst.Size()
+            n_wp = sum(len(v) for v in
+                       getattr(self, "_wp_ais_reg", {}).values())
+            print(f"[display-audit] {where}: displayed={n} "
+                  f"tracked_parts={len(self.ais_shape_dict)} "
+                  f"wp_objects={n_wp}")
+        except Exception as e:
+            if not getattr(self, "_audit_warned", False):
+                print(f"[display-audit] unavailable: {e}")
+                self._audit_warned = True
 
     def _incremental_reconcile(self, old_uids, redraw_all_survivors=False,
                                force_redraw_uids=None, reason_map=None):
