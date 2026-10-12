@@ -8,11 +8,12 @@ A from-scratch 3D CAD application
 * Patterned after HP's dynamic modeling lineage (ME-30 → SolidDesigner)
 * Part creation workflow: workplane → sketch → extrude/revolve → modify 
 * Intended to meet the basic requirements in a typical CAD workflow:
-    * Start a new session or load a previous one (saved in STEP format)
+    * Start a new session or load a previous one (saved as a `.kcad`
+      file: the STEP model plus your workplanes)
     * Import components in STEP format
     * Position them within an assembly structure
     * Create simple mounting plates & brackets
-    * Save session in STEP format
+    * Save session as `.kcad`, or export the 3D model as plain STEP
 
 Designed for users who want to assemble, modify, and create
 3D mechanical parts and assemblies using a scriptable, open-source
@@ -78,11 +79,48 @@ Dependencies (managed automatically by uv):
 
 ### Loading a STEP file
 
+### Saving and loading
+
+KodaCAD's native session file is a **`.kcad`** file. It is an ordinary
+zip archive holding two things side by side, in the spirit of NumPy's
+`.npz`:
+
+```
+mypart.kcad
+  mypart.stp        the 3D model -- a standard STEP file
+  workplanes.json   the workplanes, plain text
+```
+
+The STEP half carries everything a STEP file can: the assembly
+structure, part names, colors, shared instances. The JSON half carries
+what STEP has no place for: each workplane's position in 3D, its
+sketched profile geometry (lines, circles, arcs), its construction
+geometry, which workplanes are hidden, and which one was active. The
+file is plain data -- nothing in it is executed when it loads -- and
+because it is a zip, you can always open it with any archive tool and
+pull out the `.stp` by hand.
+
+**File → Save Session**
+Writes a `.kcad` file holding the model *and* your workplanes. The file
+is written to a temporary name and swapped into place only when
+complete, so a failed save never damages an existing file.
+
 **File → Load Session**
-Loads a previously saved KodaCAD session or any STEP file with assembly
-structure. *Replaces the entire current document* -- whatever was open
-before is gone. The loaded file's own content becomes the session, with
-no wrapping or nesting involved.
+Opens a `.kcad` file -- or any plain `.stp` / `.step` file with
+assembly structure. *Replaces the entire 3D document* -- whatever was
+open before is gone. The loaded file's own content becomes the session,
+with no wrapping or nesting involved.
+
+What happens to workplanes depends on the file. A `.kcad` file brings
+its own workplanes and replaces the ones on screen. A plain STEP file
+has no workplanes to bring, so it **leaves your current workplanes
+alone** -- handy for loading a part or assembly and sketching on it
+with the workplanes you already have set up.
+
+**File → Export STEP**
+Writes the 3D model alone, as a plain STEP file, for opening in other
+CAD applications or sharing with people who don't use KodaCAD. No
+workplanes are included.
 
 **File → Import STEP**
 *Adds* a STEP file as a new component under the current `/`, alongside
@@ -92,12 +130,36 @@ an existing root, so it's the one that needs to guard against a saved
 session's own `/` wrapper getting nested under the current one --
 which it does automatically (see below).
 
-**File → Save Session**
-Saves the current state to a STEP file. This is KodaCAD's native save
-format -- STEP files can be reloaded exactly as saved, and opened in
-any other CAD application.
+#### What a session does *not* save
 
-**Why repeated save/load/import cycles stay clean:** Save strips any
+- **Undo/Redo history.** Loading starts you with a clean history.
+- **Display-only face colors** (Color Faces...), which are an
+  illustration aid, not part of the model.
+- **A workplane's link to the face it was placed on.** The workplane
+  keeps its position in space; it just no longer remembers which face
+  it came from.
+
+#### Undo and Redo apply to the 3D model only
+
+Undo (Ctrl+Z) and Redo (Ctrl+Y) step through changes to the **3D
+model** -- extrudes, pulls, fillets, shells, positioning, renaming and
+so on. **Workplanes and their sketch geometry are not part of that
+history.** Drawing a line, deleting an element, or repositioning a
+workplane cannot be undone with Ctrl+Z, and undoing a 3D operation
+will not rewind your sketches. Workplanes are your construction
+scaffolding rather than the model itself, and they live outside the
+document that Undo/Redo manages.
+
+In practice this means: Undo is safe to use freely on the model without
+disturbing your sketches, but a workplane edit is final until you make
+the opposite edit yourself. Since a workplane's state is only stored
+when you save, **Save Session before experimenting** with sketch work
+you might want back -- the `.kcad` file is your safety net for
+workplanes.
+
+#### Why repeated save/load/import cycles stay clean
+
+Save strips any
 redundant `/` wrapper before writing, so a saved file never contains
 one to begin with. Load Session replaces the whole document rather
 than nesting anything, so there's nothing for a wrapper to accumulate
@@ -213,6 +275,7 @@ kodacad2/
   mainwindow.py       MainWindow, TreeView
   docmodel.py         XDE document model (core -- read this first)
   workplane.py        2D workplane geometry
+  wp_io.py            .kcad session container + workplane save/restore
   m2d.py              2D sketch toolbar
   koda_viewport.py    OCP 3D viewport (AIS_ViewController)
   stepanalyzer.py     STEP structure analysis utility
@@ -231,6 +294,8 @@ kodacad2/
     chassis/            build an assembly from scratch (Quaoar's chassis)
     lathe/              organizing and navigating a large assembly
     jack/               sketch a jack-o'-lantern face, then carve a pumpkin
+    defeaturing/        remove holes and features, heal the gap
+    lofting/            loft through a workplane set, then work it over
   pyproject.toml      uv project file
 ```
 

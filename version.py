@@ -1,5 +1,20 @@
 """Single source of truth for the KodaCAD application version.
 
+2.2.0 -- 2026-10-12 (Sessions 149-152)
+* Native session format: File -> Save Session now writes a .kcad file
+  (a zip holding the STEP model plus workplanes.json), so workplanes,
+  their sketch geometry and construction geometry survive a save and
+  reload. Plain .stp/.step files still load; File -> Export STEP writes
+  a plain STEP for other CAD programs.
+* Workplane profile geometry is stored as plain data (lines, circles,
+  arcs) with edges derived from it -- lean to save, and ready for
+  curves (NURBS) that can't be recovered from their edges.
+* Display-only face coloring (for tutorial illustrations).
+* Undo/Redo now keeps the active part, and the face-pick dialogs keep
+  working across it.
+* Shell repairs an invalid MakeThickSolid result instead of showing a
+  ghost of the unshelled part.
+
 2.1.2 -- 2026-10-08 (Session 143)
 * Bi-directional Pull
 * Boolean (Fuse + Subtract)
@@ -34,4 +49,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.2.0"

@@ -7145,3 +7145,7 @@ Untested in OCP.
 - The HEALED report still shows shell 2 FORWARD / negative volume yet valid=True, so the per-shell volume line in `_report_shape` is not a reliable validity signal; trust `valid=`.
 - Root cause (why MakeThickSolid rejects the filleted COMPOUND input) still unknown. If healing ever fails: unwrap the compound to its solid before shelling.
 - Retired noise: the `[display-audit]` calls in redraw_after_shape_replace and the automatic INPUT/RESULT `[CheckPart]` reports in shell(). `_display_audit` and `_report_shape` remain; Utility -> Check Active Part still reports on demand.
+
+## Session 153 -- version 2.2.0, README, plain-STEP load keeps workplanes
+- version.py -> 2.2.0 (minor: new capability, nothing breaking); README gains "Saving and loading", "What a session does not save", and "Undo and Redo apply to the 3D model only".
+- Doug verified: loading a .kcad (with workplanes) and then a plain .stp as a session leaves the .kcad's workplanes in the tree. Intended behavior (wp_state is None -> restore_wp_state not called); documented in the README. Loading a .kcad replaces the workplanes.
