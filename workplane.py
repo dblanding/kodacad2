@@ -986,7 +986,16 @@ class WorkPlane():
             self.line(a, b)
 
     def circle(self, cntr, rad, constr=False):
-        """Create a circle (constr or profile)"""
+        """Create a circle (constr or profile). Returns True if made,
+        False if refused. A circle of (near-)zero radius is refused
+        (Session 154): OCCT can't draw it ("Zero Deflection"), and one
+        stored in ccircs made draw_wp raise on EVERY redraw of the
+        workplane, which also broke the tree's show/hide checkboxes."""
+        if not (rad > 1.0e-9):
+            print(f"[workplane.circle] refused: radius {rad!r} at "
+                  f"center {cntr!r} on {getattr(self, 'name', '?')} "
+                  f"(constr={constr})")
+            return False
         circ = (cntr, rad)
         if constr:
             self.ccircs.add(circ)
@@ -997,6 +1006,7 @@ class WorkPlane():
         else:
             self.add_prim({"type": "circle", "c": self._uv(cntr),
                            "r": float(rad)})
+        return True
 
     def convert_circ_to_geomCirc(self, circ):
         """Convert 2d circle ((cx, cy), r) to type <Geom_Circle>"""

@@ -2687,7 +2687,17 @@ class MainWindow(QMainWindow):
             # path survives only as a fallback that these markers no
             # longer feed. wp.intersectPts() itself remains available
             # in workplane.py.
-            for ccirc in wp.ccircs:
+            # Session 154: a degenerate (zero-radius) construction circle
+            # makes context.Display raise "Zero Deflection", which used
+            # to abort draw_wp for this workplane on EVERY redraw (the
+            # tree checkboxes stopped working). Discard such circles and
+            # never let one bad entity stop the rest from drawing.
+            for _bad in [c for c in wp.ccircs if not (c[1] > 1.0e-9)]:
+                print(f"[draw_wp] discarding degenerate construction "
+                      f"circle {_bad!r} on {getattr(wp, 'name', '?')}")
+                wp.ccircs.discard(_bad)
+            for ccirc in list(wp.ccircs):
+              try:
                 aiscirc = AIS_Circle(wp.convert_circ_to_geomCirc(ccirc))
                 # (was aisline.Attributes() -- the LAST cline's
                 # drawer, a NameError on any wp with circles but no
@@ -2702,6 +2712,8 @@ class MainWindow(QMainWindow):
                 context.Display(aiscirc, False)  # (see comment below)
                 self.canvas._display.add_never_pick(aiscirc)
                 # 'False' above enables 'context' mode display & selection
+              except Exception as cce:
+                print(f"[draw_wp] ccirc {ccirc!r} display failed: {cce}")
             for edge in wp.edgeList:
                 # BOLD BLACK geometry (Session 62, Doug: Creo E/D
                 # draws geometry in bold black and it reads far

@@ -7149,3 +7149,9 @@ Untested in OCP.
 ## Session 153 -- version 2.2.0, README, plain-STEP load keeps workplanes
 - version.py -> 2.2.0 (minor: new capability, nothing breaking); README gains "Saving and loading", "What a session does not save", and "Undo and Redo apply to the 3D model only".
 - Doug verified: loading a .kcad (with workplanes) and then a plain .stp as a session leaves the .kcad's workplanes in the tree. Intended behavior (wp_state is None -> restore_wp_state not called); documented in the README. Loading a .kcad replaces the workplanes.
+
+## Session 154 -- zero-radius circle poisoned draw_wp
+- Symptom (Doug, wp3 built by 3 points off wp1): creating a construction or geometry circle raised `GCPnts_TangentialDeflection::Initialize - Zero Deflection` in `context.Display(aiscirc)`; afterwards the tree's show/hide checkboxes for workplanes stopped working (same exception from `adjust_draw_hide` -> `draw_wp`).
+- Cause: a circle of zero radius reached `wp.circle()` and was stored (`ccircs`). Every later `draw_wp` of that workplane re-raised on it, aborting the whole redraw (and `adjust_draw_hide`'s loop). Why the radius was zero on wp3 specifically (center and 2nd pick coinciding? a snap/screen_to_uv quirk on the tilted plane?) is NOT yet known.
+- Fix: `wp.circle` refuses radius <= 1e-9 and returns False (prints center and radius); m2d's four circle paths show a status message and print center/2nd pick (`_zero_radius_msg`); `draw_wp` discards degenerate ccircs already stored and wraps each ccirc display in try/except.
+- To learn the cause: reproduce on wp3 and read the `[circle] zero radius refused: center=... second pick=...` line.

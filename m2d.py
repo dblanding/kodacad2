@@ -1626,6 +1626,14 @@ class M2D:
             "Fillet applied. Pick another corner (same radius) or "
             "End Operation.")
 
+    def _zero_radius_msg(self, p1, p2):
+        """Session 154: a circle was refused for zero radius."""
+        print(f"[circle] zero radius refused: center={p1!r} "
+              f"second pick={p2!r}")
+        self.win.statusBar().showMessage(
+            "Circle not created: radius is zero (center and second "
+            "point coincide).", 5000)
+
     def ccirc(self):
         """Create a c-circle from center & radius or center & Pnt on circle"""
         wp = self.win.activeWp
@@ -1633,14 +1641,16 @@ class M2D:
             p2 = self.win.xyPtStack.pop()
             p1 = self.win.xyPtStack.pop()
             rad = wp.p2p_dist(p1, p2)
-            wp.circle(p1, rad, constr=True)
+            if not wp.circle(p1, rad, constr=True):
+                self._zero_radius_msg(p1, p2)
             self.win.xyPtStack = []
             self.win.floatStack = []
             self.win.draw_wp(self.win.activeWpUID)
         elif self.win.xyPtStack and self.win.floatStack:
             pnt = self.win.xyPtStack.pop()
             rad = self.win.floatStack.pop() * self.win.unitscale
-            wp.circle(pnt, rad, constr=True)
+            if not wp.circle(pnt, rad, constr=True):
+                self._zero_radius_msg(pnt, None)
             self.win.xyPtStack = []
             self.win.floatStack = []
             self.win.draw_wp(self.win.activeWpUID)
@@ -1854,7 +1864,8 @@ class M2D:
             p2 = self.win.xyPtStack.pop()
             p1 = self.win.xyPtStack.pop()
             rad = wp.p2p_dist(p1, p2)
-            wp.circle(p1, rad, constr=False)
+            if not wp.circle(p1, rad, constr=False):
+                self._zero_radius_msg(p1, p2)
             self.win.xyPtStack = []
             self.win.floatStack = []
             self._preview_stop()
@@ -1863,7 +1874,8 @@ class M2D:
         elif self.win.xyPtStack and self.win.floatStack:
             pnt = self.win.xyPtStack.pop()
             rad = self.win.floatStack.pop() * self.win.unitscale
-            wp.circle(pnt, rad, constr=False)
+            if not wp.circle(pnt, rad, constr=False):
+                self._zero_radius_msg(pnt, None)
             self.win.xyPtStack = []
             self.win.floatStack = []
             self._preview_stop()
