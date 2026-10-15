@@ -7155,3 +7155,7 @@ Untested in OCP.
 - Cause: a circle of zero radius reached `wp.circle()` and was stored (`ccircs`). Every later `draw_wp` of that workplane re-raised on it, aborting the whole redraw (and `adjust_draw_hide`'s loop). Why the radius was zero on wp3 specifically (center and 2nd pick coinciding? a snap/screen_to_uv quirk on the tilted plane?) is NOT yet known.
 - Fix: `wp.circle` refuses radius <= 1e-9 and returns False (prints center and radius); m2d's four circle paths show a status message and print center/2nd pick (`_zero_radius_msg`); `draw_wp` discards degenerate ccircs already stored and wraps each ccirc display in try/except.
 - To learn the cause: reproduce on wp3 and read the `[circle] zero radius refused: center=... second pick=...` line.
+
+## Session 155 -- Dynamic move status in the user's units
+- Position dialog's Dynamic drag reported "Dragging: N mm from start." regardless of the units setting. `_on_manip_move` now divides by `main_win.unitscale` and shows the unit label (2 places mm, 3 in, 4 ft). Internal values stay mm.
+- grep for other showMessage calls hard-coding mm/.2f found none.

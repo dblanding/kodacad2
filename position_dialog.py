@@ -747,7 +747,13 @@ class PositionDialog(QDialog):
         tp = delta_trsf.TranslationPart()
         dist = (tp.X() ** 2 + tp.Y() ** 2 + tp.Z() ** 2) ** 0.5
         if dist > 1e-6:
-            self.main_win.statusBar().showMessage(f"Dragging: {dist:.2f} mm from start.")
+            # Session 155: report in the user's units (internal is mm)
+            mw = self.main_win
+            scale = getattr(mw, "unitscale", 1.0) or 1.0
+            units = getattr(mw, "units", "mm")
+            places = {"mm": 2, "in": 3, "ft": 4}.get(units, 3)
+            mw.statusBar().showMessage(
+                f"Dragging: {dist / scale:.{places}f} {units} from start.")
         else:
             self.main_win.statusBar().showMessage("Dragging (rotation).")
 
