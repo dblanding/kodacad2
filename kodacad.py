@@ -7,10 +7,16 @@
 #
 
 
+import faulthandler
 import logging
 import math
 import pprint
 import sys
+
+# Session 159: a NATIVE crash (segfault in OCCT) otherwise leaves nothing
+# in the terminal. faulthandler prints the Python stack at the moment of
+# the fault, which says which of our lines was running.
+faulthandler.enable()
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -34,7 +40,7 @@ from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
-                               QHBoxLayout, QLabel, QMenu,
+                               QHBoxLayout, QLabel, QLineEdit, QMenu,
                                QMessageBox, QPushButton,
                                QTreeWidgetItemIterator, QVBoxLayout)
 
@@ -46,6 +52,7 @@ from OCCUtils import Topology
 import workplane
 from workplane import face_normal
 import isolated_features
+import face_offset
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # set to DEBUG | INFO | ERROR
@@ -1502,6 +1509,306 @@ def show_defeaturing_dialog(main_win):
         dlg.raise_()
         dlg.activateWindow()
 
+def _commit_shape(uid, newPart, label=""):
+    """Write `newPart` back to the active part as ONE undo step and
+    redraw it (and every instance sharing its prototype). Same tail as
+    _defeaturing_execute / shell(). Returns (ok, message)."""
+    try:
+        win.erase_shape(uid)
+        ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
+        old_uids = set(dm.part_dict.keys())
+        with docmodel.undo_transaction(dm):
+            dm.replace_shape(uid, newPart)
+        _redraw_after_shape_replace(ref_entry, old_uids)
+        win.setActivePart(uid)
+        return True, ""
+    except Exception as e:
+        print(f"[{label}] unable to replace/draw shape: {e}")
+        win.redraw()
+        return False, f"Unable to replace/draw shape: {e}"
+
+
+class MoveFaceDialog(QDialog):
+    """Create/Modify -> Move Face (Session 157).
+
+    Pick one or more faces, type a distance, Apply. Each picked face is
+    moved along its outward normal by that distance and its neighbours
+    are extended or trimmed to follow (OCCT's BRepOffset_MakeOffset with
+    a per-face offset -- see face_offset.py and probe_offset_faces.py).
+
+    + adds material (grows a boss, narrows a slot or hole);
+    - removes material (widens a slot or hole).
+
+    OCCT carries the move across faces joined TANGENTLY to the picked
+    one: pick one wall of a slot and the other wall and the round end
+    move with it; on a part with filleted edges the move spreads around
+    the whole tangent chain. So, as soon as faces are picked, the faces
+    that WILL move are shown: picked faces orange, faces that follow
+    them yellow (display-only colors, the same mechanism as Color
+    Faces; they disappear when the shape changes).
+    """
+    PICK_RGB = (1.0, 0.45, 0.0)
+    CHAIN_RGB = (1.0, 0.85, 0.3)
+
+    def __init__(self, main_win):
+        super().__init__(main_win)
+        self.main_win = main_win
+        self.setWindowTitle("Move Face")
+        self.setModal(False)
+        self.face_stack = []
+        self._colored_uid = None
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Modifying part:"))
+        self.part_label = QLabel()
+        _bold = QFont()
+        _bold.setBold(True)
+        self.part_label.setFont(_bold)
+        self.part_label.setWordWrap(True)
+        lay.addWidget(self.part_label)
+
+        info = QLabel(
+            "Click the face(s) to move, enter a distance, then Apply.\n"
+            "+ adds material (narrows a slot or hole); "
+            "- removes material (widens it).\n"
+            "Orange = picked.  Yellow = also moves (tangent to a "
+            "picked face).\n"
+            "Not for faces bounded by fillets (blends): remove them "
+            "first (Defeaturing), move the face, then re-fillet.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Distance:"))
+        self.dist_edit = QLineEdit()
+        self.dist_edit.setPlaceholderText("e.g. 0.25  or  -0.25")
+        row.addWidget(self.dist_edit)
+        self.units_label = QLabel(win.units)
+        row.addWidget(self.units_label)
+        lay.addLayout(row)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        lay.addWidget(self.status_label)
+
+        btn_row = QHBoxLayout()
+        self.apply_btn = QPushButton("\u2705 Apply")
+        self.apply_btn.clicked.connect(self._on_apply)
+        btn_row.addWidget(self.apply_btn)
+        self.clear_btn = QPushButton("Clear Selection")
+        self.clear_btn.clicked.connect(self._on_clear)
+        btn_row.addWidget(self.clear_btn)
+        self.done_btn = QPushButton("\u23f9 Done")
+        self.done_btn.clicked.connect(self._on_done)
+        btn_row.addWidget(self.done_btn)
+        lay.addLayout(btn_row)
+
+        self._refresh_header()
+        self._update_status()
+        self._start_picking()
+        win._history_listeners.append(self._after_history)
+
+    # -- plumbing shared with the other pick dialogs ------------------
+    def _after_history(self):
+        """Undo/Redo redraws the part and ends face picking: re-arm it
+        (unless another tool took over) and drop stale picks."""
+        if win.registeredCallback is None or \
+                win.registeredCallback == self._on_pick:
+            self.face_stack = []
+            self._colored_uid = None
+            self._refresh_header()
+            self._update_status()
+            self._start_picking()
+
+    def _detach_history(self):
+        try:
+            win._history_listeners.remove(self._after_history)
+        except ValueError:
+            pass
+
+    def _refresh_header(self):
+        uid = win.activePartUID
+        name = ""
+        if uid is not None and hasattr(dm, "get_full_path_name"):
+            try:
+                name = dm.get_full_path_name(uid)
+            except Exception:
+                name = str(uid)
+        self.part_label.setText(name)
+        self.units_label.setText(win.units)
+
+    def _update_status(self, extra=""):
+        base = f"{len(self.face_stack)} face(s) picked."
+        self.status_label.setText(f"{extra}  {base}" if extra else base)
+
+    def _start_picking(self):
+        win.registerCallback(self._on_pick)
+        display.SetSelectionModeFace()
+
+    # -- display-only preview of what will move -----------------------
+    def _clear_preview(self, redraw=True):
+        uid = self._colored_uid
+        self._colored_uid = None
+        if uid is None:
+            return
+        if redraw:
+            win.clear_face_colors(uid)
+        else:
+            win.face_colors.pop(uid, None)
+
+    def _show_preview(self):
+        """Color picked faces orange and the tangent-chain faces that
+        will follow them yellow. Never fatal: any failure just means no
+        colors."""
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        if cached is None or not self.face_stack:
+            self._clear_preview()
+            return
+        try:
+            print(f"[MoveFace] preview: {len(self.face_stack)} picked", flush=True)
+            chain = face_offset.tangent_chain(cached[1], self.face_stack)
+            print(f"[MoveFace] preview: tangent chain has {len(chain)} faces", flush=True)
+            followers = [f for f in chain
+                         if not any(f.IsSame(p) for p in self.face_stack)]
+            win.clear_face_colors(uid)
+            if followers:
+                win.set_face_colors(uid, followers, self.CHAIN_RGB)
+            win.set_face_colors(uid, self.face_stack, self.PICK_RGB)
+            self._colored_uid = uid
+            if followers:
+                self._update_status(
+                    f"{len(followers)} more face(s) will move with them "
+                    f"(yellow).")
+        except Exception as e:
+            print(f"[MoveFace] preview failed: {e}")
+        # redisplay resets selection mode / callback: re-arm picking
+        self._start_picking()
+
+    def _on_pick(self, shapeList, *args):
+        if not shapeList:
+            return
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        ref_shape = cached[1] if cached is not None else win.activePart
+        ref_faces = list(Topology.Topo(ref_shape).faces()) \
+            if ref_shape is not None else []
+        added = False
+        for shape in shapeList:
+            try:
+                face = TopoDS.Face_s(shape)
+            except Exception:
+                self._update_status("Pick a face (not an edge or vertex).")
+                return
+            if not any(face.IsSame(f) for f in ref_faces):
+                self._update_status("Selected face must be in Active Part.")
+                return
+            if not any(face.IsSame(f) for f in self.face_stack):
+                self.face_stack.append(face)
+                added = True
+        self._update_status()
+        if added:
+            self._show_preview()
+
+    def _on_clear(self):
+        self.face_stack = []
+        self._clear_preview()
+        self._update_status()
+        self._start_picking()
+
+    def _on_apply(self):
+        if not require_active_part("Move Face"):
+            return
+        uid = win.activePartUID
+        if not self.face_stack:
+            self._update_status("Pick at least one face before Apply.")
+            return
+        try:
+            dist_user = float(self.dist_edit.text().strip())
+        except ValueError:
+            self._update_status("Enter a distance (a number; negative "
+                                "removes material).")
+            return
+        dist = dist_user * win.unitscale   # internal units are mm
+        picked = list(self.face_stack)
+
+        workPart, _ref, face_pairs = _defeaturing_workpart(uid)
+        seeds = _defeaturing_map_picked_faces(picked, workPart, face_pairs)
+        if not seeds:
+            self._update_status("No usable faces to move.")
+            return
+
+        print(f"[MoveFace] Apply: {len(seeds)} face(s), {dist:+.4f} mm -- "
+              f"calling offset", flush=True)
+        newPart, msg = face_offset.offset_faces(workPart, seeds, dist)
+        print(f"[MoveFace] offset returned "
+              f"({'ok' if newPart is not None else 'failed'}"
+              f"{', ' + msg if msg else ''})", flush=True)
+        if newPart is None:
+            self._update_status(msg)
+            self._start_picking()
+            return
+        if msg == "invalid":
+            newPart = _heal_if_invalid(newPart, "move face")
+            if not BRepCheck_Analyzer(newPart).IsValid():
+                self._update_status(
+                    "The result was not a valid solid, so nothing was "
+                    "changed. Try a smaller distance.")
+                self._start_picking()
+                return
+        ok, v0, v1 = face_offset.sane(workPart, newPart)
+        if not ok:
+            self._update_status("The result looks wrong (no volume), so "
+                                "nothing was changed.")
+            self._start_picking()
+            return
+        print(f"[MoveFace] {len(seeds)} picked face(s) moved "
+              f"{dist:+.4f} mm: volume {v0:.3f} -> {v1:.3f} "
+              f"({v1 - v0:+.3f})")
+
+        self._clear_preview(redraw=False)   # colors belong to the old shape
+        self.face_stack = []
+        committed, cmsg = _commit_shape(uid, newPart, "MoveFace")
+        if committed:
+            dv = (v1 - v0) / (win.unitscale ** 3)
+            self._update_status(
+                f"Moved by {dist_user:g} {win.units}; volume "
+                f"{dv:+.4g} {win.units}\u00b3. Ctrl+Z undoes.")
+        else:
+            self._update_status(cmsg)
+        self._refresh_header()
+        self._start_picking()
+
+    def _on_done(self):
+        self._detach_history()
+        self._clear_preview()
+        win.clearCallback()
+        self.close()
+
+    def closeEvent(self, event):
+        self._detach_history()
+        if self._colored_uid is not None:
+            try:
+                self._clear_preview()
+            except Exception:
+                pass
+        win.clearCallback()
+        super().closeEvent(event)
+
+
+def show_move_face_dialog(main_win):
+    if not require_active_part("Move Face"):
+        return
+    dlg = getattr(main_win, "_move_face_dialog", None)
+    if dlg is None or not dlg.isVisible():
+        dlg = MoveFaceDialog(main_win)
+        main_win._move_face_dialog = dlg
+        dlg.show()
+    else:
+        dlg.raise_()
+        dlg.activateWindow()
+
+
 #############################################
 #
 #  Save / Open / Load functions
@@ -2595,6 +2902,9 @@ if __name__ == "__main__":
     win.add_function_to_menu(
         "Create/Modify", "Defeaturing...",
         lambda: show_defeaturing_dialog(win))
+    win.add_function_to_menu(
+        "Create/Modify", "Move Face...",
+        lambda: show_move_face_dialog(win))
     win.add_menu("Position")
     win.add_function_to_menu("Position", "Workplane", position_selected_wp)
     win.add_function_to_menu("Position", "Part/Asy", position_selected)

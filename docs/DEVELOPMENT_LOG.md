@@ -7174,3 +7174,40 @@ Untested in OCP.
 - C2 (walls only, round end NOT listed) gave volumes identical to C: the tangent round end appears to have moved with the walls (to be confirmed from the radii printed in run 2).
 - Cases C, C2, D returned valid results with solids=0 (a shell, not a solid; inputs from Cut/Chamfer are compounds). A Move Face tool must rebuild a solid from the shell (ShapeFix_Solid.SolidFromShell) or unwrap input.
 - Run 2 adds: as_solid wrap check, hole resize, two different offsets in one call, compound input, filleted-neighbour case; Arc join and intersection=True dropped.
+
+## Session 157 -- Create/Modify -> Move Face...
+- Built on probe_offset_faces.py runs 1-2 (Session 156/156b). New module `face_offset.py` (no GUI): `offset_faces` (BRepOffset_MakeOffset, default offset 0, SetOffsetOnFace per face, join=GeomAbs_Intersection, tol 1e-4), `as_solid` (shell -> ShapeFix_Solid.SolidFromShell), `tangent_chain` (G1-connected faces from the picks, via edge->face map + BRep_Tool.Continuity_s), `sane` (volume > 0 and faces > 0).
+- `kodacad.py`: `MoveFaceDialog` + `show_move_face_dialog` (non-modal; pick faces, signed distance in the user's units, Apply / Clear Selection / Done; history-listener re-arm like the other pick dialogs), `_commit_shape` (erase, undo_transaction, replace_shape, redraw -- same tail as Shell/Defeaturing), menu item Create/Modify -> "Move Face..." (Doug asked for the menu bar, not the RMB tree menu).
+- Sign: + ADDS material (narrows a slot/hole), - REMOVES it -- kernel's outward-normal sign, stated in the dialog.
+- Display-only preview: picked faces orange, tangent-chain followers yellow (via set_face_colors; cleared on Apply/Clear/Done). The chain is OUR estimate shown to the user; OCCT decides what actually moves.
+- Guards: exactly one solid required; zero distance refused; IsDone false / exception -> message, nothing changed; invalid result -> _heal_if_invalid, refuse if still invalid; non-positive volume refused.
+- UNTESTED in the app (OCP not installable in the sandbox). Not done yet: live preview while dragging, per-face different distances, face-pick toggle-off, tutorial.
+- Session 157 result (Doug, 2026-10-18): TESTED on the geneva wheel -- front face moved (thickened); one slot wall picked, the other 2 faces of the tangent chain turned yellow, Apply narrowed the slot; save/load session round-tripped the modified part. Worked first try.
+
+### Session 157b -- Move Face on filleted / chamfered parts (Doug)
+- Chamfered top edges, move front face +5 mm: WORKED -- chamfer faces extended to the offset face (as probe case D predicted); volume +224668 mm3.
+- Fillets on every top-face edge, pick the top face: the tangent chain (preview, yellow) was the top face + all fillets + all walls tangent to them (incl. slot walls, round ends, outer arcs). Apply with 10 mm FAILED ("could not be turned into a solid"; no exception printed, i.e. the result had no shell).
+- Interpretation (likely, not yet confirmed): because OCCT carries the offset across tangent faces, moving a filleted top face is not "raise the top" but "inflate the whole tangent skin by d"; 10 mm exceeds the slot half-width (and may exceed concave radii), so the offset collapses and OCCT returns something that isn't a closed shell. Retest with a small distance (0.5 mm) to confirm the "inflate the skin" behavior. face_offset.offset_faces now prints result type/solid/shell/face counts, and its message names "distance too large" as the usual cause.
+- Design implication: the true CoCreate behavior for a face bounded by fillets (move the face, let the fillets re-form) is NOT what this kernel call does. Options for later: Defeaturing -> Move Face -> re-Fillet; or limit the offset to non-tangent boundaries and say so.
+
+## Session 158 -- Move Face: offset runs in a worker process
+- Doug: filleted geneva wheel, top face, 0.5 mm -> the whole app CRASHED with nothing in the terminal (a native fault inside BRepOffset_MakeOffset; the same pick at 10 mm merely failed). A native crash can't be caught in Python.
+- Fix: `face_offset.offset_faces` now runs the OCCT call in a short-lived subprocess (`face_offset_worker.py`, started with `sys.executable -I`). The shape goes over as a BREP file, faces by index (the worker checks face count and the picked faces' areas match, so it offsets the right faces), the raw result comes back as BREP. Worker exit code != 0 -> "OpenCascade crashed on this offset (the application is fine ...)"; 120 s timeout; if the worker can't even start it falls back to in-process with a printed warning. The crash itself is NOT fixed -- it is contained.
+- Costs ~1-2 s per Apply (process start + OCP import). A live preview will need a persistent worker (keep one process alive, restart if it dies).
+- Root cause of the crash still unknown. To find it: `uv run python -X faulthandler kodacad.py` prints the Python stack at a native fault; or run the worker by hand on a saved BREP.
+
+## Session 159 -- Move Face crash is NOT in the offset worker; instrumenting
+- Doug retried filleted top face at 0.5 mm with the worker in place: the app still died. Terminal shows NO [MoveFace]/[face_offset] line at all (the worker-died message would have printed if the worker had crashed), so the fault is in the PARENT process, before or around the subprocess launch -- or in the preview step (tangent_chain / set_face_colors) -- not (only) in BRepOffset_MakeOffset.
+- Added: `faulthandler.enable()` at the top of kodacad.py (prints the Python stack at a native fault) and in the worker; flushed breadcrumb prints at each stage (preview picked/chain size, Apply, writing shape, starting worker, worker exit code, offset returned).
+- Next: Doug repeats the pick/Apply and sends the last lines + any "Fatal Python error" stack.
+
+### Session 159b -- crash found: ShapeType() on a NULL shape
+- faulthandler pinned it: `face_offset.py` line 255 (`result.ShapeType()` in my own diagnostic print) segfaulted. The worker had exited 0, i.e. the offset itself did NOT crash: OCCT reported IsDone() but returned a NULL shape on the filleted geneva wheel, and calling ShapeType() on a null TopoDS_Shape dereferences a null pointer. The very first crash (before the worker existed) was the same print. The earlier 10 mm "could not be turned into a solid" was the same null result reaching as_solid.
+- Fixed: null checks in the worker (`null` flag in its JSON; null never written), in the in-process fallback, after Read_s (return value + IsNull), and before the print in offset_faces. New message NO_RESULT.
+- The 157b explanation ("10 mm collapses the slots") is WEAKENED: 0.5 mm also returns null, and it cannot collapse the slots. OCCT's offset simply fails (silently) on this filleted wheel's tangent chain at any distance tried. Why is still unknown.
+- Worker isolation stays (cheap insurance; needed for the future live preview).
+
+### Session 159c -- decision: Move Face is for faces WITHOUT bounding blends
+- Doug retested: filleted top face now fails cleanly (worker: IsDone() but NULL result -> NO_RESULT message, no crash, nothing changed).
+- Decision (Doug): accept the limitation. Workflow for blended faces: Defeaturing removes the fillets/chamfer blends, Move Face, then re-fillet. Dialog text now says so. Non-tangent neighbours (chamfers) and tangent chains that OCCT can handle (slot walls + round end, hole walls) work.
+- Next (agreed order): Doug tests more, then (1) visual feedback = live preview of the offset before Apply, (2) unpick-by-clicking-again (NOT built yet, nothing to test), then (3) tutorial + README + version bump (2.3.0 proposed).
