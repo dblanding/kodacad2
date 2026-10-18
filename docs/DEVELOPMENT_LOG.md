@@ -7159,3 +7159,18 @@ Untested in OCP.
 ## Session 155 -- Dynamic move status in the user's units
 - Position dialog's Dynamic drag reported "Dragging: N mm from start." regardless of the units setting. `_on_manip_move` now divides by `main_win.unitscale` and shows the unit label (2 places mm, 3 in, 4 ft). Internal values stay mm.
 - grep for other showMessage calls hard-coding mm/.2f found none.
+
+## Session 156 -- probe for per-face offsets (probe_offset_faces.py)
+- Question (Doug): is there OCCT functionality that offsets chosen faces by different amounts (kernel for a CoCreate-style move face), rather than automating copy/move/fuse workarounds?
+- Lead: occt3d/OCCT forum thread -- `BRepOffset_MakeOffset.Initialize(...)` + `SetOffsetOnFace(face, value)` + `MakeOffsetShape()`; the class underlies BRepOffsetAPI_MakeOffsetShape and MakeThickSolid (already used by Shell). Thread is 2013, snippet incomplete (no values for tol/join, nothing on unmoved faces or sign).
+- Probe written (NOT yet run; OCP isn't installable in the sandbox): API check, then cases A box top, B box side, C slot walls+round end, C2 slot walls only, D chamfered box -- each at +d/-d, join Intersection/Arc, intersection False/True, vs hand-computed volumes. Also `--step f.stp --list` / `--faces i,j --offset d` for Doug's own parts.
+- Sign convention under test: offset is along the solid's OUTWARD face normal, so widening a slot is NEGATIVE.
+
+### Session 156b -- probe run 1 results (Doug, OCP 7.9)
+- `SetOffsetOnFace` IS exposed; `Initialize(S,Offset,Tol,Mode,Intersection,SelfInter,Join,Thickening,RemoveIntEdges)` accepted.
+- join=GeomAbs_Intersection WORKS; join=GeomAbs_Arc FAILED in every case ("command not done"). The intersection flag made no difference.
+- Volumes MATCH hand calculation exactly for: box top face (+/-5), box side face (+/-5), slot plate walls + round end (+/-1). Sign: offset is along the solid's OUTWARD face normal (+ = grow outward / narrow a slot; - widens a slot).
+- Chamfer case D: moving the top face +3 / -3 gave 132930 / 100530 -- exactly the analytic value with the tilted chamfer face extended. Neighbours follow correctly.
+- C2 (walls only, round end NOT listed) gave volumes identical to C: the tangent round end appears to have moved with the walls (to be confirmed from the radii printed in run 2).
+- Cases C, C2, D returned valid results with solids=0 (a shell, not a solid; inputs from Cut/Chamfer are compounds). A Move Face tool must rebuild a solid from the shell (ShapeFix_Solid.SolidFromShell) or unwrap input.
+- Run 2 adds: as_solid wrap check, hole resize, two different offsets in one call, compound input, filleted-neighbour case; Arc join and intersection=True dropped.
