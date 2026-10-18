@@ -38,6 +38,7 @@ from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
                                QHBoxLayout, QLabel, QLineEdit, QMenu,
@@ -1247,7 +1248,110 @@ def _defeaturing_execute(uid, workPart, faces_to_remove, label=""):
         return False, f"Unable to replace/draw shape: {e}"
 
 
-class DefeaturingDialog(QDialog):
+class _FacePickMixin:
+    """Face picking shared by the Defeaturing and Move Face dialogs
+    (Session 160).
+
+    * Plain click, or a box-select, ADDS faces to self.face_stack.
+    * Ctrl+click on a picked face REMOVES it -- e.g. box-select every
+      face around the top of a part, then Ctrl+click the top face to
+      leave just the fillets/chamfers. (A box-select reaches the
+      callback one shape at a time, indistinguishable from clicks, so a
+      "click again to unpick" toggle would misfire on overlapping boxes;
+      the modifier makes the intent explicit.)
+    * Picked faces are shown ORANGE (display-only colors, like Color
+      Faces); subclasses may add yellow "also moves" faces. The redraw is
+      deferred by a short timer, so a box-select of N faces redraws once,
+      not N times -- and never redraws in the middle of the viewport's
+      selection loop, which would clear the selection it is iterating.
+    """
+    PICK_RGB = (1.0, 0.45, 0.0)
+    CHAIN_RGB = (1.0, 0.85, 0.3)
+
+    def _init_face_pick(self):
+        self.face_stack = []
+        self._colored_uid = None
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(60)
+        self._preview_timer.timeout.connect(self._show_preview)
+
+    def _pick_update(self, shapeList):
+        """Apply one selection callback to self.face_stack.
+        Returns (changed, error_message_or_empty)."""
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        ref_shape = cached[1] if cached is not None else win.activePart
+        ref_faces = list(Topology.Topo(ref_shape).faces()) \
+            if ref_shape is not None else []
+        ctrl = bool(QApplication.keyboardModifiers() &
+                    Qt.KeyboardModifier.ControlModifier)
+        changed = False
+        for shape in shapeList:
+            try:
+                face = TopoDS.Face_s(shape)
+            except Exception:
+                return changed, "Pick a face (not an edge or vertex)."
+            if not any(face.IsSame(f) for f in ref_faces):
+                return changed, "Selected face must be in Active Part."
+            idx = next((i for i, f in enumerate(self.face_stack)
+                        if f.IsSame(face)), -1)
+            if ctrl:
+                if idx >= 0:
+                    del self.face_stack[idx]
+                    changed = True
+            elif idx < 0:
+                self.face_stack.append(face)
+                changed = True
+        return changed, ""
+
+    def _followers(self, ref_shape):
+        """Faces (not picked) to show yellow. Override."""
+        return []
+
+    def _preview_note(self, n_followers):
+        """Called after a preview with the number of yellow faces."""
+        pass
+
+    def _schedule_preview(self):
+        self._preview_timer.start()
+
+    def _clear_preview(self, redraw=True):
+        self._preview_timer.stop()
+        uid = self._colored_uid
+        self._colored_uid = None
+        if uid is None:
+            return
+        if redraw:
+            win.clear_face_colors(uid)
+        else:
+            win.face_colors.pop(uid, None)
+
+    def _show_preview(self):
+        """Orange picks (+ yellow followers). Never fatal."""
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        if cached is None or not self.face_stack:
+            self._clear_preview()
+            self._start_picking()
+            return
+        try:
+            followers = [f for f in self._followers(cached[1])
+                         if not any(f.IsSame(p) for p in self.face_stack)]
+            groups = []
+            if followers:
+                groups.append((followers, self.CHAIN_RGB))
+            groups.append((list(self.face_stack), self.PICK_RGB))
+            win.set_face_color_groups(uid, groups)
+            self._colored_uid = uid
+            self._preview_note(len(followers))
+        except Exception as e:
+            print(f"[face pick] highlight failed: {e}")
+        # redisplay resets selection mode / callback: re-arm picking
+        self._start_picking()
+
+
+class DefeaturingDialog(_FacePickMixin, QDialog):
     """Unified Defeaturing dialog (Session 125) -- replaces the three
     formerly-separate menu items (Remove Hole / Remove Isolated
     Feature / Auto Isolated Feature) with one dialog offering all
@@ -1306,7 +1410,7 @@ class DefeaturingDialog(QDialog):
         self.main_win = main_win
         self.setWindowTitle("Defeaturing")
         self.setModal(False)
-        self.face_stack = []
+        self._init_face_pick()
 
         lay = QVBoxLayout(self)
 
@@ -1358,6 +1462,7 @@ class DefeaturingDialog(QDialog):
         if win.registeredCallback is None or \
                 win.registeredCallback == self._on_pick:
             self.face_stack = []
+            self._colored_uid = None
             self._refresh_header()
             self._update_status()
             self._start_picking()
@@ -1378,10 +1483,18 @@ class DefeaturingDialog(QDialog):
                 name = str(uid)
         self.part_label.setText(name)
 
+    def _on_clear(self):
+        self.face_stack = []
+        self._clear_preview()
+        self._update_status()
+        self._start_picking()
+
     def _on_mode_changed(self):
         idx = self.mode_combo.currentIndex()
         self.instructions_label.setText(self.MODES[idx][1])
         self.face_stack = []
+        if getattr(self, "_colored_uid", None) is not None:
+            self._clear_preview()
         self._update_status()
 
     def _update_status(self, extra=""):
@@ -1399,24 +1512,13 @@ class DefeaturingDialog(QDialog):
         # old Manual/Auto tools) is simply ignored here.
         if not shapeList:
             return
-        uid = win.activePartUID
-        cached = win._display_prep_cache.get(uid)
-        ref_shape = cached[1] if cached is not None else win.activePart
-        ref_faces = list(Topology.Topo(ref_shape).faces()) \
-            if ref_shape is not None else []
-        for shape in shapeList:
-            try:
-                face = TopoDS.Face_s(shape)
-            except Exception:
-                self._update_status("Pick a face (not an edge or "
-                                    "vertex).")
-                return
-            if not any(face.IsSame(f) for f in ref_faces):
-                self._update_status("Selected face must be in "
-                                    "Active Part.")
-                return
-            self.face_stack.append(face)
+        changed, err = self._pick_update(shapeList)
+        if err:
+            self._update_status(err)
+            return
         self._update_status()
+        if changed:
+            self._schedule_preview()
 
     def _on_apply(self):
         if not require_active_part("Defeaturing"):
@@ -1428,6 +1530,7 @@ class DefeaturingDialog(QDialog):
             return
         picked_faces = list(self.face_stack)
         self.face_stack = []
+        self._clear_preview(redraw=False)   # colors belong to the old shape
 
         workPart, _ref_shape, face_pairs = _defeaturing_workpart(uid)
         seed_faces = _defeaturing_map_picked_faces(
@@ -1488,11 +1591,17 @@ class DefeaturingDialog(QDialog):
 
     def _on_done(self):
         self._detach_history()
+        self._clear_preview()
         win.clearCallback()
         self.close()
 
     def closeEvent(self, event):
         self._detach_history()
+        if self._colored_uid is not None:
+            try:
+                self._clear_preview()
+            except Exception:
+                pass
         win.clearCallback()
         super().closeEvent(event)
 
@@ -1528,7 +1637,7 @@ def _commit_shape(uid, newPart, label=""):
         return False, f"Unable to replace/draw shape: {e}"
 
 
-class MoveFaceDialog(QDialog):
+class MoveFaceDialog(_FacePickMixin, QDialog):
     """Create/Modify -> Move Face (Session 157).
 
     Pick one or more faces, type a distance, Apply. Each picked face is
@@ -1547,16 +1656,12 @@ class MoveFaceDialog(QDialog):
     them yellow (display-only colors, the same mechanism as Color
     Faces; they disappear when the shape changes).
     """
-    PICK_RGB = (1.0, 0.45, 0.0)
-    CHAIN_RGB = (1.0, 0.85, 0.3)
-
     def __init__(self, main_win):
         super().__init__(main_win)
         self.main_win = main_win
         self.setWindowTitle("Move Face")
         self.setModal(False)
-        self.face_stack = []
-        self._colored_uid = None
+        self._init_face_pick()
 
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel("Modifying part:"))
@@ -1571,8 +1676,8 @@ class MoveFaceDialog(QDialog):
             "Click the face(s) to move, enter a distance, then Apply.\n"
             "+ adds material (narrows a slot or hole); "
             "- removes material (widens it).\n"
-            "Orange = picked.  Yellow = also moves (tangent to a "
-            "picked face).\n"
+            "Orange = picked (Ctrl+click a picked face to unpick it).  "
+            "Yellow = also moves (tangent to a picked face).\n"
             "Not for faces bounded by fillets (blends): remove them "
             "first (Defeaturing), move the face, then re-fillet.")
         info.setWordWrap(True)
@@ -1645,70 +1750,26 @@ class MoveFaceDialog(QDialog):
         win.registerCallback(self._on_pick)
         display.SetSelectionModeFace()
 
-    # -- display-only preview of what will move -----------------------
-    def _clear_preview(self, redraw=True):
-        uid = self._colored_uid
-        self._colored_uid = None
-        if uid is None:
-            return
-        if redraw:
-            win.clear_face_colors(uid)
-        else:
-            win.face_colors.pop(uid, None)
+    # -- picking + display-only preview (see _FacePickMixin) ------
+    def _followers(self, ref_shape):
+        return face_offset.tangent_chain(ref_shape, self.face_stack)
 
-    def _show_preview(self):
-        """Color picked faces orange and the tangent-chain faces that
-        will follow them yellow. Never fatal: any failure just means no
-        colors."""
-        uid = win.activePartUID
-        cached = win._display_prep_cache.get(uid)
-        if cached is None or not self.face_stack:
-            self._clear_preview()
-            return
-        try:
-            print(f"[MoveFace] preview: {len(self.face_stack)} picked", flush=True)
-            chain = face_offset.tangent_chain(cached[1], self.face_stack)
-            print(f"[MoveFace] preview: tangent chain has {len(chain)} faces", flush=True)
-            followers = [f for f in chain
-                         if not any(f.IsSame(p) for p in self.face_stack)]
-            win.clear_face_colors(uid)
-            if followers:
-                win.set_face_colors(uid, followers, self.CHAIN_RGB)
-            win.set_face_colors(uid, self.face_stack, self.PICK_RGB)
-            self._colored_uid = uid
-            if followers:
-                self._update_status(
-                    f"{len(followers)} more face(s) will move with them "
-                    f"(yellow).")
-        except Exception as e:
-            print(f"[MoveFace] preview failed: {e}")
-        # redisplay resets selection mode / callback: re-arm picking
-        self._start_picking()
+    def _preview_note(self, n_followers):
+        if n_followers:
+            self._update_status(
+                f"{n_followers} more face(s) will move with them "
+                f"(yellow).")
 
     def _on_pick(self, shapeList, *args):
         if not shapeList:
             return
-        uid = win.activePartUID
-        cached = win._display_prep_cache.get(uid)
-        ref_shape = cached[1] if cached is not None else win.activePart
-        ref_faces = list(Topology.Topo(ref_shape).faces()) \
-            if ref_shape is not None else []
-        added = False
-        for shape in shapeList:
-            try:
-                face = TopoDS.Face_s(shape)
-            except Exception:
-                self._update_status("Pick a face (not an edge or vertex).")
-                return
-            if not any(face.IsSame(f) for f in ref_faces):
-                self._update_status("Selected face must be in Active Part.")
-                return
-            if not any(face.IsSame(f) for f in self.face_stack):
-                self.face_stack.append(face)
-                added = True
+        changed, err = self._pick_update(shapeList)
+        if err:
+            self._update_status(err)
+            return
         self._update_status()
-        if added:
-            self._show_preview()
+        if changed:
+            self._schedule_preview()
 
     def _on_clear(self):
         self.face_stack = []

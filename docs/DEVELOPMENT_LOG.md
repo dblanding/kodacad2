@@ -7211,3 +7211,16 @@ Untested in OCP.
 - Doug retested: filleted top face now fails cleanly (worker: IsDone() but NULL result -> NO_RESULT message, no crash, nothing changed).
 - Decision (Doug): accept the limitation. Workflow for blended faces: Defeaturing removes the fillets/chamfer blends, Move Face, then re-fillet. Dialog text now says so. Non-tangent neighbours (chamfers) and tangent chains that OCCT can handle (slot walls + round end, hole walls) work.
 - Next (agreed order): Doug tests more, then (1) visual feedback = live preview of the offset before Apply, (2) unpick-by-clicking-again (NOT built yet, nothing to test), then (3) tutorial + README + version bump (2.3.0 proposed).
+
+## Session 160 -- Unpick (Ctrl+click) for Defeaturing and Move Face
+- New `_FacePickMixin` in kodacad.py shared by both dialogs: plain click
+  or box-select adds faces; **Ctrl+click on a picked face removes it**
+  (a box-select reaches callbacks as N single picks, so a plain
+  click-again toggle would misfire on overlapping boxes).
+- Picked faces show orange (Defeaturing now too); Move Face adds yellow
+  tangent followers. Redraw is deferred by a 60 ms single-shot timer so
+  a box-select of N faces redraws once and never mid-selection-loop.
+- `MainWindow.set_face_color_groups(uid, groups)`: replace all
+  display-only colors and redraw once.
+- Defeaturing gained a Clear Selection button.
+- Untested (OCP not available in the sandbox); Doug to verify.

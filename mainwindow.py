@@ -1344,6 +1344,28 @@ class MainWindow(QMainWindow):
         self.draw_shape(uid)
         return True
 
+    def set_face_color_groups(self, uid, groups):
+        """Replace ALL display-only face colors of uid with `groups`, a
+        list of (faces, rgb), then redraw ONCE (Session 160: the pick
+        highlights of Move Face / Defeaturing need orange picks plus
+        yellow followers; three separate set/clear calls meant three
+        ~1 s redraws on a big part). An empty `groups` clears."""
+        cached = self._display_prep_cache.get(uid)
+        if cached is None:
+            return False
+        entries = []
+        for faces, rgb in groups:
+            for f in faces:
+                entries = [e for e in entries if not e[0].IsSame(f)]
+                entries.append((f, rgb))
+        if entries:
+            self.face_colors[uid] = (cached[1], entries)
+        else:
+            self.face_colors.pop(uid, None)
+        self.erase_shape(uid)
+        self.draw_shape(uid)
+        return True
+
     def clear_face_colors(self, uid):
         if uid in self.face_colors:
             self.face_colors.pop(uid, None)
