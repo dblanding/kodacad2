@@ -153,7 +153,7 @@ def narrow_faces(shape, max_report=6, rel=0.01):
         emap = TopTools_IndexedDataMapOfShapeListOfShape()
         TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE,
                                        emap)
-        edge_thr = 0.5 * thr
+        edge_thr = 2.0 * thr      # 2% of the diagonal
         for ei in range(1, emap.Extent() + 1):
             e = TopoDS.Edge_s(emap.FindKey(ei))
             pe = GProp_GProps()

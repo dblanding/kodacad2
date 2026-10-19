@@ -7307,3 +7307,14 @@ Untested in OCP.
   OCCT's whole-part offset (cf. the wheel's chamfer).
 - `narrow_faces` now also reports faces touching very short edges
   (< 0.5% of the bounding-box diagonal); message wording updated.
+
+## Session 166 -- Fallback verified on the L-bracket; now tried FIRST
+- With the updated server (Doug's copy had been stale) the extrusion
+  fallback rescued the +3 mm move of the bracket's plain leg face (30
+  faces, volume 8477.9 -> 12144.7, +3666.8 = area x 3), after five failed
+  OCCT attempts. Apply reused the preview result.
+- Planar faces whose neighbours are all parallel to the move now try the
+  extrusion route FIRST (saves ~0.7 s of failed OCCT attempts in the
+  preview and does not depend on OCCT's whole-part analysis); anything it
+  declines goes to OCCT's offset as before.
+- Short-edge limit for the red suspects raised to 2% of the diagonal.

@@ -20,6 +20,7 @@ and writes the raw offset result to OUT.brep when done.
 """
 import faulthandler
 import json
+import os
 import sys
 
 faulthandler.enable()   # a native fault prints the Python stack to stderr
@@ -94,7 +95,22 @@ def main(in_path, out_path, idx_json, value, tol):
         BRepGProp.SurfaceProperties_s(faces[i], p)
         areas.append(p.Mass())
 
-    res, done, label = try_offsets(shape, faces, idx, value, tol)
+    # Session 166: for a planar face whose neighbours are all parallel
+    # to the move, extrude/cut is exact, fast and does not depend on
+    # OCCT's whole-part offset analysis (which fails on tiny clipped
+    # features elsewhere on the part) -- so it goes FIRST. Anything it
+    # declines goes to OCCT's offset as before.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import face_offset
+    res, label = face_offset.extrude_fallback(
+        shape, [faces[i] for i in idx], value)
+    done = res is not None
+    print(f"[offset] extrusion: "
+          f"{'ok' if done else 'no (' + label + ')'}",
+          file=sys.stderr, flush=True)
+    if res is None:
+        res, done, label = try_offsets(shape, faces, idx, value,
+                                       tol)
     null = res is None
     if not null:
         BRepTools.Write_s(res, out_path)
