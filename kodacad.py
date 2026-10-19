@@ -1840,10 +1840,13 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             return ""
         self._schedule_preview()          # repaint with the red faces
         wmin = sus[0][0] / win.unitscale
-        return (f"  Suspect: {len(sus)} very narrow face(s) (shown red, "
-                f"narrowest {wmin:.3g} {win.units}) - a leftover chamfer "
-                f"or sliver can stop OpenCascade offsetting anything on "
-                f"this part. Remove them (Defeaturing) and try again.")
+        return (f"  Suspect: {len(sus)} face(s) that are very narrow or "
+                f"touch a very short edge (shown red, smallest size "
+                f"{wmin:.3g} {win.units}) - a leftover chamfer, sliver or "
+                f"a feature that just clips its neighbour (a countersink "
+                f"breaking into a slot) can stop OpenCascade offsetting "
+                f"anything on this part. Remove or fix them (Defeaturing) "
+                f"and try again.")
 
     def _on_pick(self, shapeList, *args):
         if not shapeList:

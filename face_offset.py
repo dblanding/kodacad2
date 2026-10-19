@@ -112,7 +112,8 @@ def tangent_chain(shape, seed_faces):
 
 def narrow_faces(shape, max_report=6, rel=0.01):
     """Faces of `shape` that are unusually narrow -- slivers, stubs,
-    forgotten chamfers. OCCT's offset analyses the WHOLE part, and one
+    forgotten chamfers -- or that touch a very short edge (width/length
+    reported is whichever triggered it). OCCT's offset analyses the WHOLE part, and one
     such face anywhere can make it return nothing for any picked face
     (Session 162: a 2.7 mm leftover chamfer on the geneva wheel).
     Width = 2 * area / perimeter; reported when below `rel` x the part's
@@ -129,6 +130,7 @@ def narrow_faces(shape, max_report=6, rel=0.01):
         return []
     thr = rel * diag
     out = []
+    seen = []
     for f in _explore(shape, TopAbs_FACE):
         f = TopoDS.Face_s(f)
         try:
@@ -143,6 +145,29 @@ def narrow_faces(shape, max_report=6, rel=0.01):
             continue
         if w < thr:
             out.append((w, f))
+            seen.append(f)
+    # Very SHORT EDGES (Session 165): a countersink that breaks 0.04 mm
+    # into a neighbouring slot leaves edges a fraction of a millimetre
+    # long on otherwise ordinary faces -- no narrow face to find.
+    try:
+        emap = TopTools_IndexedDataMapOfShapeListOfShape()
+        TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE,
+                                       emap)
+        edge_thr = 0.5 * thr
+        for ei in range(1, emap.Extent() + 1):
+            e = TopoDS.Edge_s(emap.FindKey(ei))
+            pe = GProp_GProps()
+            BRepGProp.LinearProperties_s(e, pe)
+            ln = pe.Mass()
+            if ln >= edge_thr or ln <= 0.0:
+                continue
+            for g in emap.FindFromIndex(ei):
+                g = TopoDS.Face_s(g)
+                if not any(g.IsSame(x) for x in seen):
+                    seen.append(g)
+                    out.append((ln, g))
+    except Exception as e:
+        print(f"[face_offset] short-edge check failed: {e}")
     out.sort(key=lambda t: t[0])
     return out[:max_report]
 
@@ -234,7 +259,7 @@ def _extrusion_normal(shape, face, emap):
     return d
 
 
-def extrude_fallback(shape, faces, value):
+def _extrude_fallback_once(shape, faces, value, flip):
     """Fallback for when OCCT's offset returns nothing (seen on the
     geneva wheel). For PLANAR picked faces whose neighbours are all
     parallel to the face normal (vertical walls), moving the face by
@@ -260,6 +285,8 @@ def extrude_fallback(shape, faces, value):
             n = _extrusion_normal(shape, f, emap)
             if n is None:
                 return None, "not extrusion-compatible"
+            if flip:
+                n = n.Reversed()
             p = GProp_GProps()
             BRepGProp.SurfaceProperties_s(f, p)
             area = p.Mass()
@@ -294,6 +321,21 @@ def extrude_fallback(shape, faces, value):
         return cur, "extrusion fallback"
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+
+def extrude_fallback(shape, faces, value):
+    """See _extrude_fallback_once. The outward direction is worked out
+    from the face orientation; if that is wrong for some face the volume
+    check rejects the result, so the opposite direction is tried too
+    (Session 165: the first real use of the fallback did not rescue a
+    plain planar leg face)."""
+    res, label = _extrude_fallback_once(shape, faces, value, False)
+    if res is not None or label == "not extrusion-compatible":
+        return res, label
+    res2, label2 = _extrude_fallback_once(shape, faces, value, True)
+    if res2 is not None:
+        return res2, label2 + " (flipped)"
+    return None, label
 
 
 def as_solid(shape):

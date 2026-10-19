@@ -7287,3 +7287,23 @@ Untested in OCP.
   its hover marker -- now treat the workplane as absent when its uid is
   in `hide_list`. distPtPt already did this via find_snap(hidden=...).
 - Untested.
+
+## Session 165 -- L-bracket tutorial part; fallback hardening
+- Doug supplied L-brkt.stp (Elegoo Tumbller bracket): 30 faces (9 planes,
+  15 cylinders, 6 cones), 3 mm sheet, sharp bend, R20 leg top, 13 mm slot
+  with R6.5 ends, 6 countersunk + 4 base holes, R3 base corners.
+- Step 1 (move the plain face of the leg +3 mm) failed in OCCT even
+  though no cone touches that face; the fallback did not rescue it. After
+  Doug deleted the countersinks (on the OPPOSITE face) the move worked:
+  OCCT's offset can fail on the whole part because of features elsewhere
+  (earlier: a 2.7 mm leftover chamfer). Cause of the fallback miss not yet
+  seen in the terminal; it now also tries the opposite face direction when
+  the volume check fails.
+- Doug's insight: the countersinks reached the slot. Check from the STEP:
+  countersink radius at the surface = 1.65 + 2 mm (45 deg) = 3.65 mm; the
+  four holes nearest the slot ends are 10.11 mm from a slot-end centre
+  (R6.5) => gap 3.61 mm, so each countersink clips the slot edge by
+  ~0.04 mm. That leaves very short edges, which is plausibly what stopped
+  OCCT's whole-part offset (cf. the wheel's chamfer).
+- `narrow_faces` now also reports faces touching very short edges
+  (< 0.5% of the bounding-box diagonal); message wording updated.
