@@ -7318,3 +7318,13 @@ Untested in OCP.
   preview and does not depend on OCCT's whole-part analysis); anything it
   declines goes to OCCT's offset as before.
 - Short-edge limit for the red suspects raised to 2% of the diagonal.
+- BUG found by the red suspects: the fallback's 0.001 mm start overlap
+  split each crossed hole wall and left 0.001 mm rings (bracket: 30 -> 34
+  faces after thickening the base). margin is now 0 (prism starts exactly
+  on the face; Fuse/Cut handle coincident faces, UnifySameDomain merges
+  the walls). Doug's bracket must be reloaded -- the slivers are in his
+  edited copy.
+- Slot narrowing (+1, +2) worked through OCCT's own offset on the bracket;
+  widening (-1) returned NULL. Plausible: widening drives the slot ends
+  deeper into the countersinks that already clip them (topology change).
+  To be tested after the fix with -0.1/-0.5.

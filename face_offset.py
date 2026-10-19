@@ -278,7 +278,10 @@ def _extrude_fallback_once(shape, faces, value, flip):
         TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE,
                                        emap)
         v0 = volume(shape)
-        margin = 1.0e-3            # avoids coincident start planes
+        # NO overlap margin (Session 166): a 0.001 mm overlap left
+        # 0.001 mm sliver rings on every hole wall the prism crossed
+        # (34 faces instead of 30), which then blocked OCCT's offset.
+        margin = 0.0
         cur = shape
         expect = 0.0
         for f in faces:
