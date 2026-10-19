@@ -7222,5 +7222,5 @@ Untested in OCP.
   a box-select of N faces redraws once and never mid-selection-loop.
 - `MainWindow.set_face_color_groups(uid, groups)`: replace all
   display-only colors and redraw once.
-- Defeaturing gained a Clear Selection button.
+- Correction: the Clear Selection button and Ctrl+click hint were added to Move Face only. The matching edit to Defeaturing silently did not apply; Doug found Ctrl+click enough, so Defeaturing has no button (its unused `_on_clear` method is harmless).
 - Untested (OCP not available in the sandbox); Doug to verify.
