@@ -7224,3 +7224,53 @@ Untested in OCP.
   display-only colors and redraw once.
 - Correction: the Clear Selection button and Ctrl+click hint were added to Move Face only. The matching edit to Defeaturing silently did not apply; Doug found Ctrl+click enough, so Defeaturing has no button (its unused `_on_clear` method is harmless).
 - Untested (OCP not available in the sandbox); Doug to verify.
+
+## Session 161 -- Move Face live preview (ghost)
+- New `face_offset_server.py`: PERSISTENT worker process (OCP imported
+  once). JSON lines over stdin/stdout; replies go to a private dup of the
+  original stdout while C-level stdout is redirected to stderr, so OCCT
+  chatter cannot corrupt the protocol. A native OCCT crash only kills it.
+- New `offset_preview.py`: `OffsetServer`, a QProcess client. Fully
+  asynchronous (GUI never blocks); restarts on the next request after a
+  death; 90 s watchdog kills a runaway offset.
+- `face_offset.py`: `finish_offset` (post-processing split out of
+  `offset_faces`), `face_indices`, `face_areas`, `same_faces`.
+- Move Face dialog: distance is now a QDoubleSpinBox (type, Up/Down keys
+  or wheel; step 0.1 mm / 0.01 in / 0.001 ft); "Live preview" checkbox;
+  350 ms debounce after typing/picking; newest request wins while one is
+  in flight. The result is shown as a translucent cyan ghost AIS shape
+  registered as never-pick (clicks pass through), with the volume change
+  in the user's units. Apply reuses the preview's raw result when the
+  picks, distance and shape are unchanged, else recomputes as before.
+- Failures (null result, crash, collapse) show a message instead of a
+  ghost and are not retried for the same picks+distance.
+- Untested (no OCP/Qt in the sandbox).
+
+## Session 162 -- Move Face: extrusion fallback; wheel diagnosis
+- Doug's geneva wheel (31 faces, valid, max tol 1e-7) returns a NULL
+  offset on its top face (planar, 25 edges: 16 cylinders + 9 planes, all
+  C0 neighbours) at every distance, with every retry (3 tolerances, healed
+  copy). Base plate offsets fine (0.01 s). Cause inside OCCT unknown.
+  The wheel's neighbours are all vertical (cylinders with axis // normal,
+  planes // normal) so the move is geometrically an extrusion.
+- `face_offset.extrude_fallback`: for planar picks whose neighbours are
+  all parallel to the normal, fuse (value>0) or cut (value<0) a prism of
+  the face; UnifySameDomain; accepted ONLY if the volume changed by
+  exactly area*value. Used by worker and server when OCCT gives nothing;
+  both now `sys.path.insert` their own folder to import face_offset.
+- Diagnostics: DIAG block + ~/kodacad_offset_input.brep on failure.
+- Untested.
+
+## Session 163 -- "Suspect faces" advice in Move Face
+- Doug found the cause on the wheel: a leftover 2.7 mm chamfer (narrow
+  vertical facet at one slot mouth). One such face anywhere makes OCCT's
+  whole-part offset return nothing, for ANY picked face (the front face
+  failed too). Removed with Defeaturing, the preview and Apply worked.
+- `face_offset.narrow_faces`: faces whose 2*area/perimeter is under 1% of
+  the part's bounding-box diagonal (6 narrowest).
+- Move Face: when a preview or Apply fails, those faces are shown RED and
+  the message names them: "a leftover chamfer or sliver can stop
+  OpenCascade offsetting anything on this part. Remove them
+  (Defeaturing) and try again." Stale reds are ignored once the shape
+  changes. The pick mixin got an `_extra_groups` hook for this.
+- Untested.

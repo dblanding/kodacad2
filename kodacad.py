@@ -10,6 +10,7 @@
 import faulthandler
 import logging
 import math
+import os
 import pprint
 import sys
 
@@ -27,20 +28,23 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import (BRepFilletAPI_MakeFillet,
                                BRepFilletAPI_MakeChamfer)
 from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRep import BRep_Builder as _BRepBuilderPV
+from OCP.BRepTools import BRepTools
 from OCP.BRepOffsetAPI import (BRepOffsetAPI_MakeThickSolid,
                                BRepOffsetAPI_ThruSections)
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.gp import gp_Ax1, gp_Ax3, gp_Dir, gp_Lin, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Face, TopoDS_Vertex
+from OCP.TopoDS import TopoDS, TopoDS_Edge, TopoDS_Face, TopoDS_Vertex, TopoDS_Shape
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
-from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                               QDoubleSpinBox,
                                QHBoxLayout, QLabel, QLineEdit, QMenu,
                                QMessageBox, QPushButton,
                                QTreeWidgetItemIterator, QVBoxLayout)
@@ -54,6 +58,7 @@ import workplane
 from workplane import face_normal
 import isolated_features
 import face_offset
+import offset_preview
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # set to DEBUG | INFO | ERROR
@@ -1313,6 +1318,10 @@ class _FacePickMixin:
         """Called after a preview with the number of yellow faces."""
         pass
 
+    def _extra_groups(self):
+        """Further (faces, rgb) groups drawn UNDER the pick colors."""
+        return []
+
     def _schedule_preview(self):
         self._preview_timer.start()
 
@@ -1338,7 +1347,7 @@ class _FacePickMixin:
         try:
             followers = [f for f in self._followers(cached[1])
                          if not any(f.IsSame(p) for p in self.face_stack)]
-            groups = []
+            groups = list(self._extra_groups())
             if followers:
                 groups.append((followers, self.CHAIN_RGB))
             groups.append((list(self.face_stack), self.PICK_RGB))
@@ -1685,12 +1694,23 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Distance:"))
-        self.dist_edit = QLineEdit()
-        self.dist_edit.setPlaceholderText("e.g. 0.25  or  -0.25")
+        self.dist_edit = QDoubleSpinBox()
+        self.dist_edit.setDecimals(4)
+        self.dist_edit.setRange(-1.0e6, 1.0e6)
+        self.dist_edit.setKeyboardTracking(True)   # preview while typing
+        self.dist_edit.setToolTip("Type a distance, or use Up/Down keys "
+                                  "or the mouse wheel to step it.")
         row.addWidget(self.dist_edit)
         self.units_label = QLabel(win.units)
         row.addWidget(self.units_label)
         lay.addLayout(row)
+
+        self.live_box = QCheckBox("Live preview (ghost of the result)")
+        self.live_box.setChecked(True)
+        lay.addWidget(self.live_box)
+        self.preview_label = QLabel()
+        self.preview_label.setWordWrap(True)
+        lay.addWidget(self.preview_label)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -1708,6 +1728,32 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         btn_row.addWidget(self.done_btn)
         lay.addLayout(btn_row)
 
+        # --- live preview machinery (Session 161) ---
+        self._epoch = 0           # bumps when the part changes/ghost cleared
+        self._req_id = 0
+        self._inflight = None     # (id, epoch, workPart, idx, value, key, n, areas)
+        self._want = None         # newest wanted (workPart, idx, value, key)
+        self._loaded_shape = None
+        self._loaded_gen = -1
+        self._ghost = None
+        self._shown_key = None
+        self._raw_cache = None    # (key, workPart, raw_result)
+        self._failed = None       # (key, workPart): don't retry crashes
+        self._suspects = []       # [(width, face)] narrow faces (red)
+        self._suspects_shape = None
+        import tempfile
+        self._tmpdir = tempfile.mkdtemp(prefix="kodacad_preview_")
+        self._server = offset_preview.OffsetServer(self)
+        self._server.message.connect(self._on_server_message)
+        self._server.died.connect(self._on_server_died)
+        self._offset_timer = QTimer(self)
+        self._offset_timer.setSingleShot(True)
+        self._offset_timer.setInterval(350)
+        self._offset_timer.timeout.connect(self._request_offset)
+        self.dist_edit.valueChanged.connect(
+            lambda _v: self._schedule_offset())
+        self.live_box.toggled.connect(self._on_live_toggled)
+
         self._refresh_header()
         self._update_status()
         self._start_picking()
@@ -1719,6 +1765,8 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         (unless another tool took over) and drop stale picks."""
         if win.registeredCallback is None or \
                 win.registeredCallback == self._on_pick:
+            self._drop_preview()
+            self._suspects = []
             self.face_stack = []
             self._colored_uid = None
             self._refresh_header()
@@ -1741,6 +1789,9 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 name = str(uid)
         self.part_label.setText(name)
         self.units_label.setText(win.units)
+        # arrow-key / wheel step: a sensible bit of the chosen unit
+        self.dist_edit.setSingleStep({"mm": 0.1, "in": 0.01,
+                                      "ft": 0.001}.get(win.units, 0.1))
 
     def _update_status(self, extra=""):
         base = f"{len(self.face_stack)} face(s) picked."
@@ -1760,6 +1811,40 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 f"{n_followers} more face(s) will move with them "
                 f"(yellow).")
 
+    SUSPECT_RGB = (0.85, 0.1, 0.1)
+
+    def _extra_groups(self):
+        cached = win._display_prep_cache.get(win.activePartUID)
+        if (self._suspects and cached is not None
+                and self._suspects_shape is not None
+                and self._suspects_shape.IsSame(cached[1])):
+            return [([f for _w, f in self._suspects], self.SUSPECT_RGB)]
+        return []
+
+    def _suspect_text(self):
+        """Look for narrow leftover faces (slivers, forgotten chamfers)
+        that can stop OCCT offsetting anything on this part; show them
+        red and return advice text ('' if there are none)."""
+        uid = win.activePartUID
+        cached = win._display_prep_cache.get(uid)
+        if cached is None:
+            return ""
+        try:
+            sus = face_offset.narrow_faces(cached[1])
+        except Exception as e:
+            print(f"[MoveFace] narrow-face check failed: {e}")
+            return ""
+        self._suspects = sus
+        self._suspects_shape = cached[1]
+        if not sus:
+            return ""
+        self._schedule_preview()          # repaint with the red faces
+        wmin = sus[0][0] / win.unitscale
+        return (f"  Suspect: {len(sus)} very narrow face(s) (shown red, "
+                f"narrowest {wmin:.3g} {win.units}) - a leftover chamfer "
+                f"or sliver can stop OpenCascade offsetting anything on "
+                f"this part. Remove them (Defeaturing) and try again.")
+
     def _on_pick(self, shapeList, *args):
         if not shapeList:
             return
@@ -1770,12 +1855,227 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self._update_status()
         if changed:
             self._schedule_preview()
+            self._schedule_offset()
 
     def _on_clear(self):
         self.face_stack = []
         self._clear_preview()
+        self._drop_preview()
         self._update_status()
         self._start_picking()
+
+    # -- live offset preview (Session 161) --------------------------
+    def _set_preview_text(self, text):
+        self.preview_label.setText(text)
+
+    def _on_live_toggled(self, on):
+        if on:
+            self._schedule_offset()
+        else:
+            self._drop_preview()
+
+    def _schedule_offset(self):
+        if self.live_box.isChecked():
+            self._offset_timer.start()
+
+    def _drop_preview(self):
+        """Forget everything about the current preview (ghost, cache,
+        queued and in-flight requests)."""
+        self._offset_timer.stop()
+        self._epoch += 1
+        self._want = None
+        self._shown_key = None
+        self._raw_cache = None
+        self._failed = None
+        self._erase_ghost()
+        self._set_preview_text("")
+
+    def _erase_ghost(self):
+        ais, self._ghost = self._ghost, None
+        if ais is None:
+            return
+        try:
+            display.remove_never_pick(ais)
+            display.Context.Remove(ais, False)
+            display.Context.UpdateCurrentViewer()
+        except Exception as e:
+            print(f"[MoveFace] ghost erase failed: {e}")
+
+    def _show_ghost(self, shape):
+        self._erase_ghost()
+        try:
+            from OCP.AIS import AIS_Shape
+            from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+            ais = AIS_Shape(shape)
+            ctx = display.Context
+            ctx.Display(ais, False)
+            display.add_never_pick(ais)       # clicks pass through it
+            ctx.SetColor(ais, Quantity_Color(
+                0.05, 0.75, 0.95, Quantity_TypeOfColor.Quantity_TOC_RGB),
+                False)
+            ctx.SetTransparency(ais, 0.6, False)
+            ctx.UpdateCurrentViewer()
+            self._ghost = ais
+        except Exception as e:
+            print(f"[MoveFace] ghost display failed: {e}")
+
+    def _request_offset(self):
+        """Work out what the preview should show now and queue it."""
+        if not self.live_box.isChecked():
+            return
+        uid = win.activePartUID
+        if uid is None or not self.face_stack:
+            self._drop_preview()
+            return
+        dist = self.dist_edit.value() * win.unitscale
+        if abs(dist) < 1.0e-9:
+            self._drop_preview()
+            return
+        workPart, _ref, face_pairs = _defeaturing_workpart(uid)
+        if face_offset.count_solids(workPart) != 1:
+            self._set_preview_text("Preview needs a part with exactly "
+                                   "one solid.")
+            return
+        seeds = _defeaturing_map_picked_faces(
+            list(self.face_stack), workPart, face_pairs)
+        idx = face_offset.face_indices(workPart, seeds) if seeds else None
+        if not idx:
+            self._set_preview_text("")
+            return
+        key = (tuple(idx), round(dist, 9))
+        if (self._shown_key == key and self._raw_cache is not None
+                and self._raw_cache[1].IsSame(workPart)):
+            return
+        if (self._failed is not None and self._failed[0] == key
+                and self._failed[1].IsSame(workPart)):
+            return
+        self._want = (workPart, idx, dist, key)
+        self._pump()
+
+    def _pump(self):
+        if self._inflight is not None or self._want is None:
+            return
+        workPart, idx, dist, key = self._want
+        self._want = None
+        try:
+            if not self._server.ensure_started():
+                self._set_preview_text("Preview unavailable (could not "
+                                       "start the offset helper).")
+                return
+            if (self._loaded_shape is None or self._loaded_gen !=
+                    self._server.generation or
+                    not self._loaded_shape.IsSame(workPart)):
+                path = os.path.join(self._tmpdir,
+                                    f"in_{self._server.generation}_"
+                                    f"{self._req_id + 1}.brep")
+                BRepTools.Write_s(workPart, path)
+                self._server.send({"op": "load", "path": path})
+                self._loaded_shape = workPart
+                self._loaded_gen = self._server.generation
+            self._req_id += 1
+            n, areas = face_offset.face_areas(workPart, idx)
+            out = os.path.join(self._tmpdir, f"out_{self._req_id}.brep")
+            self._inflight = (self._req_id, self._epoch, workPart, idx,
+                              dist, key, n, areas, out)
+            self._server.send({"op": "offset", "id": self._req_id,
+                               "idx": idx, "value": dist,
+                               "tol": face_offset.OFFSET_TOL, "out": out})
+            self._set_preview_text("Preview: computing\u2026")
+        except Exception as e:
+            self._inflight = None
+            print(f"[MoveFace] preview request failed: {e}")
+            self._set_preview_text("Preview failed (see console).")
+
+    def _on_server_message(self, msg):
+        op = msg.get("op")
+        if op == "load":
+            if not msg.get("ok"):
+                print("[MoveFace] server could not read the shape")
+                self._loaded_shape = None
+            return
+        inf = self._inflight
+        if inf is None or msg.get("id") != inf[0]:
+            return
+        self._inflight = None
+        (_rid, epoch, workPart, idx, dist, key, n, areas, out) = inf
+        try:
+            if epoch != self._epoch:
+                return                      # part changed meanwhile
+            if op == "error":
+                print(f"[MoveFace] server error: {msg.get('error')}")
+                self._failed = (key, workPart)
+                self._erase_ghost()
+                self._shown_key = None
+                self._set_preview_text("No preview for this distance."
+                                       + self._suspect_text())
+                return
+            if not face_offset.same_faces(msg["n_faces"], msg["areas"],
+                                          n, areas):
+                self._shown_key = None
+                self._erase_ghost()
+                self._set_preview_text("No preview (internal mismatch).")
+                return
+            if not msg["done"] or msg["null"]:
+                if not getattr(self, "_diag_done", False):
+                    self._diag_done = True      # once per dialog
+                    seeds_d = [TopoDS.Face_s(f) for f in
+                               face_offset._explore(workPart, TopAbs_FACE)]
+                    face_offset.diagnose(workPart,
+                                         [seeds_d[i] for i in idx])
+                self._failed = (key, workPart)
+                self._shown_key = None
+                self._raw_cache = None
+                self._erase_ghost()
+                self._set_preview_text(
+                    "No preview: OpenCascade cannot build this offset "
+                    "(try another distance, or remove fillets first)."
+                    + self._suspect_text())
+                return
+            raw = TopoDS_Shape()
+            ok = BRepTools.Read_s(raw, out, _BRepBuilderPV())
+            if not ok or raw.IsNull():
+                self._set_preview_text("No preview (could not read the "
+                                       "result).")
+                return
+            solid = face_offset.as_solid(raw)
+            if solid is None:
+                self._failed = (key, workPart)
+                self._erase_ghost()
+                self._set_preview_text(
+                    "No preview: the result would not close into a "
+                    "solid (distance too large?)." + self._suspect_text())
+                return
+            self._show_ghost(solid)
+            self._shown_key = key
+            self._raw_cache = (key, workPart, raw)
+            try:
+                dv = (face_offset.volume(solid) -
+                      face_offset.volume(workPart)) / (win.unitscale ** 3)
+                self._set_preview_text(
+                    f"Preview ({msg['secs']:.2f}s): volume "
+                    f"{dv:+.4g} {win.units}\u00b3. Apply to commit.")
+            except Exception:
+                self._set_preview_text("Preview ready. Apply to commit.")
+        finally:
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+            self._pump()          # newest request that arrived meanwhile
+
+    def _on_server_died(self, reason):
+        inf, self._inflight = self._inflight, None
+        self._loaded_shape = None
+        if inf is not None and inf[1] == self._epoch:
+            self._failed = (inf[5], inf[2])
+            self._shown_key = None
+            self._raw_cache = None
+            self._erase_ghost()
+            self._set_preview_text(
+                "No preview: OpenCascade crashed on this offset (the "
+                "application is fine). Try another distance."
+                + self._suspect_text())
+        self._pump()
 
     def _on_apply(self):
         if not require_active_part("Move Face"):
@@ -1784,11 +2084,10 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         if not self.face_stack:
             self._update_status("Pick at least one face before Apply.")
             return
-        try:
-            dist_user = float(self.dist_edit.text().strip())
-        except ValueError:
-            self._update_status("Enter a distance (a number; negative "
-                                "removes material).")
+        dist_user = self.dist_edit.value()
+        if abs(dist_user) < 1.0e-9:
+            self._update_status("Enter a distance (negative removes "
+                                "material).")
             return
         dist = dist_user * win.unitscale   # internal units are mm
         picked = list(self.face_stack)
@@ -1801,13 +2100,25 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
 
         print(f"[MoveFace] Apply: {len(seeds)} face(s), {dist:+.4f} mm -- "
               f"calling offset", flush=True)
-        newPart, msg = face_offset.offset_faces(workPart, seeds, dist)
+        self._offset_timer.stop()
+        self._erase_ghost()
+        idx_a = face_offset.face_indices(workPart, seeds)
+        key_a = (tuple(idx_a), round(dist, 9)) if idx_a else None
+        rc = self._raw_cache
+        if (rc is not None and key_a == rc[0] and rc[1].IsSame(workPart)
+                and face_offset.count_solids(workPart) == 1):
+            print("[MoveFace] using the preview result", flush=True)
+            newPart, msg = face_offset.finish_offset(
+                rc[2], "", dist, len(seeds))
+        else:
+            newPart, msg = face_offset.offset_faces(workPart, seeds, dist)
         print(f"[MoveFace] offset returned "
               f"({'ok' if newPart is not None else 'failed'}"
               f"{', ' + msg if msg else ''})", flush=True)
         if newPart is None:
-            self._update_status(msg)
+            self._update_status(msg + self._suspect_text())
             self._start_picking()
+            self._schedule_offset()
             return
         if msg == "invalid":
             newPart = _heal_if_invalid(newPart, "move face")
@@ -1829,6 +2140,8 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
 
         self._clear_preview(redraw=False)   # colors belong to the old shape
         self.face_stack = []
+        self._drop_preview()
+        self._suspects = []
         committed, cmsg = _commit_shape(uid, newPart, "MoveFace")
         if committed:
             dv = (v1 - v0) / (win.unitscale ** 3)
@@ -1848,6 +2161,15 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
 
     def closeEvent(self, event):
         self._detach_history()
+        self._offset_timer.stop()
+        self._epoch += 1
+        self._erase_ghost()
+        try:
+            self._server.stop()
+        except Exception:
+            pass
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
         if self._colored_uid is not None:
             try:
                 self._clear_preview()
