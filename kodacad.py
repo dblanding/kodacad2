@@ -1796,6 +1796,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
     def _update_status(self, extra=""):
         base = f"{len(self.face_stack)} face(s) picked."
         self.status_label.setText(f"{extra}  {base}" if extra else base)
+        QTimer.singleShot(0, self._fit_height)
 
     def _start_picking(self):
         win.registerCallback(self._on_pick)
@@ -1870,6 +1871,19 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
     # -- live offset preview (Session 161) --------------------------
     def _set_preview_text(self, text):
         self.preview_label.setText(text)
+        # word-wrapped labels don't make the dialog grow by themselves,
+        # so a long warning was clipped; grow (never shrink) to fit
+        QTimer.singleShot(0, self._fit_height)
+
+    def _fit_height(self):
+        try:
+            lay = self.layout()
+            lay.activate()
+            h = lay.totalHeightForWidth(self.width())
+            if h > self.height():
+                self.resize(self.width(), h)
+        except Exception as e:
+            print(f"[MoveFace] fit height failed: {e}")
 
     def _on_live_toggled(self, on):
         if on:

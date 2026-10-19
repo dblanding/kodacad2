@@ -7328,3 +7328,8 @@ Untested in OCP.
   widening (-1) returned NULL. Plausible: widening drives the slot ends
   deeper into the countersinks that already clip them (topology change).
   To be tested after the fix with -0.1/-0.5.
+
+## Session 167 - Move Face: clipped warning text; slot widening fails even at -0.1
+- Fresh L-bracket: slivers gone (smallest suspect now 0.838 mm, the 4 slot-end countersinks, red). Slot narrowing (+1) works via OCCT; widening fails at -0.1, -0.5, -1 (all 5 OCCT attempts NULL). So it is not the size of the widening.
+- Hypothesis (untested): the countersink cones clip the slot-end cylinders; any change of the cylinder radius changes those cone/cylinder intersections and OCCT's offset returns nothing. Test: remove the 4 red countersinks (Defeaturing) and retry -0.5.
+- Fix: dialog grew no taller for long warnings, so the suspect advice was clipped. Added `_fit_height` (grow-only) after preview/status text changes.
