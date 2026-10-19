@@ -3284,7 +3284,11 @@ class MainWindow(QMainWindow):
                     self, "_prevm_owner", None):
                 self._preview_stop_meas()
                 return
-            wp = self.activeWp
+            # Session 164: a HIDDEN workplane's circles/lines must not
+            # capture picks (Doug: Rad kept reading wp3's hidden r=100
+            # circle instead of the part's r=20 edge).
+            wp = (None if self.activeWpUID in self.hide_list
+                  else self.activeWp)
             if wp is None:
                 return
             from snap_engine import screen_to_uv
@@ -3481,7 +3485,11 @@ class MainWindow(QMainWindow):
         # 1. Engine path: 2D circle/arc on the active workplane
         try:
             click_xy = args[1] if len(args) > 1 else None
-            wp = self.activeWp
+            # Session 164: a HIDDEN workplane's circles/lines must not
+            # capture picks (Doug: Rad kept reading wp3's hidden r=100
+            # circle instead of the part's r=20 edge).
+            wp = (None if self.activeWpUID in self.hide_list
+                  else self.activeWp)
             if (click_xy is not None and click_xy[0] is not None
                     and wp is not None):
                 from snap_engine import screen_to_uv, SNAP_PIXELS
@@ -3785,7 +3793,11 @@ class MainWindow(QMainWindow):
         # 1. Engine path: 2D straight line on the active workplane
         try:
             click_xy = args[1] if len(args) > 1 else None
-            wp = self.activeWp
+            # Session 164: a HIDDEN workplane's circles/lines must not
+            # capture picks (Doug: Rad kept reading wp3's hidden r=100
+            # circle instead of the part's r=20 edge).
+            wp = (None if self.activeWpUID in self.hide_list
+                  else self.activeWp)
             if (click_xy is not None and click_xy[0] is not None
                     and wp is not None):
                 from snap_engine import screen_to_uv, SNAP_PIXELS

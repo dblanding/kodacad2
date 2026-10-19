@@ -7274,3 +7274,16 @@ Untested in OCP.
   (Defeaturing) and try again." Stale reds are ignored once the shape
   changes. The pick mixin got an `_extra_groups` hook for this.
 - Untested.
+
+## Session 164 -- Rad read a HIDDEN workplane's circle
+- Doug: measuring the r=20 slot-end edge of the geneva wheel with Rad
+  sometimes returned 100. Cause: radMeasC tries the "engine path" first
+  (nearest circle on the ACTIVE workplane, within a few pixels of the
+  click projected onto that plane) and never checked whether the
+  workplane was visible. wp3 (active, hidden) holds an r=100 circle that
+  happened to project near the click.
+- Fix (mainwindow.py): the three engine paths that use the active
+  workplane for picking/hover -- radMeasC, the straight-line measure and
+  its hover marker -- now treat the workplane as absent when its uid is
+  in `hide_list`. distPtPt already did this via find_snap(hidden=...).
+- Untested.
