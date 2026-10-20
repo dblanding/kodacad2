@@ -1308,7 +1308,25 @@ class _FacePickMixin:
             elif idx < 0:
                 self.face_stack.append(face)
                 changed = True
+                self._report_pick(face, win.unitscale)
         return changed, ""
+
+    @staticmethod
+    def _report_pick(face, unitscale):
+        """One terminal line per newly picked face, so a box select
+        that grabs more than you expected can be explained."""
+        try:
+            from OCP.BRepAdaptor import BRepAdaptor_Surface
+            from OCP.BRepGProp import BRepGProp
+            from OCP.GProp import GProp_GProps
+            g = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(face, g)
+            c = g.CentreOfMass()
+            kind = str(BRepAdaptor_Surface(face).GetType()).split(".")[-1]
+            print(f"[pick] + {kind}, area {g.Mass() / unitscale ** 2:.2f}, "
+                  f"centre ({c.X():.2f}, {c.Y():.2f}, {c.Z():.2f}) mm")
+        except Exception as e:
+            print(f"[pick] + (could not describe face: {e})")
 
     def _followers(self, ref_shape):
         """Faces (not picked) to show yellow. Override."""
@@ -1948,155 +1966,87 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
     DELTA_ADD_RGB = (0.10, 0.80, 0.20)      # green: material added
     DELTA_CUT_RGB = (0.95, 0.10, 0.85)      # magenta: material removed
 
+    @staticmethod
+    def _in_one_frame(sh):
+        """Copy of sh with its location baked into the geometry, so two
+        shapes can be compared edge by edge (a part's stored location
+        made the same edge look different; Session 168)."""
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+        from OCP.TopLoc import TopLoc_Location
+        loc = sh.Location()
+        if loc.IsIdentity():
+            return sh
+        return BRepBuilderAPI_Transform(
+            sh.Located(TopLoc_Location()), loc.Transformation(), True
+        ).Shape()
+
     def _show_delta(self, solid, workPart):
-        """Draw what the move adds (green) and removes (magenta), on top
-        of everything so even a 0.1 mm change inside the solid shows.
-        Red/orange/yellow stay reserved for suspects/picked/followers."""
+        """Draw the outline of what the move changes: the result's new
+        edges as heavy lines on top of everything (green if the move
+        adds material, magenta if it removes), so a thin change inside
+        the solid still shows. Red/orange/yellow stay reserved for
+        suspects/picked/followers. (Booleans of result vs part were
+        tried first and failed -- see the dev log.)"""
         try:
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-            from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
-            from OCP.AIS import AIS_Shape
-            from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
-            ctx = display.Context
-            made = []
-            v_new = face_offset.volume(solid)
-            v_old = face_offset.volume(workPart)
-            dv = v_new - v_old
-            tol = 1.0e-3 * max(abs(v_old), 1.0) + 1.0e-6
-
-            def _cut(a, b, fuzzy, glue):
-                op = BRepAlgoAPI_Cut(a, b)
-                if fuzzy:
-                    op.SetFuzzyValue(fuzzy)
-                if glue:
-                    from OCP.BOPAlgo import BOPAlgo_GlueShift
-                    op.SetGlue(BOPAlgo_GlueShift)
-                op.Build()
-                return op.Shape() if op.IsDone() else None
-
-            def _clean(sh, name):
-                """Bare, correctly oriented TopoDS_Solid copy of sh."""
-                from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
-                from OCP.BRepCheck import BRepCheck_Analyzer
-                from OCP.BRepLib import BRepLib
-                from OCP.TopAbs import TopAbs_SOLID
-                from OCP.TopoDS import TopoDS
-                print(f"[MoveFace] delta: {name}: type {sh.ShapeType()} "
-                      f"orient {sh.Orientation()} "
-                      f"loc-identity {sh.Location().IsIdentity()} "
-                      f"valid {BRepCheck_Analyzer(sh).IsValid()} "
-                      f"solids {face_offset.count_solids(sh)}")
-                sols = face_offset._explore(sh, TopAbs_SOLID)
-                if len(sols) != 1:
-                    return None
-                src = sols[0]
-                loc = src.Location()
-                if not loc.IsIdentity():
-                    # bake the shape's location into its geometry so it
-                    # shares one frame with the other operand
-                    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
-                    from OCP.TopLoc import TopLoc_Location
-                    t = loc.Transformation()
-                    tp = t.TranslationPart()
-                    print(f"[MoveFace] delta: {name} location translation "
-                          f"{tp.X():.4f}, {tp.Y():.4f}, {tp.Z():.4f}")
-                    local = src.Located(TopLoc_Location())
-                    src = BRepBuilderAPI_Transform(local, t, True).Shape()
-                    print(f"[MoveFace] delta: {name} baked, loc-identity "
-                          f"{src.Location().IsIdentity()}")
-                c = BRepBuilderAPI_Copy(src, True).Shape()
-                c = TopoDS.Solid_s(face_offset._explore(c, TopAbs_SOLID)[0])
-                try:
-                    from OCP.Bnd import Bnd_Box
-                    from OCP.BRepBndLib import BRepBndLib
-                    bb = Bnd_Box()
-                    BRepBndLib.Add_s(c, bb)
-                    lo, hi = bb.CornerMin(), bb.CornerMax()
-                    print(f"[MoveFace] delta: {name} bbox "
-                          f"({lo.X():.2f},{lo.Y():.2f},{lo.Z():.2f})-"
-                          f"({hi.X():.2f},{hi.Y():.2f},{hi.Z():.2f})")
-                except Exception:
-                    pass
-                BRepLib.OrientClosedSolid_s(c)
-                print(f"[MoveFace] delta: {name} cleaned volume "
-                      f"{face_offset.volume(c):.3f}")
-                return c
-
-            try:
-                s_new = _clean(solid, "result")
-                s_old = _clean(workPart, "part")
-            except Exception as e:
-                print(f"[MoveFace] delta: clean failed "
-                      f"{type(e).__name__}: {e}")
-                s_new = s_old = None
-
-            pieces = None
-            if s_new is not None and s_old is not None:
-                try:
-                    add = _cut(s_new, s_old, 0.0, False)
-                    cut = _cut(s_old, s_new, 0.0, False)
-                    va = face_offset.volume(add) if add is not None else -1
-                    vc = face_offset.volume(cut) if cut is not None else -1
-                    print(f"[MoveFace] delta: cleaned: added {va:.3f}, "
-                          f"removed {vc:.3f}, added-removed {va - vc:+.3f}")
-                    if (add is not None and cut is not None
-                            and abs((va - vc) - dv) <= tol
-                            and max(va, vc) < 0.5 * v_old + abs(dv)):
-                        pieces = [(add, va, self.DELTA_ADD_RGB),
-                                  (cut, vc, self.DELTA_CUT_RGB)]
-                except Exception as e:
-                    print(f"[MoveFace] delta: cleaned cut failed "
-                          f"{type(e).__name__}: {e}")
-            # a result and its original share almost every face, which
-            # trips up plain booleans (Session 168: whole-part garbage),
-            # so try several settings and ACCEPT ONLY a consistent one:
-            # volume(added) - volume(removed) must equal the volume change
-            print(f"[MoveFace] delta: volume old {v_old:.3f} new "
-                  f"{v_new:.3f} change {dv:+.3f} (tolerance {tol:.3f})")
-            for fuzzy, glue in (() if pieces else
-                                ((0.0, False), (1.0e-4, False))):
-                try:
-                    add = _cut(solid, workPart, fuzzy, glue)
-                    cut = _cut(workPart, solid, fuzzy, glue)
-                except Exception as e:
-                    print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
-                          f"{type(e).__name__}: {e}")
-                    continue
-                if add is None or cut is None:
-                    print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
-                          f"boolean not done")
-                    continue
-                va = face_offset.volume(add) if not add.IsNull() else 0.0
-                vc = face_offset.volume(cut) if not cut.IsNull() else 0.0
-                print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
-                      f"added {va:.3f}, removed {vc:.3f}, "
-                      f"added-removed {va - vc:+.3f}")
-                if (abs((va - vc) - dv) <= tol and va <= abs(dv) + vc + tol
-                        and max(va, vc) < 0.5 * v_old + abs(dv)):
-                    pieces = [(add, va, self.DELTA_ADD_RGB),
-                              (cut, vc, self.DELTA_CUT_RGB)]
-                    break
-            if pieces is None:
-                print("[MoveFace] delta: booleans were inconsistent; "
-                      "not drawn")
-                self._delta_ais = []
-                return
-            for piece, vol_, rgb in pieces:
-                if vol_ < 1.0e-6:
-                    continue
-                ais = AIS_Shape(piece)
-                ctx.Display(ais, False)
-                display.add_never_pick(ais)
-                ctx.SetColor(ais, Quantity_Color(
-                    *rgb, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
-                ctx.SetTransparency(ais, 0.0, False)
-                ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
-                made.append(ais)
+            dv = face_offset.volume(solid) - face_offset.volume(workPart)
+            rgb = self.DELTA_ADD_RGB if dv >= 0 else self.DELTA_CUT_RGB
+            made = self._new_edges_ais(self._in_one_frame(solid),
+                                       self._in_one_frame(workPart), rgb)
             self._delta_ais = made
-            ctx.UpdateCurrentViewer()
+            display.Context.UpdateCurrentViewer()
         except Exception as e:
             print(f"[MoveFace] delta display failed: "
                   f"{type(e).__name__}: {e}")
+
+    def _new_edges_ais(self, new_shape, old_shape, rgb):
+        """Edges of the result that the part does not have (matched by
+        length and midpoint), drawn as heavy lines on top: the outline
+        of the changed geometry, visible even when it lies inside the
+        solid. Needs no booleans (Session 168: they failed on a result
+        and original that share almost every face)."""
+        from OCP.AIS import AIS_Shape
+        from OCP.BRep import BRep_Builder
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+        from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS, TopoDS_Compound
+
+        def keyed(shape):
+            out = []
+            for e in face_offset._explore(shape, TopAbs_EDGE):
+                g = GProp_GProps()
+                BRepGProp.LinearProperties_s(e, g)
+                c = g.CentreOfMass()
+                out.append((g.Mass(), c.X(), c.Y(), c.Z(), e))
+            return out
+
+        old = keyed(old_shape)
+        new = keyed(new_shape)
+        bld = BRep_Builder()
+        comp = TopoDS_Compound()
+        bld.MakeCompound(comp)
+        n = 0
+        for (ln, x, y, z, e) in new:
+            tol = 1.0e-3 * max(1.0, ln)
+            if any(abs(ln - lo) < tol and abs(x - xo) < tol
+                   and abs(y - yo) < tol and abs(z - zo) < tol
+                   for (lo, xo, yo, zo, _e) in old):
+                continue
+            bld.Add(comp, e)
+            n += 1
+        if n == 0:
+            return []
+        ctx = display.Context
+        ais = AIS_Shape(comp)
+        ctx.Display(ais, False)
+        display.add_never_pick(ais)
+        ctx.SetColor(ais, Quantity_Color(
+            *rgb, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
+        ctx.SetWidth(ais, 3.0, False)
+        ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
+        return [ais]
 
     def _request_offset(self):
         """Work out what the preview should show now and queue it."""
@@ -2233,8 +2183,9 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                       face_offset.volume(workPart)) / (win.unitscale ** 3)
                 self._set_preview_text(
                     f"Preview ({msg['secs']:.2f}s): volume "
-                    f"{dv:+.4g} {win.units}\u00b3. Green = material added, "
-                    f"magenta = removed. Apply to commit.")
+                    f"{dv:+.4g} {win.units}\u00b3. Heavy lines = the changed edges "
+                    f"(green: material added, magenta: removed). "
+                    f"Apply to commit.")
             except Exception:
                 self._set_preview_text("Preview ready. Apply to commit.")
         finally:
