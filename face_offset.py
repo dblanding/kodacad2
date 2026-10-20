@@ -64,6 +64,43 @@ def volume(shape):
     return p.Mass()
 
 
+_GEO_WARNED = []
+
+
+def _geometric_tangent(edge, f1, f2, cos_tol=0.9998):
+    """True when faces f1, f2 have the same outward normal along `edge`
+    (checked at 3 points). Used when the edge carries no stored
+    continuity: Defeaturing and other rebuilds drop that flag, which
+    made the slot ends stop 'moving with' the slot walls (Session 168).
+    Works from 3D points on the edge projected onto each face's surface,
+    so it needs no pcurves."""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+    from OCP.GeomLProp import GeomLProp_SLProps
+    from OCP.TopAbs import TopAbs_REVERSED
+    crv = BRepAdaptor_Curve(edge)
+    t0, t1 = crv.FirstParameter(), crv.LastParameter()
+    surfs = [BRep_Tool.Surface_s(f) for f in (f1, f2)]
+    for t in (0.25, 0.5, 0.75):
+        pt = crv.Value(t0 + t * (t1 - t0))
+        ns = []
+        for face, surf in zip((f1, f2), surfs):
+            proj = GeomAPI_ProjectPointOnSurf(pt, surf)
+            if proj.NbPoints() < 1:
+                return False
+            u, v = proj.LowerDistanceParameters()
+            props = GeomLProp_SLProps(surf, u, v, 1, 1.0e-6)
+            if not props.IsNormalDefined():
+                return False
+            n = props.Normal()
+            if face.Orientation() == TopAbs_REVERSED:
+                n.Reverse()
+            ns.append(n)
+        if ns[0].Dot(ns[1]) < cos_tol:
+            return False
+    return True
+
+
 def tangent_chain(shape, seed_faces):
     """Every face of `shape` reachable from the seed faces across edges
     where the two faces meet tangentially (G1 or better). The seeds are
@@ -82,6 +119,7 @@ def tangent_chain(shape, seed_faces):
         return -1
 
     # adjacency over tangent edges only
+    n_geo = 0
     nbrs = {i: set() for i in range(len(faces))}
     for ei in range(1, emap.Extent() + 1):
         edge = TopoDS.Edge_s(emap.FindKey(ei))
@@ -89,15 +127,28 @@ def tangent_chain(shape, seed_faces):
         if len(pair) != 2 or pair[0].IsSame(pair[1]):
             continue
         try:
-            cont = BRep_Tool.Continuity_s(edge, pair[0], pair[1])
+            tangent = (BRep_Tool.Continuity_s(edge, pair[0], pair[1]).value
+                       >= GeomAbs_G1.value)
         except Exception:
-            continue
-        if cont.value >= GeomAbs_G1.value:
+            tangent = False
+        if not tangent:
+            try:
+                tangent = _geometric_tangent(edge, pair[0], pair[1])
+                n_geo += int(tangent)
+            except Exception as e:
+                tangent = False
+                if not _GEO_WARNED:
+                    _GEO_WARNED.append(1)
+                    print(f"[face_offset] geometric tangency check failed: "
+                          f"{type(e).__name__}: {e}")
+        if tangent:
             a, b = index_of(pair[0]), index_of(pair[1])
             if a >= 0 and b >= 0:
                 nbrs[a].add(b)
                 nbrs[b].add(a)
 
+    if n_geo:
+        print(f"[face_offset] {n_geo} edge(s) tangent by geometry (no stored continuity)")
     start = [i for i in (index_of(f) for f in seed_faces) if i >= 0]
     seen = set(start)
     stack = list(start)

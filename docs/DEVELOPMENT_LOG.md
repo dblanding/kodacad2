@@ -7333,3 +7333,11 @@ Untested in OCP.
 - Fresh L-bracket: slivers gone (smallest suspect now 0.838 mm, the 4 slot-end countersinks, red). Slot narrowing (+1) works via OCCT; widening fails at -0.1, -0.5, -1 (all 5 OCCT attempts NULL). So it is not the size of the widening.
 - Hypothesis (untested): the countersink cones clip the slot-end cylinders; any change of the cylinder radius changes those cone/cylinder intersections and OCCT's offset returns nothing. Test: remove the 4 red countersinks (Defeaturing) and retry -0.5.
 - Fix: dialog grew no taller for long warnings, so the suspect advice was clipped. Added `_fit_height` (grow-only) after preview/status text changes.
+- Session 167 result: after Defeaturing removed the 4 red countersinks (faces 30 -> 26), slot widening -0.1 (volume -20.75 mm^3) and -0.5 both gave OCCT ghosts. Hypothesis confirmed: the countersink/slot clip was blocking the offset; the red suspect warning pointed at the right faces. Fit-height padding +24 px (last warning line was slightly clipped).
+
+## Session 168 - tangent followers vanished after Defeaturing
+- After the 4 countersinks were removed (Defeaturing), Move Face on a slot wall showed no yellow followers ("1 face(s) picked" only); before, "3 more face(s) will move with them". Cause: tangent_chain trusted BRep_Tool.Continuity, which Defeaturing's rebuilt edges no longer carry.
+- Fix: when no stored continuity, `_geometric_tangent` compares oriented face normals at 3 points along the edge (cos >= 0.9998). Untested (no OCP in sandbox).
+- Open: check the APPLIED result moved the round slot ends with the wall (OCCT decides that itself); preview volume -105.6 mm^3 at -0.5 looks like walls+ends. Planned: added (green) / removed (magenta) delta colouring in the ghost; red stays reserved for suspects.
+- Session 168: face_offset._geometric_tangent rewritten (3D points projected onto each face; no pcurves); verified by Doug: slot loop gives 4 tangent edges, yellow followers show after Defeaturing.
+- Session 168: Move Face live preview now also draws the DELTA: green = material added (result - part), magenta = removed (part - result), via BRepAlgoAPI_Cut with fuzzy 1e-5, shown in Graphic3d_ZLayerId_Topmost so a thin change inside the solid is visible; erased with the ghost. Untested. Red/orange/yellow stay reserved (suspect/picked/follower).

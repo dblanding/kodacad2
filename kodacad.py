@@ -1879,7 +1879,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         try:
             lay = self.layout()
             lay.activate()
-            h = lay.totalHeightForWidth(self.width())
+            h = lay.totalHeightForWidth(self.width()) + 24   # last line was clipped
             if h > self.height():
                 self.resize(self.width(), h)
         except Exception as e:
@@ -1908,8 +1908,17 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self._set_preview_text("")
 
     def _erase_ghost(self):
+        deltas, self._delta_ais = getattr(self, "_delta_ais", []), []
+        for d in deltas:
+            try:
+                display.remove_never_pick(d)
+                display.Context.Remove(d, False)
+            except Exception as e:
+                print(f"[MoveFace] delta erase failed: {e}")
         ais, self._ghost = self._ghost, None
         if ais is None:
+            if deltas:
+                display.Context.UpdateCurrentViewer()
             return
         try:
             display.remove_never_pick(ais)
@@ -1935,6 +1944,45 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             self._ghost = ais
         except Exception as e:
             print(f"[MoveFace] ghost display failed: {e}")
+
+    DELTA_ADD_RGB = (0.10, 0.80, 0.20)      # green: material added
+    DELTA_CUT_RGB = (0.95, 0.10, 0.85)      # magenta: material removed
+
+    def _show_delta(self, solid, workPart):
+        """Draw what the move adds (green) and removes (magenta), on top
+        of everything so even a 0.1 mm change inside the solid shows.
+        Red/orange/yellow stay reserved for suspects/picked/followers."""
+        try:
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+            from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+            from OCP.AIS import AIS_Shape
+            from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+            ctx = display.Context
+            made = []
+            for a, b, rgb in ((solid, workPart, self.DELTA_ADD_RGB),
+                              (workPart, solid, self.DELTA_CUT_RGB)):
+                cut = BRepAlgoAPI_Cut(a, b)
+                cut.SetFuzzyValue(1.0e-5)
+                cut.Build()
+                if not cut.IsDone():
+                    continue
+                piece = cut.Shape()
+                if (piece.IsNull() or
+                        face_offset.volume(piece) < 1.0e-6):
+                    continue
+                ais = AIS_Shape(piece)
+                ctx.Display(ais, False)
+                display.add_never_pick(ais)
+                ctx.SetColor(ais, Quantity_Color(
+                    *rgb, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
+                ctx.SetTransparency(ais, 0.0, False)
+                ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
+                made.append(ais)
+            self._delta_ais = made
+            ctx.UpdateCurrentViewer()
+        except Exception as e:
+            print(f"[MoveFace] delta display failed: "
+                  f"{type(e).__name__}: {e}")
 
     def _request_offset(self):
         """Work out what the preview should show now and queue it."""
@@ -2063,6 +2111,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                     "solid (distance too large?)." + self._suspect_text())
                 return
             self._show_ghost(solid)
+            self._show_delta(solid, workPart)
             self._shown_key = key
             self._raw_cache = (key, workPart, raw)
             try:
@@ -2070,7 +2119,8 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                       face_offset.volume(workPart)) / (win.unitscale ** 3)
                 self._set_preview_text(
                     f"Preview ({msg['secs']:.2f}s): volume "
-                    f"{dv:+.4g} {win.units}\u00b3. Apply to commit.")
+                    f"{dv:+.4g} {win.units}\u00b3. Green = material added, "
+                    f"magenta = removed. Apply to commit.")
             except Exception:
                 self._set_preview_text("Preview ready. Apply to commit.")
         finally:
