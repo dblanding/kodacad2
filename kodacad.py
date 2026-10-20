@@ -1959,16 +1959,130 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
             ctx = display.Context
             made = []
-            for a, b, rgb in ((solid, workPart, self.DELTA_ADD_RGB),
-                              (workPart, solid, self.DELTA_CUT_RGB)):
-                cut = BRepAlgoAPI_Cut(a, b)
-                cut.SetFuzzyValue(1.0e-5)
-                cut.Build()
-                if not cut.IsDone():
+            v_new = face_offset.volume(solid)
+            v_old = face_offset.volume(workPart)
+            dv = v_new - v_old
+            tol = 1.0e-3 * max(abs(v_old), 1.0) + 1.0e-6
+
+            def _cut(a, b, fuzzy, glue):
+                op = BRepAlgoAPI_Cut(a, b)
+                if fuzzy:
+                    op.SetFuzzyValue(fuzzy)
+                if glue:
+                    from OCP.BOPAlgo import BOPAlgo_GlueShift
+                    op.SetGlue(BOPAlgo_GlueShift)
+                op.Build()
+                return op.Shape() if op.IsDone() else None
+
+            def _clean(sh, name):
+                """Bare, correctly oriented TopoDS_Solid copy of sh."""
+                from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+                from OCP.BRepCheck import BRepCheck_Analyzer
+                from OCP.BRepLib import BRepLib
+                from OCP.TopAbs import TopAbs_SOLID
+                from OCP.TopoDS import TopoDS
+                print(f"[MoveFace] delta: {name}: type {sh.ShapeType()} "
+                      f"orient {sh.Orientation()} "
+                      f"loc-identity {sh.Location().IsIdentity()} "
+                      f"valid {BRepCheck_Analyzer(sh).IsValid()} "
+                      f"solids {face_offset.count_solids(sh)}")
+                sols = face_offset._explore(sh, TopAbs_SOLID)
+                if len(sols) != 1:
+                    return None
+                src = sols[0]
+                loc = src.Location()
+                if not loc.IsIdentity():
+                    # bake the shape's location into its geometry so it
+                    # shares one frame with the other operand
+                    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+                    from OCP.TopLoc import TopLoc_Location
+                    t = loc.Transformation()
+                    tp = t.TranslationPart()
+                    print(f"[MoveFace] delta: {name} location translation "
+                          f"{tp.X():.4f}, {tp.Y():.4f}, {tp.Z():.4f}")
+                    local = src.Located(TopLoc_Location())
+                    src = BRepBuilderAPI_Transform(local, t, True).Shape()
+                    print(f"[MoveFace] delta: {name} baked, loc-identity "
+                          f"{src.Location().IsIdentity()}")
+                c = BRepBuilderAPI_Copy(src, True).Shape()
+                c = TopoDS.Solid_s(face_offset._explore(c, TopAbs_SOLID)[0])
+                try:
+                    from OCP.Bnd import Bnd_Box
+                    from OCP.BRepBndLib import BRepBndLib
+                    bb = Bnd_Box()
+                    BRepBndLib.Add_s(c, bb)
+                    lo, hi = bb.CornerMin(), bb.CornerMax()
+                    print(f"[MoveFace] delta: {name} bbox "
+                          f"({lo.X():.2f},{lo.Y():.2f},{lo.Z():.2f})-"
+                          f"({hi.X():.2f},{hi.Y():.2f},{hi.Z():.2f})")
+                except Exception:
+                    pass
+                BRepLib.OrientClosedSolid_s(c)
+                print(f"[MoveFace] delta: {name} cleaned volume "
+                      f"{face_offset.volume(c):.3f}")
+                return c
+
+            try:
+                s_new = _clean(solid, "result")
+                s_old = _clean(workPart, "part")
+            except Exception as e:
+                print(f"[MoveFace] delta: clean failed "
+                      f"{type(e).__name__}: {e}")
+                s_new = s_old = None
+
+            pieces = None
+            if s_new is not None and s_old is not None:
+                try:
+                    add = _cut(s_new, s_old, 0.0, False)
+                    cut = _cut(s_old, s_new, 0.0, False)
+                    va = face_offset.volume(add) if add is not None else -1
+                    vc = face_offset.volume(cut) if cut is not None else -1
+                    print(f"[MoveFace] delta: cleaned: added {va:.3f}, "
+                          f"removed {vc:.3f}, added-removed {va - vc:+.3f}")
+                    if (add is not None and cut is not None
+                            and abs((va - vc) - dv) <= tol
+                            and max(va, vc) < 0.5 * v_old + abs(dv)):
+                        pieces = [(add, va, self.DELTA_ADD_RGB),
+                                  (cut, vc, self.DELTA_CUT_RGB)]
+                except Exception as e:
+                    print(f"[MoveFace] delta: cleaned cut failed "
+                          f"{type(e).__name__}: {e}")
+            # a result and its original share almost every face, which
+            # trips up plain booleans (Session 168: whole-part garbage),
+            # so try several settings and ACCEPT ONLY a consistent one:
+            # volume(added) - volume(removed) must equal the volume change
+            print(f"[MoveFace] delta: volume old {v_old:.3f} new "
+                  f"{v_new:.3f} change {dv:+.3f} (tolerance {tol:.3f})")
+            for fuzzy, glue in (() if pieces else
+                                ((0.0, False), (1.0e-4, False))):
+                try:
+                    add = _cut(solid, workPart, fuzzy, glue)
+                    cut = _cut(workPart, solid, fuzzy, glue)
+                except Exception as e:
+                    print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
+                          f"{type(e).__name__}: {e}")
                     continue
-                piece = cut.Shape()
-                if (piece.IsNull() or
-                        face_offset.volume(piece) < 1.0e-6):
+                if add is None or cut is None:
+                    print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
+                          f"boolean not done")
+                    continue
+                va = face_offset.volume(add) if not add.IsNull() else 0.0
+                vc = face_offset.volume(cut) if not cut.IsNull() else 0.0
+                print(f"[MoveFace] delta: fuzzy={fuzzy} glue={glue}: "
+                      f"added {va:.3f}, removed {vc:.3f}, "
+                      f"added-removed {va - vc:+.3f}")
+                if (abs((va - vc) - dv) <= tol and va <= abs(dv) + vc + tol
+                        and max(va, vc) < 0.5 * v_old + abs(dv)):
+                    pieces = [(add, va, self.DELTA_ADD_RGB),
+                              (cut, vc, self.DELTA_CUT_RGB)]
+                    break
+            if pieces is None:
+                print("[MoveFace] delta: booleans were inconsistent; "
+                      "not drawn")
+                self._delta_ais = []
+                return
+            for piece, vol_, rgb in pieces:
+                if vol_ < 1.0e-6:
                     continue
                 ais = AIS_Shape(piece)
                 ctx.Display(ais, False)
