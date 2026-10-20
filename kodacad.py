@@ -2013,6 +2013,11 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         from OCP.TopAbs import TopAbs_EDGE
         from OCP.TopoDS import TopoDS, TopoDS_Compound
 
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.GeomAbs import GeomAbs_Line
+        from OCP.gp import gp_Pnt
+
         def keyed(shape):
             out = []
             for e in face_offset._explore(shape, TopAbs_EDGE):
@@ -2022,20 +2027,110 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 out.append((g.Mass(), c.X(), c.Y(), c.Z(), e))
             return out
 
+        def line_of(e):
+            """(P0, unit direction, length) for a straight edge, else None"""
+            try:
+                cv = BRepAdaptor_Curve(e)
+                if cv.GetType() != GeomAbs_Line:
+                    return None
+                a, b = cv.Value(cv.FirstParameter()), cv.Value(cv.LastParameter())
+                ln = a.Distance(b)
+                if ln < 1.0e-9:
+                    return None
+                d = ((b.X() - a.X()) / ln, (b.Y() - a.Y()) / ln,
+                     (b.Z() - a.Z()) / ln)
+                return a, d, ln
+            except Exception:
+                return None
+
+        def uncovered(info, others):
+            """Stretches of straight edge `info` not covered by any of the
+            straight edges `others`; also whether any of them lies on the
+            same line (None, [] if none does)."""
+            p0, d, length = info
+            covered, collinear = [], False
+            for (q0, dq, lq) in others:
+                if abs(d[0] * dq[0] + d[1] * dq[1] + d[2] * dq[2]) < 1 - 1e-9:
+                    continue
+                vx, vy, vz = (q0.X() - p0.X(), q0.Y() - p0.Y(),
+                              q0.Z() - p0.Z())
+                t0 = vx * d[0] + vy * d[1] + vz * d[2]
+                off = ((vx - t0 * d[0]) ** 2 + (vy - t0 * d[1]) ** 2 +
+                       (vz - t0 * d[2]) ** 2) ** 0.5
+                if off > 1.0e-4:
+                    continue               # parallel but not on this line
+                collinear = True
+                dot = dq[0] * d[0] + dq[1] * d[1] + dq[2] * d[2]
+                t1 = t0 + lq * (1.0 if dot > 0 else -1.0)
+                covered.append((min(t0, t1), max(t0, t1)))
+            if not collinear:
+                return False, []
+            covered.sort()
+            pieces, pos = [], 0.0
+            for lo, hi in covered:
+                if lo > pos + 1.0e-6:
+                    pieces.append((pos, min(lo, length)))
+                pos = max(pos, hi)
+                if pos >= length:
+                    break
+            if pos < length - 1.0e-6:
+                pieces.append((pos, length))
+            return True, [(lo, hi) for lo, hi in pieces if hi - lo > 1.0e-6]
+
+        def same_edge(a, b):
+            ln, x, y, z = a[:4]
+            lo, xo, yo, zo = b[:4]
+            tol = 1.0e-3 * max(1.0, ln)
+            return (abs(ln - lo) < tol and abs(x - xo) < tol
+                    and abs(y - yo) < tol and abs(z - zo) < tol)
+
         old = keyed(old_shape)
         new = keyed(new_shape)
+        old_lines = [l for l in (line_of(o[4]) for o in old) if l]
+        new_lines = [l for l in (line_of(o[4]) for o in new) if l]
         bld = BRep_Builder()
         comp = TopoDS_Compound()
         bld.MakeCompound(comp)
         n = 0
-        for (ln, x, y, z, e) in new:
-            tol = 1.0e-3 * max(1.0, ln)
-            if any(abs(ln - lo) < tol and abs(x - xo) < tol
-                   and abs(y - yo) < tol and abs(z - zo) < tol
-                   for (lo, xo, yo, zo, _e) in old):
+
+        def add_pieces(info, pieces):
+            nonlocal n
+            p0, d, _length = info
+            for lo, hi in pieces:
+                pa = gp_Pnt(p0.X() + lo * d[0], p0.Y() + lo * d[1],
+                            p0.Z() + lo * d[2])
+                pb = gp_Pnt(p0.X() + hi * d[0], p0.Y() + hi * d[1],
+                            p0.Z() + hi * d[2])
+                bld.Add(comp, BRepBuilderAPI_MakeEdge(pa, pb).Edge())
+                n += 1
+
+        # new edges the part lacks. A straight one lying along an old
+        # straight edge is that edge made longer: draw only the added
+        # stretch (the move from old to new), not the whole edge.
+        for item in new:
+            if any(same_edge(item, o) for o in old):
                 continue
-            bld.Add(comp, e)
-            n += 1
+            info = line_of(item[4])
+            if info is None:
+                bld.Add(comp, item[4])      # arcs, circles...: whole edge
+                n += 1
+                continue
+            collinear, pieces = uncovered(info, old_lines)
+            if not collinear:
+                bld.Add(comp, item[4])
+                n += 1
+            else:
+                add_pieces(info, pieces)
+        # old straight edges that got SHORTER: draw the stretch that went
+        for item in old:
+            if any(same_edge(item, nw) for nw in new):
+                continue
+            info = line_of(item[4])
+            if info is None:
+                continue
+            collinear, pieces = uncovered(info, new_lines)
+            if collinear:
+                add_pieces(info, pieces)
         if n == 0:
             return []
         ctx = display.Context
