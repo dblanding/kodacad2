@@ -214,9 +214,9 @@ one distance.*
 
 ![Preview: -1 mm](imgs/s5preview.png)
 
-Rotate to the outside of the upright, the face with the six holes and the
-slot. Click it and type **-1**. The magenta lines show the new, thinner
-outline, and the volume is **-1410 mm³**. Click **Apply**.
+Rotate to to see the right face with the six holes and the slot.
+Click it and type **-1**. The magenta lines show the new, thinner outline,
+and the volume is **-1410 mm³**. Click **Apply**.
 
 ![Applied](imgs/s5apply.png)
 

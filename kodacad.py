@@ -2030,7 +2030,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         def line_of(e):
             """(P0, unit direction, length) for a straight edge, else None"""
             try:
-                cv = BRepAdaptor_Curve(e)
+                cv = BRepAdaptor_Curve(TopoDS.Edge_s(e))
                 if cv.GetType() != GeomAbs_Line:
                     return None
                 a, b = cv.Value(cv.FirstParameter()), cv.Value(cv.LastParameter())
@@ -2040,7 +2040,11 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 d = ((b.X() - a.X()) / ln, (b.Y() - a.Y()) / ln,
                      (b.Z() - a.Z()) / ln)
                 return a, d, ln
-            except Exception:
+            except Exception as ex:
+                if not getattr(self, "_line_of_warned", False):
+                    self._line_of_warned = True
+                    print(f"[MoveFace] straight-edge test failed: "
+                          f"{type(ex).__name__}: {ex}")
                 return None
 
         def uncovered(info, others):
@@ -2050,14 +2054,14 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             p0, d, length = info
             covered, collinear = [], False
             for (q0, dq, lq) in others:
-                if abs(d[0] * dq[0] + d[1] * dq[1] + d[2] * dq[2]) < 1 - 1e-9:
+                if abs(d[0] * dq[0] + d[1] * dq[1] + d[2] * dq[2]) < 1 - 1e-6:
                     continue
                 vx, vy, vz = (q0.X() - p0.X(), q0.Y() - p0.Y(),
                               q0.Z() - p0.Z())
                 t0 = vx * d[0] + vy * d[1] + vz * d[2]
                 off = ((vx - t0 * d[0]) ** 2 + (vy - t0 * d[1]) ** 2 +
                        (vz - t0 * d[2]) ** 2) ** 0.5
-                if off > 1.0e-4:
+                if off > 2.0e-3:
                     continue               # parallel but not on this line
                 collinear = True
                 dot = dq[0] * d[0] + dq[1] * d[1] + dq[2] * d[2]
@@ -2107,20 +2111,50 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         # new edges the part lacks. A straight one lying along an old
         # straight edge is that edge made longer: draw only the added
         # stretch (the move from old to new), not the whole edge.
+        stat = {"matched": 0, "not-line": 0, "line-trimmed": 0,
+                "line-whole": 0}
+        whole_report = []
         for item in new:
             if any(same_edge(item, o) for o in old):
+                stat["matched"] += 1
                 continue
             info = line_of(item[4])
             if info is None:
+                stat["not-line"] += 1
+                try:
+                    kind = str(BRepAdaptor_Curve(
+                        TopoDS.Edge_s(item[4])).GetType()).split(".")[-1]
+                except Exception as ex:
+                    kind = f"? ({type(ex).__name__}: {ex})"
+                whole_report.append(f"{kind} len {item[0]:.2f}")
                 bld.Add(comp, item[4])      # arcs, circles...: whole edge
                 n += 1
                 continue
             collinear, pieces = uncovered(info, old_lines)
             if not collinear:
+                stat["line-whole"] += 1
+                # nearest parallel old line, to see if tolerance is the issue
+                p0, d, _l = info
+                best = None
+                for (q0, dq, _lq) in old_lines:
+                    if abs(d[0]*dq[0] + d[1]*dq[1] + d[2]*dq[2]) < 1 - 1e-6:
+                        continue
+                    vx, vy, vz = (q0.X()-p0.X(), q0.Y()-p0.Y(), q0.Z()-p0.Z())
+                    t0 = vx*d[0] + vy*d[1] + vz*d[2]
+                    off = ((vx-t0*d[0])**2 + (vy-t0*d[1])**2
+                           + (vz-t0*d[2])**2) ** 0.5
+                    best = off if best is None else min(best, off)
+                whole_report.append(
+                    f"line len {item[0]:.2f} nearest-parallel "
+                    + ("none" if best is None else f"{best:.4f}"))
                 bld.Add(comp, item[4])
                 n += 1
             else:
+                stat["line-trimmed"] += 1
                 add_pieces(info, pieces)
+        print(f"[MoveFace] edges: {stat}")
+        for line in whole_report[:12]:
+            print(f"[MoveFace]   whole: {line}")
         # old straight edges that got SHORTER: draw the stretch that went
         for item in old:
             if any(same_edge(item, nw) for nw in new):
