@@ -2152,19 +2152,6 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             else:
                 stat["line-trimmed"] += 1
                 add_pieces(info, pieces)
-        print(f"[MoveFace] edges: {stat}")
-        for line in whole_report[:12]:
-            print(f"[MoveFace]   whole: {line}")
-        # old straight edges that got SHORTER: draw the stretch that went
-        for item in old:
-            if any(same_edge(item, nw) for nw in new):
-                continue
-            info = line_of(item[4])
-            if info is None:
-                continue
-            collinear, pieces = uncovered(info, new_lines)
-            if collinear:
-                add_pieces(info, pieces)
         if n == 0:
             return []
         ctx = display.Context

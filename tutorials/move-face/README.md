@@ -150,18 +150,20 @@ The dialog cannot fix the part for you, but it tells you where to look.
 
 Fix it with **Defeaturing**, the tool from the previous tutorial:
 
-* Click **Done** to close Move Face.
-* Open **Create/Modify -> Defeaturing...**, choose **Method: Manual (pick
-  every face)**, and pick the four red countersink faces.
+* Open **Create/Modify -> Defeaturing...** (Move Face can stay open),
+  choose **Method: Manual (pick every face)**, and pick the four red
+  countersink faces.
 
 ![Four countersinks selected](imgs/s3b1.png)
 
-* Click **Apply**, then **Done**.
+* Click **Apply**, then **Done** to close Defeaturing.
 
 ![Countersinks removed](imgs/s3b2.png)
 
-Open **Create/Modify -> Move Face...** again, pick the slot wall, and type
-**-0.5**. This time the ghost appears.
+Back in the Move Face dialog, click **Clear Selection** so it starts
+fresh on the changed part, pick the slot wall again, and type **-0.5**.
+This time the ghost appears. (If you had closed Move Face with **Done**,
+just reopen it from **Create/Modify -> Move Face...**.)
 
 ![Slot widened: preview](imgs/s3c-preview.png)
 
@@ -185,9 +187,12 @@ mounting holes by 0.35 mm, for a clearance fit.
 
 ![Four holes box-selected](imgs/s4a.png)
 
-* Drag a **rectangle** around the four holes. Everything the rectangle
-  encloses is picked and turns orange. The dialog says **6 face(s)
-  picked**.
+* Drag a **rectangle** around the four holes, **from the top down** (a
+  *window* selection: it picks only the faces that lie **entirely**
+  inside the rectangle). They turn orange, and the dialog says **6
+  face(s) picked**. A drag from the bottom up is a *crossing* selection
+  instead, and also picks every face the rectangle merely touches, which
+  here would include the base's top face and more.
 
 Six faces for four holes? The dialog counts faces, not holes, and a hole
 can be built from more than one face. Two of these holes are made of two
@@ -214,9 +219,9 @@ one distance.*
 
 ![Preview: -1 mm](imgs/s5preview.png)
 
-Rotate to to see the right face with the six holes and the slot.
-Click it and type **-1**. The magenta lines show the new, thinner outline,
-and the volume is **-1410 mm³**. Click **Apply**.
+Rotate to the outside of the upright, the face with the six holes and the
+slot. Click it and type **-1**. The magenta lines show the new, thinner
+outline, and the volume is **-1410 mm³**. Click **Apply**.
 
 ![Applied](imgs/s5apply.png)
 
@@ -294,6 +299,11 @@ Do not Apply here, or undo it.
   that changed. A boolean difference of result and original was tried
   first and abandoned: the two shapes share almost every face and the
   boolean returned nonsense.
+- **Two box-select modes, told apart vertically.** In KodaCAD a drag from
+  top to bottom is a *window* selection (entirely inside the box), and a drag from
+  bottom to top is a *crossing* selection (inside or touching the box). This
+  is unlike many CAD programs, where it is left-to-right versus
+  right-to-left.
 - **Box select counts faces.** Two of this bracket's four base holes are
   made of two cylinder faces, so box selecting them reports 6. Moving
   either piece of such a hole drags the other with it (yellow), so the
