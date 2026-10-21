@@ -7354,3 +7354,8 @@ Untested in OCP.
 - Update main README; bump version.py 2.2.0 -> 2.3.0.
 - Tutorial confirmed by Doug: step 7 text right; box select works by dragging a rectangle (any direction); Move Face may stay open during Defeaturing, but needs Clear Selection afterwards to pick fresh faces on the changed part.
 - Doug (2026-10-20 evening): KodaCAD box select has two modes told apart VERTICALLY: top-to-bottom = window (entirely inside), bottom-to-top = crossing (inside or touching). Tutorial step 5 and notes updated; my earlier "any direction" was wrong.
+
+## Session 169 - Enter key in Defeaturing / Move Face
+- Doug's survey: Pull (Linear/Angular) and Boolean use Done only, Enter does nothing; Workplane Set completes on Done or Enter; Defeaturing needs Apply (Enter ignored); Move Face applied on Enter.
+- Cause: Qt default button. Move Face's Apply is the first button, so Enter in the Distance box pressed it; Defeaturing ignored Enter only because the keyboard focus is usually in the 3D view while picking. Not a coded difference.
+- Decision (Doug): both dialogs treat Enter the same, i.e. Enter does NOT complete the operation. Done: setAutoDefault(False)/setDefault(False) on all buttons of both dialogs. Enter in the Distance box still updates the preview (keyboard tracking). Other dialogs untouched; a full look-and-feel unification is deferred.

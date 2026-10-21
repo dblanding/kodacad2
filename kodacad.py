@@ -1478,6 +1478,14 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
         btn_row.addWidget(self.done_btn)
         lay.addLayout(btn_row)
 
+        # Enter must never press a button for us: nothing is committed
+        # until the user clicks Apply. (Without this Qt makes Apply the
+        # default button, so Enter in the Distance box applied the move
+        # while Defeaturing ignored Enter; Session 169.)
+        for _b in (self.apply_btn, self.done_btn):
+            _b.setAutoDefault(False)
+            _b.setDefault(False)
+
         self._refresh_header()
         self._on_mode_changed()
         self._start_picking()
@@ -1745,6 +1753,14 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self.done_btn.clicked.connect(self._on_done)
         btn_row.addWidget(self.done_btn)
         lay.addLayout(btn_row)
+
+        # Enter must never press a button for us: nothing is committed
+        # until the user clicks Apply. (Without this Qt makes Apply the
+        # default button, so Enter in the Distance box applied the move
+        # while Defeaturing ignored Enter; Session 169.)
+        for _b in (self.apply_btn, self.clear_btn, self.done_btn):
+            _b.setAutoDefault(False)
+            _b.setDefault(False)
 
         # --- live preview machinery (Session 161) ---
         self._epoch = 0           # bumps when the part changes/ghost cleared
