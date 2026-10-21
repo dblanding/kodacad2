@@ -13,13 +13,38 @@ A from-scratch 3D CAD application
     * Import components in STEP format
     * Position them within an assembly structure
     * Create simple mounting plates & brackets
+    * Modify parts directly, even ones you didn't build: remove
+      features (**Defeaturing**) and push or pull faces (**Move Face**)
+      with a live preview
     * Save session as `.kcad`, or export the 3D model as plain STEP
 
 Designed for users who want to assemble, modify, and create
 3D mechanical parts and assemblies using a scriptable, open-source
 toolchain -- with no commercial dependencies and no Conda environment.
 
-![KodaCAD UI](icons/kodacad-ui.png)
+![KodaCAD UI](imgs/kodacad-ui.png)
+
+## Dynamic modeling: change the part, not the history
+
+A STEP file arrives with no feature tree. KodaCAD lets you edit it
+directly, the way the HP/CoCreate lineage did:
+
+* **Move Face** -- pick a face (or a box of faces), type a distance, and
+  watch a live ghost of the result before you commit. A positive
+  distance adds material (thickens a wall, narrows a slot); a negative
+  one removes it (opens a hole up for a clearance fit). Faces that must
+  move with the one you picked show in yellow, and heavy green or
+  magenta lines mark exactly what changes.
+* **Defeaturing** -- remove a hole, a pocket, a blend or a whole
+  isolated feature, and the surrounding faces heal over the gap.
+* **They work together.** When OpenCascade cannot build an offset, Move
+  Face marks the faces that stand in its way in red and tells you what
+  to remove first; Defeaturing takes them out, and the move goes
+  through.
+
+Try it on a real bracket in the
+[Moving Faces tutorial](tutorials/move-face/README.md), and see
+[Defeaturing a Part](tutorials/defeaturing/README.md) for the other half.
 
 ## What makes KodaCAD different
 
@@ -241,6 +266,12 @@ what it exercises in KodaCAD's own code.
 - **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** -- building a simple lofted part then working it over:
   subtracting one lofted part from another, a transverse hole, fillets,
   and finally defeaturing to take the fillets back off.
+- **[Moving Faces](tutorials/move-face/README.md)** --
+  pushing and pulling the faces of an imported L-bracket (`L-brkt.stp`)
+  with a live preview: thickening a wall, opening up a slot, widening
+  holes (box select and Ctrl+click to unpick), and what to do when
+  OpenCascade cannot build an offset -- the red "suspect" faces, and
+  Defeaturing to fix them.
   
 
 ## Tested workflows
@@ -279,6 +310,10 @@ kodacad2/
   m2d.py              2D sketch toolbar
   koda_viewport.py    OCP 3D viewport (AIS_ViewController)
   stepanalyzer.py     STEP structure analysis utility
+  face_offset.py      Move Face geometry (per-face offset, no GUI)
+  face_offset_server.py  persistent worker that computes the live preview
+  face_offset_worker.py  one-shot worker used by Apply
+  offset_preview.py   Qt client for the preview worker
   rpnCalculator.py    RPN calculator widget
   version.py          version string
   OCCUtils/           OCC geometry utilities (ported from PythonOCC)
@@ -296,6 +331,7 @@ kodacad2/
     jack/               sketch a jack-o'-lantern face, then carve a pumpkin
     defeaturing/        remove holes and features, heal the gap
     lofting/            loft through a workplane set, then work it over
+    move-face/          push/pull faces of an L-bracket, with live preview
   pyproject.toml      uv project file
 ```
 

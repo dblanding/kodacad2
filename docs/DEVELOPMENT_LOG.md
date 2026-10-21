@@ -7359,3 +7359,8 @@ Untested in OCP.
 - Doug's survey: Pull (Linear/Angular) and Boolean use Done only, Enter does nothing; Workplane Set completes on Done or Enter; Defeaturing needs Apply (Enter ignored); Move Face applied on Enter.
 - Cause: Qt default button. Move Face's Apply is the first button, so Enter in the Distance box pressed it; Defeaturing ignored Enter only because the keyboard focus is usually in the 3D view while picking. Not a coded difference.
 - Decision (Doug): both dialogs treat Enter the same, i.e. Enter does NOT complete the operation. Done: setAutoDefault(False)/setDefault(False) on all buttons of both dialogs. Enter in the Distance box still updates the preview (keyboard tracking). Other dialogs untouched; a full look-and-feel unification is deferred.
+
+## Session 170 - README and version 2.3.0
+- version.py: APP_VERSION 2.3.0 with a release note (Move Face, suspect faces, unpick, Enter behavior, Rad hidden-workplane fix, new tutorial).
+- README.md: Moving Faces added to the tutorial list and file structure (also lists face_offset*.py and offset_preview.py).
+- README.md: added a "Dynamic modeling: change the part, not the history" section under the screenshot (Move Face + Defeaturing, working together) and a bullet in the intro list.

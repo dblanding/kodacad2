@@ -1,5 +1,28 @@
 """Single source of truth for the KodaCAD application version.
 
+2.3.0 -- 2026-10-21 (Sessions 154-169)
+* Create/Modify -> Move Face: push or pull one or more faces by a typed
+  distance (+ adds material, - removes it) using OCCT's per-face
+  offset. Live preview: a translucent ghost of the result, the picked
+  faces in orange, faces that move with them (tangent) in yellow, and
+  heavy lines (green: material added, magenta: removed) showing only
+  the stretch each edge changes by. Planar faces with parallel
+  neighbours are moved by an exact extrude/cut instead, and the
+  offset runs in a separate worker process so a slow or failed
+  offset never freezes the GUI.
+* When OpenCascade cannot build an offset, Move Face marks the
+  "suspect" faces red (very narrow faces, or faces touching a very
+  short edge: a leftover chamfer, a sliver, a countersink that just
+  clips a slot) with advice to remove them first (Defeaturing).
+* Ctrl+click unpicks a face in Defeaturing and Move Face; box select
+  adds (drag top to bottom = window, bottom to top = crossing).
+* Enter no longer completes the operation in Defeaturing or Move Face;
+  only Apply does.
+* Rad measurement ignores circles on hidden workplanes.
+* Move status is shown in the user's units; a zero-radius circle no
+  longer breaks drawing.
+* New tutorial: Moving Faces (tutorials/move-face).
+
 2.2.0 -- 2026-10-12 (Sessions 149-152)
 * Native session format: File -> Save Session now writes a .kcad file
   (a zip holding the STEP model plus workplanes.json), so workplanes,
@@ -49,4 +72,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
