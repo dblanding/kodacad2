@@ -7364,3 +7364,10 @@ Untested in OCP.
 - version.py: APP_VERSION 2.3.0 with a release note (Move Face, suspect faces, unpick, Enter behavior, Rad hidden-workplane fix, new tutorial).
 - README.md: Moving Faces added to the tutorial list and file structure (also lists face_offset*.py and offset_preview.py).
 - README.md: added a "Dynamic modeling: change the part, not the history" section under the screenshot (Move Face + Defeaturing, working together) and a bullet in the intro list.
+
+## Session 171 - Animate Mechanism (Geneva drive), first cut
+- Doug: a QSlider that actuates a 4-slot Geneva mechanism (pin-wheel + geneva-wheel) through a full revolution, driven by a simple user-editable Python file; prefer OCCT functionality over our own code. theta = 0 means the pin is on the line of centres.
+- Design: display-only. `mechanism_dialog.py` rotates each moving part's AIS_Shape with `AIS_InteractiveContext.SetLocation(ais, TopLoc_Location(gp_Trsf rotation about gp_Ax1))`; the XDE document and undo history are untouched; Done restores. Position's `set_component_location` was rejected (removes/re-adds the component, new uid, parse_doc, tree rebuild: far too heavy per tick).
+- `mechanisms/geneva4.py` (user-editable): PARTS {tree name: role}, `setup(ctx)` returns shaft axes (centres from part bbox centres via ctx.center), `angles(theta)` returns degrees per role relative to the MODELLED pose (START = crank angle of the model as drawn, default 315 = -45, a guess). Engagement: wheel turns atan2(a sin t, C - a cos t) for |t| <= 90 - 180/N, held at +-180/N otherwise, +360/N per crank revolution; a = C sin(pi/N). Checked without OCP: continuous, monotone, 90 deg per revolution, +-45 at window ends, max wheel/crank speed ratio 2.414 at t=0.
+- Menu: Utility -> Animate Mechanism... Not run (no OCP in sandbox). Things to check: part names in part_dict match the tree ('driver_1', 'pin_1', 'geneva-wheel_1'); the displayed AIS shapes are in world coordinates; rotation senses (CRANK_DIR/WHEEL_DIR) and START.
+- Mechanism files are Python run in-process; deliberately kept out of .kcad sessions (a session never executes anything on load).

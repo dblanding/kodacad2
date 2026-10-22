@@ -3562,6 +3562,10 @@ if __name__ == "__main__":
     win.add_function_to_menu(
         "Utility", "XDE Label Hierarchy...",
         lambda: show_xde_tree_dialog(win))
+    from mechanism_dialog import show_mechanism_dialog
+    win.add_function_to_menu(
+        "Utility", "Animate Mechanism...",
+        lambda: show_mechanism_dialog(win))
     win.add_function_to_menu("Utility", "print label_dict", print_uid_dict)
     win.add_function_to_menu("Utility", "print part_dict", print_part_dict)
     win.add_function_to_menu("Utility", "dump doc", dumpDoc)
