@@ -551,6 +551,15 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.currOpLabel)
         status.addPermanentWidget(self.endOpButton)
         status.addPermanentWidget(self.unitsLabel)
+        # Session 173: the 'pen' -- a color picked up from a part
+        # (RMB 'Take Color as Pen') that 'Paint with Pen Color' applies.
+        self.penColor = None
+        self.penLabel = QLabel("Pen: none ")
+        self.penLabel.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        self.penLabel.setToolTip("Color picked up from a part: RMB a part "
+                                 "-> Take Color as Pen, then RMB -> Paint "
+                                 "with Pen Color")
+        status.addPermanentWidget(self.penLabel)
         status.showMessage("Ready", 5000)
 
         self.hide_list = []  # list of part uid's to be hidden (not displayed)
@@ -909,6 +918,8 @@ class MainWindow(QMainWindow):
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
+        menu.addAction("Take Color as Pen", self.takeColorAsPen)
+        menu.addAction("Paint with Pen Color", self.paintWithPen)
         menu.addAction("Color Faces (display only)...",
                        self.colorFaces)
         menu.addSeparator()
@@ -1425,6 +1436,70 @@ class MainWindow(QMainWindow):
             self.erase_shape(uid)
             self.draw_shape(uid)
 
+    def _apply_color_to_parts(self, targets, occt_color):
+        """Set occt_color on every uid in targets (permanently, in the
+        document) and refresh each affected display once."""
+        refreshed = set()
+        for tuid in targets:
+            for auid in dm.set_part_color(tuid, occt_color):
+                if auid in refreshed:
+                    continue
+                refreshed.add(auid)
+                self.erase_shape(auid)
+                self.draw_shape(auid)
+        if len(targets) > 1:
+            self.statusBar().showMessage(
+                f"Color set on {len(targets)} parts.", 5000)
+
+    def _set_pen(self, color):
+        """Make color (a Quantity_Color) the pen and show its swatch."""
+        self.penColor = color
+        r, g, b = color.Red(), color.Green(), color.Blue()
+        qc = QColor.fromRgbF(r, g, b)
+        text = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 \
+            else "#ffffff"
+        self.penLabel.setText(f"Pen: {qc.name()} ")
+        self.penLabel.setStyleSheet(
+            f"background-color: {qc.name()}; color: {text};")
+
+    def takeColorAsPen(self):
+        """RMB: 'fill the pen' with the clicked part's color."""
+        item = self._get_clicked_or_current_item()
+        self.itemClicked = None
+        uid = item.text(1) if item else None
+        if uid not in dm.part_dict:
+            self.statusBar().showMessage(
+                "Right-click a PART to take its color.", 5000)
+            return
+        color = dm.part_dict[uid].get("color")
+        if color is None:
+            self.statusBar().showMessage(
+                f"'{dm.part_dict[uid].get('name', uid)}' has no color of "
+                f"its own to take.", 5000)
+            return
+        self._set_pen(color)
+        self.statusBar().showMessage(
+            f"Pen color taken from '{dm.part_dict[uid].get('name', uid)}'.",
+            5000)
+
+    def paintWithPen(self):
+        """RMB: color the clicked part (or every selected part) with the
+        pen color."""
+        item = self._get_clicked_or_current_item()
+        self.itemClicked = None
+        if self.penColor is None:
+            self.statusBar().showMessage(
+                "The pen is empty: RMB a part -> Take Color as Pen first.",
+                6000)
+            return
+        uid = item.text(1) if item else None
+        if uid not in dm.part_dict:
+            self.statusBar().showMessage(
+                "Right-click a PART to paint it.", 5000)
+            return
+        self._apply_color_to_parts(self._selected_part_uids(uid),
+                                   self.penColor)
+
     def _selected_part_uids(self, clicked_uid):
         """uids of the PARTS to act on for a right-click on clicked_uid
         (Session 173): all selected tree parts when the clicked row is
@@ -1502,17 +1577,7 @@ class MainWindow(QMainWindow):
                     # Session 173: every selected part (just the clicked
                     # one when there is no multi-selection); each uid is
                     # refreshed once even if shared instances overlap.
-                    refreshed = set()
-                    for tuid in targets:
-                        for auid in dm.set_part_color(tuid, occt_color):
-                            if auid in refreshed:
-                                continue
-                            refreshed.add(auid)
-                            self.erase_shape(auid)
-                            self.draw_shape(auid)
-                    if len(targets) > 1:
-                        self.statusBar().showMessage(
-                            f"Color set on {len(targets)} parts.", 5000)
+                    self._apply_color_to_parts(targets, occt_color)
             self.itemClicked = None
         else:
             print("No item selected. Try first left clicking item then right clicking.")

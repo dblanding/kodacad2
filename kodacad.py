@@ -1857,7 +1857,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self.units_label.setText(win.units)
         # arrow-key / wheel step: a sensible bit of the chosen unit
         self.dist_edit.setSingleStep({"mm": 0.1, "in": 0.01,
-                                      "ft": 0.001}.get(win.units, 0.1))
+                                      "ft": 0.001, "m": 0.001}.get(win.units, 0.1))
 
     def _update_status(self, extra=""):
         base = f"{len(self.face_stack)} face(s) picked."
@@ -2851,6 +2851,14 @@ def setUnits_mm():
     win.setUnits("mm")
 
 
+def setUnits_ft():
+    win.setUnits("ft")
+
+
+def setUnits_m():
+    win.setUnits("m")
+
+
 def _scene_bbox_center():
     """World-space (x, y, z) center of every currently displayed
     part's own bounding box, or (0, 0, 0) if nothing's displayed.
@@ -3615,6 +3623,8 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "Calculator", win.launchCalc)
     win.add_function_to_menu("Utility", "set Units ->in", setUnits_in)
     win.add_function_to_menu("Utility", "set Units ->mm", setUnits_mm)
+    win.add_function_to_menu("Utility", "set Units ->ft", setUnits_ft)
+    win.add_function_to_menu("Utility", "set Units ->m", setUnits_m)
 
     drawSubMenu = QMenu("Draw")
     win.popMenu.addMenu(drawSubMenu)
