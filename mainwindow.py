@@ -87,7 +87,13 @@ class TreeView(QTreeWidget):
         # Right-clicking should target whatever item is under the
         # cursor, regardless of whether it was left-clicked first.
         item = self.itemAt(point)
-        if item is not None:
+        # Session 173 (Doug): right-clicking a row that is ALREADY part
+        # of a multi-selection must keep that selection, so an action
+        # (Set Color ...) can apply to the whole group. setCurrentItem()
+        # would collapse it to one row. Right-clicking an unselected
+        # row still selects just that row, as before.
+        if item is not None and not (item.isSelected()
+                                     and len(self.selectedItems()) > 1):
             self.setCurrentItem(item)
         # Also overwrite the main window's itemClicked (Session 59):
         # a stale-but-VALID itemClicked from an earlier left-click on
@@ -1374,6 +1380,18 @@ class MainWindow(QMainWindow):
             self.erase_shape(uid)
             self.draw_shape(uid)
 
+    def _selected_part_uids(self, clicked_uid):
+        """uids of the PARTS to act on for a right-click on clicked_uid
+        (Session 173): all selected tree parts when the clicked row is
+        one of a multi-selection, otherwise just the clicked row.
+        Assemblies and workplanes in the selection are skipped."""
+        sel = [it.text(1) for it in self.treeView.selectedItems()]
+        if clicked_uid in sel and len(sel) > 1:
+            uids = [u for u in sel if u in dm.part_dict]
+            if uids:
+                return uids
+        return [clicked_uid]
+
     def setPartColor(self):
         """RMB: open a color picker and set the clicked part's own
         color -- permanently, via dm.set_part_color(), which writes
@@ -1407,6 +1425,7 @@ class MainWindow(QMainWindow):
         if item:
             uid = item.text(1)
             if uid in dm.part_dict:
+                targets = self._selected_part_uids(uid)
                 initial = QColor()
                 current = dm.part_dict[uid].get("color")
                 if current is not None:
@@ -1435,9 +1454,20 @@ class MainWindow(QMainWindow):
                     # session even though the document itself, and
                     # therefore a save/reload, is already correct for
                     # all of them.
-                    for auid in dm.set_part_color(uid, occt_color):
-                        self.erase_shape(auid)
-                        self.draw_shape(auid)
+                    # Session 173: every selected part (just the clicked
+                    # one when there is no multi-selection); each uid is
+                    # refreshed once even if shared instances overlap.
+                    refreshed = set()
+                    for tuid in targets:
+                        for auid in dm.set_part_color(tuid, occt_color):
+                            if auid in refreshed:
+                                continue
+                            refreshed.add(auid)
+                            self.erase_shape(auid)
+                            self.draw_shape(auid)
+                    if len(targets) > 1:
+                        self.statusBar().showMessage(
+                            f"Color set on {len(targets)} parts.", 5000)
             self.itemClicked = None
         else:
             print("No item selected. Try first left clicking item then right clicking.")
