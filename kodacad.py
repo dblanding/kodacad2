@@ -19,6 +19,38 @@ import sys
 # the fault, which says which of our lines was running.
 faulthandler.enable()
 
+# Session 173: when KodaCAD is started by double-clicking an icon, the
+# terminal closes with the program, so a crash leaves nothing to read.
+# Also send crash stacks (and uncaught Python exceptions) to a log file
+# next to this script: kodacad-crash.log. It is appended to, with a
+# start-up line each run, so the LAST block before the next start-up
+# line is the crash. Delete the file any time.
+try:
+    import datetime
+    import traceback
+    _crash_log_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "kodacad-crash.log")
+    _crash_log = open(_crash_log_path, "a", buffering=1)
+    _crash_log.write(f"\n=== KodaCAD started "
+                     f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} ===\n")
+    # file= replaces stderr for native crashes; the terminal still gets
+    # Python exceptions through the hook below.
+    faulthandler.enable(file=_crash_log, all_threads=True)
+    _orig_excepthook = sys.excepthook
+
+    def _log_excepthook(etype, value, tb):
+        try:
+            _crash_log.write(f"\n--- uncaught exception "
+                             f"{datetime.datetime.now():%H:%M:%S} ---\n")
+            traceback.print_exception(etype, value, tb, file=_crash_log)
+        except Exception:
+            pass
+        _orig_excepthook(etype, value, tb)
+
+    sys.excepthook = _log_excepthook
+except Exception as _e:   # logging must never stop the app starting
+    print(f"[crash log] could not open log file: {_e}")
+
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder
@@ -1825,7 +1857,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self.units_label.setText(win.units)
         # arrow-key / wheel step: a sensible bit of the chosen unit
         self.dist_edit.setSingleStep({"mm": 0.1, "in": 0.01,
-                                      "ft": 0.001, "m": 0.001}.get(win.units, 0.1))
+                                      "ft": 0.001}.get(win.units, 0.1))
 
     def _update_status(self, extra=""):
         base = f"{len(self.face_stack)} face(s) picked."
@@ -2819,14 +2851,6 @@ def setUnits_mm():
     win.setUnits("mm")
 
 
-def setUnits_ft():
-    win.setUnits("ft")
-
-
-def setUnits_m():
-    win.setUnits("m")
-
-
 def _scene_bbox_center():
     """World-space (x, y, z) center of every currently displayed
     part's own bounding box, or (0, 0, 0) if nothing's displayed.
@@ -3591,8 +3615,6 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "Calculator", win.launchCalc)
     win.add_function_to_menu("Utility", "set Units ->in", setUnits_in)
     win.add_function_to_menu("Utility", "set Units ->mm", setUnits_mm)
-    win.add_function_to_menu("Utility", "set Units ->ft", setUnits_ft)
-    win.add_function_to_menu("Utility", "set Units ->m", setUnits_m)
 
     drawSubMenu = QMenu("Draw")
     win.popMenu.addMenu(drawSubMenu)
