@@ -629,6 +629,8 @@ class MainWindow(QMainWindow):
         # keyboard navigation (itemClicked is mouse-only), so the
         # viewport tracks arrow-key tree navigation too (Session 60).
         self.treeView.currentItemChanged.connect(self.onTreeCurrentChanged)
+        self.treeView.itemSelectionChanged.connect(
+            self.onTreeSelectionChanged)
         self.populate_tree_context_menu()
         self.treeDockWidget.setWidget(self.treeView)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.treeDockWidget)
@@ -1801,6 +1803,8 @@ class MainWindow(QMainWindow):
         try:
             self.canvas._display.register_select_callback(
                 self.onViewportSelect)
+            self.canvas._display.register_box_callback(
+                self.onViewportBoxSelect)
         except Exception as e:
             print(f"[highlight_sync] could not register: {e}")
 
@@ -1826,6 +1830,8 @@ class MainWindow(QMainWindow):
             return
         if self._syncing_highlight:
             return
+        if getattr(self.canvas._display, "box_selecting", False):
+            return   # a box select is reported once, by onViewportBoxSelect
         ais_obj = args[0] if args else None
         uid = self._uid_for_ais(ais_obj)
         if uid is None and shape_list:
@@ -1841,6 +1847,82 @@ class MainWindow(QMainWindow):
             else:
                 self.treeView.setCurrentItem(None)
             self._highlighted_uid = uid
+        finally:
+            self._syncing_highlight = False
+
+    def onViewportBoxSelect(self, ais_list):
+        """Viewport -> tree for a box select (Session 173): every part
+        touched by the box is selected in the tree (Ctrl/Shift-style
+        multi-selection), so the tree's own drag-to-assembly, delete
+        etc. can act on the whole group. Stands aside while an
+        operation owns the selection, like onViewportSelect."""
+        if self.registeredCallback is not None:
+            return
+        if self._syncing_highlight:
+            return
+        uids = []
+        seen = set()
+        for ais_obj in ais_list:
+            uid = self._uid_for_ais(ais_obj)
+            if uid is not None and uid not in seen:
+                seen.add(uid)
+                uids.append(uid)
+        if not uids:
+            return
+        # ONE walk of the tree, not one search per part
+        items = {}
+        for item in self.treeView.findItems(
+                "", Qt.MatchFlag.MatchContains | Qt.MatchRecursive):
+            items[item.text(1)] = item
+        self._syncing_highlight = True
+        try:
+            self.treeView.clearSelection()
+            last = None
+            for uid in uids:
+                item = items.get(uid)
+                if item is None:
+                    continue
+                par = item.parent()
+                while par is not None:      # reveal parts in collapsed assemblies
+                    par.setExpanded(True)
+                    par = par.parent()
+                item.setSelected(True)
+                last = item
+            if last is not None:
+                from PySide6.QtCore import QItemSelectionModel
+                self.treeView.setCurrentItem(
+                    last, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
+                self.treeView.scrollToItem(last)
+            self._highlighted_uid = uids[-1]
+        finally:
+            self._syncing_highlight = False
+        n = len(uids)
+        self.statusBar().showMessage(
+            f"{n} part{'s' if n != 1 else ''} selected -- drag them in the "
+            f"tree onto an assembly, or right-click for more.", 8000)
+
+    def onTreeSelectionChanged(self):
+        """Tree -> viewport for a MULTI-row selection (Session 173).
+        A single row is handled by onTreeCurrentChanged."""
+        if self._syncing_highlight:
+            return
+        uids = [it.text(1) for it in self.treeView.selectedItems()]
+        uids = [u for u in uids if u in self.ais_shape_dict]
+        if len(uids) < 2:
+            return
+        display = getattr(self.canvas, "_display", None)
+        if display is None:
+            return
+        context = display.Context
+        self._syncing_highlight = True
+        try:
+            context.ClearSelected(False)
+            for uid in uids:
+                context.AddOrRemoveSelected(self.ais_shape_dict[uid], False)
+            context.UpdateCurrentViewer()
+            self.canvas.update()
+        except Exception as e:
+            print(f"[highlight_sync] multi highlight failed: {e}")
         finally:
             self._syncing_highlight = False
 

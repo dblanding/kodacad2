@@ -172,6 +172,28 @@ class DisplayShim:
         if callback in self._select_callbacks:
             self._select_callbacks.remove(callback)
 
+    # Session 173: a completed box-select is also reported ONCE, as the
+    # list of selected AIS objects, to these callbacks (the tree sync).
+    # While the per-shape callbacks run, box_selecting is True so the
+    # single-pick highlight sync can stand aside (it used to run once
+    # per shape, each time scanning every part -- very slow on big
+    # models).
+    box_selecting = False
+
+    def register_box_callback(self, callback):
+        if not hasattr(self, "_box_callbacks"):
+            self._box_callbacks = []
+        self._box_callbacks.append(callback)
+
+    def call_box_callbacks(self, ais_list):
+        for cb in getattr(self, "_box_callbacks", []):
+            try:
+                cb(ais_list)
+            except Exception:
+                import traceback
+                print("Box-select callback error:")
+                traceback.print_exc()
+
     def call_select_callbacks(self, shape, *args):
         self.selected_shape = shape
         # PythonOCC callbacks expected (shapeList, *args) where shapeList
@@ -969,11 +991,23 @@ class KodaViewport(QWidget):
                     # (filletC and the rest) needs no changes at all,
                     # including their own, already-existing status
                     # bar count messages.
-                    self.context.InitSelected()
-                    while self.context.MoreSelected():
-                        shape = self.context.SelectedShape()
-                        self._display.call_select_callbacks(shape)
-                        self.context.NextSelected()
+                    ais_list = []
+                    self._display.box_selecting = True
+                    try:
+                        self.context.InitSelected()
+                        while self.context.MoreSelected():
+                            shape = self.context.SelectedShape()
+                            try:
+                                ais_list.append(
+                                    self.context.SelectedInteractive())
+                            except Exception:
+                                pass
+                            self._display.call_select_callbacks(shape)
+                            self.context.NextSelected()
+                    finally:
+                        self._display.box_selecting = False
+                    # one report for the whole box (Session 173)
+                    self._display.call_box_callbacks(ais_list)
         elif event.button() == Qt.MouseButton.MiddleButton:
             if (self._press_pos is not None and
                     self._drag_distance < self._drag_threshold and
