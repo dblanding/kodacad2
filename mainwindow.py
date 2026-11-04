@@ -514,7 +514,7 @@ class MainWindow(QMainWindow):
         # scale user input and output values
         # (user input values) * unitscale = value in mm
         # (output values) / unitscale = value in user's units
-        self._unitDict = {"mm": 1.0, "in": 25.4, "ft": 304.8}
+        self._unitDict = {"mm": 1.0, "in": 25.4, "ft": 304.8, "m": 1000.0}
         self.units = "mm"
         self.unitscale = self._unitDict[self.units]
         self.unitsLabel = QLabel()
@@ -2596,7 +2596,10 @@ class MainWindow(QMainWindow):
                 if bbnds is not None:
                     pane_min = min(bbnds[2] - bbnds[0],
                                    bbnds[3] - bbnds[1])
-                    lh = max(2.5, min(0.05 * pane_min, 12.0))
+                    # Session 173: the old 12 mm cap made the label vanish on
+                    # huge models (a quarter-mile bridge); now it is always
+                    # 5% of the pane, so it looks the same at any scale.
+                    lh = max(2.5, 0.05 * pane_min)
                     lorig = (bbnds[0] + 0.6 * lh, bbnds[1] + 0.6 * lh)
                     lshape = _wp_label_shape(f"/{uid}", lorig, lh,
                                              wp.Trsf)
