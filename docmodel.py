@@ -872,6 +872,72 @@ class DocModel:
         self.parse_doc()
         return True
 
+    def delete_components(self, uids):
+        """Delete SEVERAL components in one pass (Session 173, Doug:
+        removing a box-selected group of parts from an imported model).
+
+        Why not call delete_component() in a loop: uids are
+        'entry.serial', and the serial numbers are handed out afresh by
+        every parse_doc(). Deleting one instance of a shared part can
+        renumber the others, so a list of uids captured beforehand
+        would point at the wrong things after the first delete (and it
+        would re-parse the whole document once per part). Instead:
+          1. resolve EVERY uid to its component label first (labels do
+             not change when others are removed);
+          2. RemoveComponent each one (this drops only the INSTANCE);
+          3. only then check each referred (prototype) shape -- it is
+             removed, with its orphaned descendants, ONLY if nothing
+             else still uses it (GetUsers_s == 0), so a prototype that
+             other instances need is never deleted;
+          4. parse_doc() once.
+        Uids that share one component label (children seen through
+        several instances of a shared assembly) are removed once.
+        Top-level components (no parent) are not handled here.
+        Returns the number of components removed."""
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.TDF import TDF_Label, TDF_LabelSequence
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        targets = []
+        seen = set()
+        for uid in uids:
+            info = self.label_dict.get(uid)
+            if not info or not info.get('parent_uid'):
+                continue
+            entry = info['entry']
+            if entry in seen:
+                continue
+            seen.add(entry)
+            label = self._find_label_by_entry(entry)
+            if label is not None:
+                targets.append(label)
+        refs = []
+        for comp_label in targets:
+            ref_label = TDF_Label()
+            has_ref = shape_tool.GetReferredShape_s(comp_label, ref_label)
+            shape_tool.RemoveComponent(comp_label)
+            if has_ref and not ref_label.IsNull():
+                refs.append(ref_label)
+        shape_tool.UpdateAssemblies()
+        done = set()
+        n_orphans = 0
+        for ref_label in refs:
+            entry = get_label_entry(ref_label)
+            if entry in done:
+                continue
+            done.add(entry)
+            # an earlier cascade may already have removed this one
+            if ref_label.IsNull() or not shape_tool.IsShape_s(ref_label):
+                continue
+            users = TDF_LabelSequence()
+            if shape_tool.GetUsers_s(ref_label, users, False) == 0:
+                remove_shape_and_orphaned_descendants(shape_tool, ref_label)
+                n_orphans += 1
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        print(f"[delete] {len(targets)} component(s) removed, "
+              f"{n_orphans} orphaned prototype(s) removed too")
+        return len(targets)
+
     def set_component_location(self, uid, new_local_loc):
         """Reposition a component IN PLACE (same parent) by removing it
         and re-adding it at the new location.

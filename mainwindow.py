@@ -1204,6 +1204,11 @@ class MainWindow(QMainWindow):
             return
         name = item.text(0)
         uid = item.text(1)
+        sel_uids = [it.text(1) for it in self.treeView.selectedItems()]
+        if len(sel_uids) > 1 and uid in sel_uids:
+            self._delete_selected(sel_uids)
+            self.itemClicked = None
+            return
         if uid in self.wp_set_dict:
             # Whole Workplane Set node (Session 127): deleting it
             # deletes every workplane it contains, same as dragging a
@@ -1290,6 +1295,46 @@ class MainWindow(QMainWindow):
         else:
             print(f"'{name}' cannot be deleted.")
         self.itemClicked = None
+
+    def _delete_selected(self, sel_uids):
+        """Delete every selected tree part/assembly in ONE undoable step
+        (Session 173). Only the instances are removed; a prototype shape
+        goes too only when nothing else uses it (dm.delete_components).
+        Workplanes and the top-level root in the selection are skipped."""
+        uids = [u for u in sel_uids
+                if u in dm.label_dict and dm.label_dict[u].get('parent_uid')]
+        skipped = len(sel_uids) - len(uids)
+        if not uids:
+            self.statusBar().showMessage(
+                "Nothing in the selection can be deleted this way.", 5000)
+            return
+        note = (f"\n({skipped} selected item(s) such as workplanes or the "
+                f"top-level root are not included.)" if skipped else "")
+        reply = QMessageBox.question(
+            self, "Delete",
+            f"Delete {len(uids)} selected items from the assembly?\n"
+            f"Ctrl+Z undoes the whole group." + note,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        old_uids = set(dm.part_dict.keys())
+        # Shared parts: deleting one instance can renumber the others
+        # (uids are 'entry.serial'), so then survivors must be redrawn.
+        counts = {}
+        for info in dm.label_dict.values():
+            counts[info.get('entry')] = counts.get(info.get('entry'), 0) + 1
+        shared = any(counts.get(dm.label_dict[u]['entry'], 0) > 1
+                     for u in uids)
+        with undo_transaction(dm):
+            n = dm.delete_components(uids)
+        if self.activePartUID not in dm.part_dict:
+            self.activePartUID = 0
+            self.activePart = None
+        if self.activeAsyUID and self.activeAsyUID not in dm.label_dict:
+            self.activeAsyUID = 0
+        self.build_tree()
+        self._incremental_reconcile(old_uids, redraw_all_survivors=shared)
+        self.statusBar().showMessage(f"{n} items deleted.", 6000)
 
     def setTransparent(self):
         """Set treeView item clicked transparent"""
