@@ -16,6 +16,9 @@ A from-scratch 3D CAD application
     * Modify parts directly, even ones you didn't build: remove
       features (**Defeaturing**) and push or pull faces (**Move Face**)
       with a live preview
+    * Select, recolor, move and delete whole groups of parts with a box
+    * Animate a mechanism (Geneva drive, four-bar linkage) with a
+      slider and trace the path of a point
     * Save session as `.kcad`, or export the 3D model as plain STEP
 
 Designed for users who want to assemble, modify, and create
@@ -220,10 +223,74 @@ WP              ← workplanes (2D construction geometry)
 
 - **Checkbox** — show/hide part or assembly. Parent checkbox
   propagates to all children.
-- **Left-click** — select item
+- **Left-click** — select item (Ctrl+click / Shift+click select several)
 - **Right-click** — context menu: Item Info, Set Active, Rename,
-  Create New Assembly, Create Shared Instance, Set Transparent,
-  Set Opaque, Delete
+  Create New Assembly, Create Empty Part, Create Shared Instance,
+  Copy Part, Set Transparent, Set Opaque, Set Color..., Take Color as
+  Pen, Paint with Pen Color, Color Faces (display only)..., Delete.
+  Set Color, Paint with Pen Color and Delete act on **every selected
+  part** when you right-click one of several selected rows.
+
+### Working on groups of parts
+
+The tree and the viewport select together, in both directions.
+
+1. With no operation active, **drag a box** in the viewport (top to
+   bottom is *window* mode: parts entirely inside the box; bottom to
+   top is *crossing*: parts the box touches). Every part picked is
+   highlighted in the tree, and the assemblies that hold them open up.
+   Selecting several rows in the tree (Ctrl/Shift+click) likewise
+   highlights all of them in the viewport.
+2. **Move them:** drag any one of the selected rows onto an assembly
+   (create one first with *Create New Assembly*). All of them move, and
+   keep their place in space. The target must be an assembly; dropping
+   onto a plain part is refused. A new sub-assembly is also the way to
+   hide or show a group with one checkbox.
+3. **Color them:** right-click one of the selected rows ->
+   *Set Color...*.
+4. **Delete them:** right-click one of the selected rows -> *Delete*.
+   One confirmation, one undo (Ctrl+Z brings the whole group back).
+   Only the *instances* are removed. A part's underlying prototype is
+   removed too only when nothing else still uses it, so deleting one
+   instance of a shared pair never damages the other. Workplanes and
+   the top-level root in a selection are left alone.
+
+### The pen: copy a color from one part to another
+
+Matching an existing color by eye in the color picker is slow. Instead,
+right-click a part -> **Take Color as Pen**. The status bar (lower
+right) shows a swatch of the color and its hex value. Then right-click
+any other part (or one of a group of selected parts) -> **Paint with
+Pen Color**. The color is written into the document like *Set Color*,
+so it is saved and survives a reload. The pen itself is not saved: it
+is empty at the start of each session.
+
+### Units
+
+**Utility -> set Units** switches between inches, millimeters, feet and
+meters (the status bar shows the current choice). Everything is held in
+millimeters internally; typed distances, measurements and the Move Face
+distance are converted. Pick feet or meters for large models; the
+workplane label stays a sensible size at any scale.
+
+### Animate Mechanism
+
+**Utility -> Animate Mechanism...** moves the parts of an assembly with
+a slider so you can see how a mechanism works, stop it in any pose
+(then project faces onto a workplane to get a snapshot) and **Trace**
+the path of a point. The motion is defined by a short Python file you
+choose and can edit; `mechanisms/` has a 4-slot Geneva drive and a
+pin-jointed four-bar. It is display only: the model, tree and undo
+history are untouched, and *Done* puts every part back. How to write a
+mechanism file: [docs/MECHANISMS.md](docs/MECHANISMS.md).
+
+### If KodaCAD crashes
+
+A crash closes the terminal along with the program, so KodaCAD also
+writes crash information to **`kodacad-crash.log`** next to
+`kodacad.py` (a start-up line each run; the last block before the next
+start-up line is the crash). If you report a crash, send that file.
+It is ignored by git and can be deleted at any time.
 
 ---
 
@@ -314,6 +381,9 @@ kodacad2/
   face_offset_server.py  persistent worker that computes the live preview
   face_offset_worker.py  one-shot worker used by Apply
   offset_preview.py   Qt client for the preview worker
+  mechanism_dialog.py Animate Mechanism dialog (slider, Trace)
+  trace_math.py       straight-section finder for Trace (plain Python)
+  mechanisms/         mechanism files (Geneva drive, four-bar) + STEP models
   rpnCalculator.py    RPN calculator widget
   version.py          version string
   OCCUtils/           OCC geometry utilities (ported from PythonOCC)
@@ -321,6 +391,7 @@ kodacad2/
   step/               sample STEP files
   docs/
     DEVELOPMENT_LOG.md  session-by-session development history
+    MECHANISMS.md       how Animate Mechanism works; writing a mechanism file
     TODO.md             broken items + future ideas
   tutorials/
     occ-bottle/         build the OCC bottle from scratch

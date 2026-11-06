@@ -1,5 +1,33 @@
 """Single source of truth for the KodaCAD application version.
 
+2.4.0 -- 2026-11-06 (Sessions 171-175)
+* Utility -> Animate Mechanism...: move the parts of an assembly with a
+  slider to see how a mechanism works, park it in any pose, and trace
+  the path of a point. The motion comes from a small, user-editable
+  Python file (examples: a 4-slot Geneva drive and a pin-jointed
+  four-bar linkage). Display only: the model, the tree and undo are
+  never touched. Trace path draws the path of a chosen point and
+  finds its longest straight stretch within a tolerance. See
+  docs/MECHANISMS.md.
+* Work on a GROUP of parts. With no operation active, drag a box in the
+  viewport: every part it picks is selected in the tree (and selecting
+  several tree rows highlights them all in the viewport). Then:
+  - drag them onto an assembly to move them all at once;
+  - right-click -> Set Color... colors all of them;
+  - right-click -> Delete removes all of them in ONE undoable step
+    (only the instances; a part's prototype is removed only if nothing
+    else uses it).
+* The pen: right-click a part -> Take Color as Pen copies its color
+  (the status bar shows a swatch); right-click -> Paint with Pen Color
+  applies it to the part, or to every selected part.
+* Units: Utility -> set Units now offers feet and meters as well as
+  inches and millimeters. The workplane label ('/w1') in the lower-left
+  corner of a workplane keeps its size relative to the workplane, so it
+  is readable on huge models (it used to shrink to nothing).
+* Crash log: if KodaCAD dies, the stack trace (and any uncaught Python
+  error) is written to kodacad-crash.log next to kodacad.py, so it is
+  still there when the terminal closes with the program.
+
 2.3.0 -- 2026-10-21 (Sessions 154-169)
 * Create/Modify -> Move Face: push or pull one or more faces by a typed
   distance (+ adds material, - removes it) using OCCT's per-face
@@ -72,4 +100,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
