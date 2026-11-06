@@ -485,7 +485,72 @@ class DocModel:
         self._share_dict[entry] = value
         return entry + '.' + str(value)
 
+    # ------------------------------------------------------------------
+    # Session 176 -- keeping uid-keyed state attached to the RIGHT
+    # instance across a re-parse.
+    #
+    # A uid is 'entry.serial'. parse_doc() issues the serials afresh, in
+    # tree order, every time. For an ordinary (unshared) item the uid
+    # never changes, but when a component has several instances (e.g.
+    # the nut-bolt-assemblies of a l-bracket-assembly that is itself
+    # shared) deleting, adding or moving one instance renumbers the
+    # others. Anything the application keys by uid (the hidden list, the
+    # active part/assembly, transparency) then points at a DIFFERENT
+    # instance. (Doug: hide one nut-bolt-assembly, delete another, and
+    # the wrong ones disappeared.)
+    #
+    # The stable identity of an instance is its PATH: the chain of
+    # component-label entries from the top down. Two instances of one
+    # shared definition sit under different parent components, so their
+    # paths differ even when their uids' entries match.
+    def register_uid_remap_listener(self, callback):
+        """callback(mapping): called after every parse_doc() in which
+        any uid changed meaning. mapping = {old_uid: new_uid or None}
+        for every uid that existed before (None: that instance is
+        gone). Uids not in the mapping were not known before."""
+        if not hasattr(self, '_uid_remap_listeners'):
+            self._uid_remap_listeners = []
+        self._uid_remap_listeners.append(callback)
+
+    def _uid_paths(self):
+        """{uid: path tuple of entries from the top} for label_dict."""
+        paths = {}
+        ld = self.label_dict
+        for uid in ld:
+            chain = []
+            u = uid
+            guard = 0
+            while u is not None and guard < 10000:
+                info = ld.get(u)
+                if info is None:
+                    break
+                chain.append(info.get('entry'))
+                u = info.get('parent_uid')
+                guard += 1
+            paths[uid] = tuple(reversed(chain))
+        return paths
+
     def parse_doc(self):
+        """Generate new part_dict & label_dict from self.doc, and tell
+        the registered listeners how existing uids were renumbered
+        (see register_uid_remap_listener)."""
+        listeners = getattr(self, '_uid_remap_listeners', None)
+        old_paths = self._uid_paths() if (listeners and self.label_dict) \
+            else None
+        self._parse_doc_impl()
+        if old_paths:
+            new_by_path = {p: u for u, p in self._uid_paths().items()}
+            mapping = {u: new_by_path.get(p) for u, p in old_paths.items()}
+            if any(u != n for u, n in mapping.items()):
+                for cb in listeners:
+                    try:
+                        cb(mapping)
+                    except Exception:
+                        import traceback
+                        print("uid remap listener failed:")
+                        traceback.print_exc()
+
+    def _parse_doc_impl(self):
         """Generate new part_dict & label_dict from self.doc"""
         self._share_dict = {'0:1:1': 0}
         self.part_dict = {}

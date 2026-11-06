@@ -563,6 +563,9 @@ class MainWindow(QMainWindow):
         status.showMessage("Ready", 5000)
 
         self.hide_list = []  # list of part uid's to be hidden (not displayed)
+        # Session 176: uids are renumbered by every parse_doc() when
+        # instances are shared; keep uid-keyed state on the right ones.
+        dm.register_uid_remap_listener(self._on_uid_remap)
         self.floatStack = []  # storage stack for floating point values
         self.xyPtStack = []  # storage stack for 2d points (x, y)
         self.ptStack = []  # storage stack for gp_Pnts
@@ -1290,22 +1293,86 @@ class MainWindow(QMainWindow):
                 # parse_doc() internally -- snapshot the uid set now,
                 # reconcile the diff after.
                 old_uids = set(dm.part_dict.keys())
+                # Must be asked BEFORE the delete (uses label_dict).
+                shared = self._delete_renumbers_uids([uid])
+                # (compared BEFORE the delete: afterwards the uids may
+                # have been renumbered -- see _on_uid_remap)
+                was_active_part = (uid == self.activePartUID)
+                was_active_asy = (uid == self.activeAsyUID)
                 with undo_transaction(dm):
                     deleted = dm.delete_component(uid)
                 if deleted:
-                    if uid == self.activePartUID:
+                    if was_active_part:
                         self.activePartUID = 0
                         self.activePart = None
-                    if uid == self.activeAsyUID:
+                    if was_active_asy:
                         self.activeAsyUID = 0
                     self.build_tree()
-                    self._incremental_reconcile(old_uids)
+                    self._incremental_reconcile(
+                        old_uids, redraw_all_survivors=shared)
                     print(f"{name} deleted.")
                 else:
                     print(f"Failed to delete {name}.")
         else:
             print(f"'{name}' cannot be deleted.")
         self.itemClicked = None
+
+    def _on_uid_remap(self, mapping):
+        """DocModel.parse_doc() renumbered some uids: carry the hidden
+        list, transparency, and the active part/assembly over to the
+        SAME instances (matched by path), dropping any whose instance
+        is gone. mapping = {old_uid: new_uid or None}."""
+        def follow(u):
+            return mapping[u] if u in mapping else u
+        self.hide_list = [n for n in (follow(u) for u in self.hide_list)
+                          if n is not None]
+        self.transparency_dict = {
+            n: v for n, v in ((follow(u), v) for u, v
+                              in self.transparency_dict.items())
+            if n is not None}
+        if self.activePartUID in mapping:
+            new = mapping[self.activePartUID]
+            if new is None:
+                self.activePartUID = 0
+                self.activePart = None
+            else:
+                self.activePartUID = new
+                if new in dm.part_dict:
+                    self.activePart = dm.part_dict[new]["shape"]
+        if self.activeAsyUID in mapping:
+            self.activeAsyUID = mapping[self.activeAsyUID] or 0
+
+    def _delete_renumbers_uids(self, uids):
+        """True if deleting these uids can RENUMBER other uids
+        (Session 176, Doug's as1-oc-214 report).
+
+        A uid is 'entry.serial', and parse_doc() hands the serials out
+        again in tree order. When a deleted component, or anything
+        inside a deleted assembly, has several instances (its label
+        entry appears under more than one uid -- e.g. the three
+        nut-bolt-assemblies of a l-bracket-assembly that is itself
+        shared), removing one instance shifts the serials of the
+        rest. The 'a uid present before and after is unchanged' rule
+        in _incremental_reconcile is then WRONG: it erased the wrong
+        instances and left the deleted one on screen. Callers use
+        this to ask for redraw_all_survivors instead."""
+        counts = {}
+        children = {}
+        for u, info in dm.label_dict.items():
+            counts[info.get('entry')] = counts.get(info.get('entry'), 0) + 1
+            children.setdefault(info.get('parent_uid'), []).append(u)
+        stack = list(uids)
+        seen = set()
+        while stack:
+            u = stack.pop()
+            if u in seen:
+                continue
+            seen.add(u)
+            info = dm.label_dict.get(u)
+            if info and counts.get(info.get('entry'), 0) > 1:
+                return True
+            stack.extend(children.get(u, []))
+        return False
 
     def _delete_selected(self, sel_uids):
         """Delete every selected tree part/assembly in ONE undoable step
@@ -1331,11 +1398,7 @@ class MainWindow(QMainWindow):
         old_uids = set(dm.part_dict.keys())
         # Shared parts: deleting one instance can renumber the others
         # (uids are 'entry.serial'), so then survivors must be redrawn.
-        counts = {}
-        for info in dm.label_dict.values():
-            counts[info.get('entry')] = counts.get(info.get('entry'), 0) + 1
-        shared = any(counts.get(dm.label_dict[u]['entry'], 0) > 1
-                     for u in uids)
+        shared = self._delete_renumbers_uids(uids)
         with undo_transaction(dm):
             n = dm.delete_components(uids)
         if self.activePartUID not in dm.part_dict:
@@ -2516,9 +2579,14 @@ class MainWindow(QMainWindow):
         that only removed ONE part) -- so it was providing zero
         signal while costing the FULL redraw cost anyway. Removed.
 
-        This rule is PROVABLY CORRECT for delete: delete_component
-        can only remove entries, never modify a surviving sibling's
-        geometry. It carries ONE KNOWN, ACCEPTED RISK for undo/redo:
+        This rule is correct for delete ONLY IF the uids stay put.
+        (Session 176 correction: it is NOT provable in general. uids
+        are 'entry.serial' and parse_doc() re-issues the serials, so
+        deleting one instance of a shared component renumbers the
+        others and the survivors are no longer what they were. Callers
+        check _delete_renumbers_uids() and pass redraw_all_survivors.)
+        For an unshared delete, delete_component can only remove
+        entries, never modify a surviving sibling's geometry. It carries ONE KNOWN, ACCEPTED RISK for undo/redo:
         if an operation replaces a part's shape IN PLACE while
         keeping its uid (Mill/Pull's dm.replace_shape does exactly
         this), undoing/redoing it will leave that part's OLD geometry
