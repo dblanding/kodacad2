@@ -1502,14 +1502,26 @@ class MainWindow(QMainWindow):
     def _apply_color_to_parts(self, targets, occt_color):
         """Set occt_color on every uid in targets (permanently, in the
         document) and refresh each affected display once."""
+        # Session 178: ONE undoable step for the whole group (a color
+        # change used to be outside any OCAF command, so Ctrl+Z skipped
+        # it). The redraw is outside the transaction, as usual.
+        affected = []
+        with undo_transaction(dm):
+            for tuid in targets:
+                affected.extend(dm.set_part_color(tuid, occt_color))
         refreshed = set()
-        for tuid in targets:
-            for auid in dm.set_part_color(tuid, occt_color):
-                if auid in refreshed:
-                    continue
-                refreshed.add(auid)
-                self.erase_shape(auid)
-                self.draw_shape(auid)
+        for auid in affected:
+            if auid in refreshed:
+                continue
+            refreshed.add(auid)
+            # Session 178 (Doug: both L-bracket assemblies turned purple
+            # although _2 was hidden): a HIDDEN part must not be drawn.
+            # Its new color is already in part_dict / the document, and
+            # is used when it is shown again.
+            if auid in self.hide_list:
+                continue
+            self.erase_shape(auid)
+            self.draw_shape(auid)
         if len(targets) > 1:
             self.statusBar().showMessage(
                 f"Color set on {len(targets)} parts.", 5000)
@@ -2329,6 +2341,17 @@ class MainWindow(QMainWindow):
         except Exception:
             return True
 
+    @staticmethod
+    def _color_key(color):
+        """Comparable form of a part's Quantity_Color (or None)."""
+        if color is None:
+            return None
+        try:
+            return (round(color.Red(), 4), round(color.Green(), 4),
+                    round(color.Blue(), 4))
+        except Exception:
+            return None
+
     def _refresh_after_history(self, verb):
         """Full state refresh after Undo/Redo. Cached uids can dangle
         (labels may be re-created under new entries), so active-part
@@ -2358,6 +2381,10 @@ class MainWindow(QMainWindow):
         # re-reads -- see _loc_differs and Session 77's log entry.
         old_uids = set(dm.part_dict.keys())
         old_locs = {uid: dm.part_dict[uid].get('loc') for uid in old_uids}
+        # Session 178: colors too -- Undo/Redo of a color change leaves
+        # uid, location and shape alone, so nothing else would notice.
+        old_colors = {uid: self._color_key(dm.part_dict[uid].get('color'))
+                      for uid in old_uids}
         dm.parse_doc()
         self.build_tree()
         # Session 77, Doug: redraw_all_survivors=True (Session 70)
@@ -2400,6 +2427,15 @@ class MainWindow(QMainWindow):
             elif self._loc_differs(old_loc, new_loc):
                 changed_survivors.add(uid)
                 redraw_reasons[uid] = "loc_differs (genuine move)"
+        # Session 178: a survivor whose COLOR differs before/after was
+        # recolored (or un-recolored) by the Undo/Redo: redraw it.
+        for uid in survivors:
+            if uid in changed_survivors:
+                continue
+            if old_colors.get(uid) != self._color_key(
+                    dm.part_dict.get(uid, {}).get('color')):
+                changed_survivors.add(uid)
+                redraw_reasons[uid] = "color_differs (set color undo/redo)"
         # Session 78, Doug: the KNOWN boundary above -- fillet/shell
         # replacing a shape without moving it -- is now closed, not
         # just documented. replace_shape (docmodel.py) records the
