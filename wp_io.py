@@ -111,7 +111,15 @@ def wp_from_dict(d):
 
 def collect_wp_state(win):
     """Everything about the session's workplanes, as plain data."""
+    # Session 179: write the next numbers as highest-in-use + 1, not the
+    # old high-water mark (Doug: delete all but WP1, save, and new
+    # workplanes kept counting from the last number ever used).
+    if hasattr(win, "_renumber_wp_counters"):
+        win._renumber_wp_counters()
+    names = getattr(win, "wp_names", {})
     return {
+        "wp_names": {u: n for u, n in names.items()
+                     if u in win.wp_dict or u in win.wp_set_dict},
         "workplanes": [dict(uid=uid, **wp_to_dict(wp))
                        for uid, wp in win.wp_dict.items()],
         "sets": {s: list(m) for s, m in win.wp_set_dict.items()},
@@ -146,8 +154,12 @@ def restore_wp_state(win, state):
     win.wp_set_dict = {s: list(m) for s, m in state["sets"].items()}
     win.wp_parent_set = {uid: s for s, members in win.wp_set_dict.items()
                          for uid in members}
-    win._wpNmbr = int(state["wp_counter"])
-    win._wpSetNmbr = int(state["set_counter"])
+    # Session 179: names are optional (older files have none), and the
+    # counters are recomputed from what exists, so older files whose
+    # stored counter is a stale high-water mark are corrected too.
+    win.wp_names = {u: n for u, n in state.get("wp_names", {}).items()
+                    if u in win.wp_dict or u in win.wp_set_dict}
+    win._renumber_wp_counters()
     win.hide_list.extend(u for u in state["hidden_wps"] if u in new_wps)
 
 

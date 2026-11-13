@@ -624,6 +624,11 @@ class MainWindow(QMainWindow):
         self.wp_set_dict = {}
         self.wp_parent_set = {}
         self._wpSetNmbr = 1
+        # Session 179 (Doug, notes #1/#2): user-chosen names for
+        # workplanes and workplane sets, {uid: name}. The uid ('wp3',
+        # 's1') stays the permanent key everything else uses; a name is
+        # only what the tree shows. Saved in the .kcad file (wp_io).
+        self.wp_names = {}
 
         self.activeAsyUID = 0
         self.assy_list = []  # list of assy uid's
@@ -869,7 +874,7 @@ class MainWindow(QMainWindow):
         # nesting is otherwise invisible to every existing code path.
         set_items = {}
         for set_uid in self.wp_set_dict:
-            set_item = QTreeWidgetItem(self.wp_root, [set_uid, set_uid])
+            set_item = self._wp_tree_item(self.wp_root, set_uid)
             set_item.setFlags(set_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             self.treeView.expandItem(set_item)
             set_items[set_uid] = set_item
@@ -877,8 +882,7 @@ class MainWindow(QMainWindow):
         for uid in self.wp_dict:
             parent_item = set_items.get(self.wp_parent_set.get(uid),
                                         self.wp_root)
-            itemName = [uid, uid]
-            item = QTreeWidgetItem(parent_item, itemName)
+            item = self._wp_tree_item(parent_item, uid)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             if uid in self.hide_list:
                 item.setCheckState(0, Qt.CheckState.Unchecked)
@@ -1261,12 +1265,15 @@ class MainWindow(QMainWindow):
                     self.itemClicked = member_item
                     self.deleteItem()
                 self.wp_set_dict.pop(uid, None)
+                self.wp_names.pop(uid, None)
+                self._renumber_wp_counters()
                 self.build_tree()
                 print(f"Workplane set {name} deleted.")
             self.itemClicked = None
             return
         elif uid in self.wp_dict:
             del self.wp_dict[uid]
+            self.wp_names.pop(uid, None)
             if uid in self.hide_list:
                 self.hide_list.remove(uid)
             # Session 127: clean up Workplane Set membership too, so
@@ -1281,6 +1288,7 @@ class MainWindow(QMainWindow):
                     members.remove(uid)
                 if not members:
                     del self.wp_set_dict[set_uid]
+                    self.wp_names.pop(set_uid, None)
             # Incremental: the AIS objects for THIS workplane are
             # already tracked per-uid in _wp_ais_reg -- remove
             # exactly those, nothing else in the viewer is touched.
@@ -1292,6 +1300,7 @@ class MainWindow(QMainWindow):
                     pass
             context.UpdateCurrentViewer()
             self.canvas.update()
+            self._renumber_wp_counters()
             self.build_tree()
             print(f"Workplane {name} deleted.")
             if uid == self.activeWpUID:
@@ -1889,6 +1898,29 @@ class MainWindow(QMainWindow):
     def editName(self):
         """Edit name of treeView item clicked"""
         item = self._get_clicked_or_current_item()
+        if item and (item.text(1) in self.wp_dict
+                     or item.text(1) in self.wp_set_dict):
+            # Session 179 (Doug, note #1): a workplane / set name used
+            # to be set on the tree row only, which build_tree() then
+            # rebuilt from the uid -- so it never stuck. Names now live
+            # in self.wp_names (and in the saved session).
+            uid = item.text(1)
+            current = self._wp_display_name(uid)
+            kind = "workplane set" if uid in self.wp_set_dict else "workplane"
+            newName, OK = QInputDialog.getText(
+                self, "Rename",
+                f"Enter new name for {kind} {uid}\n"
+                f"(empty = back to {uid})", text=current)
+            if OK:
+                newName = newName.strip()
+                if newName and newName != uid:
+                    self.wp_names[uid] = newName
+                else:
+                    self.wp_names.pop(uid, None)
+                self.build_tree()
+            self.treeView.clearSelection()
+            self.itemClicked = None
+            return
         if item:
             name = item.text(0)
             uid = item.text(1)
@@ -1912,6 +1944,33 @@ class MainWindow(QMainWindow):
     #
     #############################################
 
+    def _wp_display_name(self, uid):
+        """What the tree shows for a workplane / set: its own name if
+        the user gave it one, otherwise the uid ('wp3')."""
+        return self.wp_names.get(uid, uid)
+
+    def _wp_tree_item(self, parent_item, uid):
+        """A tree row for a workplane or set: [name, uid]. The uid in
+        column 1 is what every other code path reads; the tooltip keeps
+        the uid visible when the row shows a name instead."""
+        item = QTreeWidgetItem(parent_item, [self._wp_display_name(uid), uid])
+        if uid in self.wp_names:
+            item.setToolTip(0, uid)
+        return item
+
+    def _renumber_wp_counters(self):
+        """Next workplane / set numbers = highest one IN USE + 1
+        (Session 179, Doug: after deleting all but WP1 and saving, new
+        workplanes kept counting from the old high-water mark). Called
+        after a deletion, before saving, and after loading (so older
+        .kcad files are corrected too)."""
+        def top(uids, prefix):
+            nums = [int(u[len(prefix):]) for u in uids
+                    if u.startswith(prefix) and u[len(prefix):].isdigit()]
+            return max(nums) if nums else 0
+        self._wpNmbr = top(self.wp_dict, "wp") + 1
+        self._wpSetNmbr = top(self.wp_set_dict, "s") + 1
+
     def get_wp_uid(self, wp_objct):
         """ Assign (and return) a new uid to a new workplane.
             Add item to treeview (2D)
@@ -1922,8 +1981,7 @@ class MainWindow(QMainWindow):
         self._wpNmbr += 1
         self.wp_dict[uid] = wp_objct
         # Add treeView item
-        itemName = [uid, uid]
-        item = QTreeWidgetItem(self.wp_root, itemName)
+        item = self._wp_tree_item(self.wp_root, uid)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(0, Qt.CheckState.Checked)
         # Make new workplane active
@@ -1946,7 +2004,7 @@ class MainWindow(QMainWindow):
         self._wpSetNmbr += 1
         self.wp_set_dict[set_uid] = []
 
-        set_item = QTreeWidgetItem(self.wp_root, [set_uid, set_uid])
+        set_item = self._wp_tree_item(self.wp_root, set_uid)
         set_item.setFlags(set_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         self.treeView.expandItem(set_item)
 
@@ -1957,7 +2015,7 @@ class MainWindow(QMainWindow):
             self.wp_dict[uid] = wp_objct
             self.wp_set_dict[set_uid].append(uid)
             self.wp_parent_set[uid] = set_uid
-            item = QTreeWidgetItem(set_item, [uid, uid])
+            item = self._wp_tree_item(set_item, uid)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(0, Qt.CheckState.Checked)
             wp_uids.append(uid)
