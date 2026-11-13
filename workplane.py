@@ -1056,6 +1056,7 @@ class WorkPlane():
         endpoint adjacency.'"""
         from OCP.BRepAdaptor import BRepAdaptor_Curve
         tol = 1.0e-5
+        self.open_ends = []  # filled in only when a chain is open
 
         infos = []  # (edge, p_start(3d), p_end(3d))
         for edge in self.edgeList:
@@ -1100,12 +1101,40 @@ class WorkPlane():
                 if closed:
                     break
             if not closed:
+                # Session 179 (Doug, note #7): say WHERE it is open.
+                self.open_ends = self._dangling_endpoints(infos, tol)
+                n = len(self.open_ends)
                 return [], ("profile has an OPEN chain -- every loop "
-                            "must close")
+                            "must close" +
+                            (f" ({n} unconnected end"
+                             f"{'s' if n != 1 else ''} marked in red)"
+                             if n else ""))
             loops.append(chain)
         if not loops:
             return [], "no profile geometry on the workplane"
         return loops, None
+
+    @staticmethod
+    def _dangling_endpoints(infos, tol):
+        """Endpoints that no other edge endpoint touches, i.e. the
+        gaps in an open profile. Every endpoint of a closed profile is
+        shared by exactly two edge ends, so a point whose cluster has
+        an ODD count is where a chain stops. infos is the list of
+        (edge, p_start, p_end) built in _chain_profile_loops. Closed
+        single edges (circles) have start == end and are skipped.
+        Returns a list of gp_Pnt."""
+        clusters = []  # [point, count]
+        for _e, a, b in infos:
+            if a.Distance(b) < tol:
+                continue
+            for p in (a, b):
+                for c in clusters:
+                    if c[0].Distance(p) < tol:
+                        c[1] += 1
+                        break
+                else:
+                    clusters.append([p, 1])
+        return [c[0] for c in clusters if c[1] % 2 == 1]
 
     def _loops_to_wires_and_polys(self, loops):
         """Build a TopoDS_Wire and a UV polygon (for containment

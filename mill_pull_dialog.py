@@ -140,6 +140,14 @@ class MillPullDialog(QDialog):
 
     # ------------------------------------------------------------------
 
+    def done(self, r):
+        # Session 179: remove any open-profile markers when closing.
+        try:
+            self.main_win.clear_open_ends()
+        except Exception:
+            pass
+        super().done(r)
+
     def _on_done(self):
         win = self.main_win
         self._refresh_part_label()
@@ -164,9 +172,11 @@ class MillPullDialog(QDialog):
                       "other direction).")
             return
 
+        self.main_win.clear_open_ends()
         faces, err = wp.make_faces()
         if err is not None:
             self._say(f"Profile problem: {err}")
+            self.main_win.show_open_ends(wp)
             return
 
         sign = 1.0 if self.dir_combo.currentText() == "+W" else -1.0

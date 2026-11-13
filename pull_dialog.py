@@ -373,6 +373,14 @@ class PullDialog(QDialog):
 
     # ------------------------------------------------------------------
 
+    def done(self, r):
+        # Session 179: remove any open-profile markers when closing.
+        try:
+            self.main_win.clear_open_ends()
+        except Exception:
+            pass
+        super().done(r)
+
     def _on_done(self):
         win = self.main_win
         self._refresh_labels()
@@ -390,9 +398,11 @@ class PullDialog(QDialog):
         adding = (self.op_combo.currentText() == "Add Material")
         angular = self.angular_radio.isChecked()
 
+        self.main_win.clear_open_ends()
         faces, err = wp.make_faces()
         if err is not None:
             self._say(f"Profile problem: {err}")
+            self.main_win.show_open_ends(wp)
             return
 
         if angular:

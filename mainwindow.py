@@ -3575,6 +3575,57 @@ class MainWindow(QMainWindow):
     # earlier this session) needs the identical machinery -- both
     # measurement tools are wired to it in this same pass.
 
+    # ---- Open-profile markers (Session 179, Doug's note #7) --------
+    def show_open_ends(self, wp):
+        """Mark, in red, the unconnected ends of an open profile on wp
+        (found by WorkPlane._chain_profile_loops when a Pull/Mill
+        fails with an open chain). Cleared by clear_open_ends()."""
+        self.clear_open_ends()
+        pts = list(getattr(wp, "open_ends", []) or [])
+        if not pts:
+            return
+        try:
+            from OCP.AIS import AIS_Point
+            from OCP.Geom import Geom_CartesianPoint
+            from OCP.Quantity import (Quantity_Color,
+                                      Quantity_TypeOfColor)
+            from OCP.Prs3d import Prs3d_PointAspect
+            from OCP.Aspect import Aspect_TypeOfMarker
+            ctx = self.canvas.context
+            red = Quantity_Color(
+                1.0, 0.0, 0.0, Quantity_TypeOfColor.Quantity_TOC_RGB)
+            made = []
+            for p in pts:
+                ais = AIS_Point(Geom_CartesianPoint(p))
+                drawer = ais.Attributes()
+                drawer.SetPointAspect(Prs3d_PointAspect(
+                    Aspect_TypeOfMarker.Aspect_TOM_O_X, red, 5.0))
+                ais.SetAttributes(drawer)
+                ctx.Display(ais, False)
+                self.canvas._display.add_never_pick(ais)
+                made.append(ais)
+            self._open_end_markers = made
+            ctx.UpdateCurrentViewer()
+        except Exception as e:
+            print(f"[open-ends] markers failed: {e}")
+
+    def clear_open_ends(self):
+        made = getattr(self, "_open_end_markers", None) or []
+        self._open_end_markers = []
+        if not made:
+            return
+        try:
+            ctx = self.canvas.context
+            for ais in made:
+                try:
+                    ctx.Erase(ais, False)
+                    self.canvas._display.remove_never_pick(ais)
+                except Exception:
+                    pass
+            ctx.UpdateCurrentViewer()
+        except Exception as e:
+            print(f"[open-ends] clear failed: {e}")
+
     def _uvpnt(self, wp, u, v):
         return gp_Pnt(u, v, 0).Transformed(wp.Trsf)
 
