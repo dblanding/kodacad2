@@ -2859,6 +2859,53 @@ def setUnits_m():
     win.setUnits("m")
 
 
+def _visible_bbox():
+    """Bnd_Box of every part that is actually SHOWN (not hidden in the
+    tree). Session 179 (Doug, note #9): this used to loop over all of
+    win.ais_shape_dict, which also holds the AIS object of parts that
+    are merely hidden (hiding only erases them from the viewer), so
+    working on the bottom of the crane with the upper part hidden still
+    put the clip-plane gizmo up at the middle of the WHOLE crane."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    bbox = Bnd_Box()
+    hidden = set(getattr(win, "hide_list", []))
+    for uid, ais in win.ais_shape_dict.items():
+        if uid in hidden:
+            continue
+        try:
+            BRepBndLib.Add_s(ais.Shape(), bbox)
+        except Exception as e:
+            print(f"[section-view] bbox: uid={uid} failed: {e}")
+    return bbox
+
+
+def _recenter_plane_origin(origin, normal, box):
+    """Pure geometry (no OCP, so it can be tested alone). A clip plane
+    is infinite: where its Location point sits ALONG the plane changes
+    nothing about the cut, but the gizmo is drawn at that point.
+    origin=(x,y,z) point on the plane, normal=(nx,ny,nz) unit vector,
+    box=(xmin,ymin,zmin,xmax,ymax,zmax) of what is visible.
+    Returns the plane's point nearest the center of the box (same
+    plane, gizmo moved into view), or None if the plane misses the box
+    altogether (it cuts nothing that is visible)."""
+    cx = (box[0] + box[3]) / 2.0
+    cy = (box[1] + box[4]) / 2.0
+    cz = (box[2] + box[5]) / 2.0
+    hx = (box[3] - box[0]) / 2.0
+    hy = (box[4] - box[1]) / 2.0
+    hz = (box[5] - box[2]) / 2.0
+    nx, ny, nz = normal
+    # signed distance from the box center to the plane
+    d = (cx - origin[0]) * nx + (cy - origin[1]) * ny + (cz - origin[2]) * nz
+    # how far the box reaches along the normal (its support radius)
+    reach = abs(nx) * hx + abs(ny) * hy + abs(nz) * hz
+    if abs(d) > reach + 1.0e-6:
+        return None
+    return (cx - nx * d, cy - ny * d, cz - nz * d)
+
+
 def _scene_bbox_center():
     """World-space (x, y, z) center of every currently displayed
     part's own bounding box, or (0, 0, 0) if nothing's displayed.
@@ -2866,15 +2913,7 @@ def _scene_bbox_center():
     the model's own known proportions exactly (X, the rod's own
     length direction, clearly the largest). Same logic as the
     now-removed Scene BBox Inspect smoke test, made permanent."""
-    from OCP.Bnd import Bnd_Box
-    from OCP.BRepBndLib import BRepBndLib
-
-    bbox = Bnd_Box()
-    for uid, ais in win.ais_shape_dict.items():
-        try:
-            BRepBndLib.Add_s(ais.Shape(), bbox)
-        except Exception as e:
-            print(f"[section-view] bbox: uid={uid} failed: {e}")
+    bbox = _visible_bbox()
     if bbox.IsVoid():
         return (0.0, 0.0, 0.0)
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
@@ -2921,7 +2960,24 @@ def _get_plane_geom(axis):
     from OCP.gp import gp_Pln, gp_Pnt
     stored = getattr(win, "_section_plane_state", {}).get(axis)
     if stored is not None:
-        return stored
+        # Session 179 (Doug, note #9): a remembered plane may now be far
+        # from what is shown (e.g. it was set while the whole crane was
+        # displayed, and the upper part has been hidden since). Keep
+        # the cut where it is, but slide the gizmo's point to the
+        # middle of the visible parts; if the plane no longer touches
+        # anything visible, forget it and start again at the center.
+        box = _visible_bbox()
+        if box.IsVoid():
+            return stored
+        n = stored.Axis().Direction()
+        o = stored.Location()
+        new_o = _recenter_plane_origin((o.X(), o.Y(), o.Z()),
+                                       (n.X(), n.Y(), n.Z()), box.Get())
+        if new_o is not None:
+            adjusted = gp_Pln(gp_Pnt(*new_o), n)
+            _store_plane_geom(axis, adjusted)
+            return adjusted
+        # stale: fall through to a fresh plane at the visible center
     cx, cy, cz = _scene_bbox_center()
     normal = _AXIS_NORMALS[axis]
     reversed_state = getattr(win, "_section_reversed", {}).get(axis, False)
