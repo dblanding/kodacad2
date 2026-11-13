@@ -7436,3 +7436,10 @@ Untested in OCP.
 - FIX: the redraw loop in `_apply_color_to_parts` skips uids in `hide_list` (the new color is already in `part_dict` and the document and is used when the part is shown). Temporary diagnostic removed. Doug's four re-tests (_2 hidden, color _1; undo then show _2 = original; redo then show _2 = new color; everything shown, recolor a group, undo) all passed.
 - LESSONS: (a) when a symptom has two plausible halves (document wrong vs display wrong), print before/after state for both rather than reasoning about it -- the print eliminated one half in a single run; (b) the user's observation of UI state (the tree showed _2 as hidden) was the decisive clue, not the code; (c) any code that draws parts directly must honor `hide_list` -- if hidden parts ever show up unexpectedly, look for a `draw_shape` call that doesn't check it (none other found).
 - Open: README's pen paragraph does not yet say that Set Color / Paint with Pen Color can be undone (one step per group).
+
+## Session 179 - Crane-model notes: working through Doug's list (2026-11-13)
+Doug built the American S-20 crane and took twelve unordered notes. Agreed first batch, one commit each: #5 (click unhides), #1+#2 (workplane names/numbering), #9 (clip-plane gizmo), #7 (open-profile markers).
+
+### #5 - A plain left-click on an assembly unhid its hidden children
+- Cause: `treeViewItemClicked` is connected to `itemClicked`, which fires for a click ANYWHERE on the row, not only on the checkbox. It always pushed the clicked row's check state down to every child. An assembly with some hidden children still shows CHECKED (an ancestor is checked if ANY child is, `_correct_ancestor_checkboxes`), so a label click re-checked every child. Doug sometimes left-clicks before right-clicking, which is how it showed up.
+- Fix: the row's own state equals the one its children imply (checked if any child checked, else unchecked) unless the checkbox was just toggled. Propagate to children only when it differs. Checked with stand-in items: label clicks on mixed / all-shown / all-hidden assemblies no longer propagate; checkbox toggles still hide-all / show-all; part rows unaffected.

@@ -937,7 +937,25 @@ class MainWindow(QMainWindow):
         self.itemClicked = item  # store item
         # Propagate checkbox state to all children
         state = item.checkState(0)
-        if state in (Qt.CheckState.Checked, Qt.CheckState.Unchecked):
+        # Session 179 (Doug: a plain LEFT-click on an assembly unhid its
+        # hidden children). itemClicked fires for a click ANYWHERE on the
+        # row, not only on the checkbox, and an assembly that has some
+        # hidden children still shows as CHECKED (any checked child
+        # -> checked, see _correct_ancestor_checkboxes), so the
+        # propagation below re-checked every child. The row's own state
+        # equals the one its children imply unless the CHECKBOX was
+        # just toggled, so propagate only in that case.
+        if item.childCount() > 0:
+            implied = (Qt.CheckState.Checked
+                       if any(item.child(i).checkState(0)
+                              == Qt.CheckState.Checked
+                              for i in range(item.childCount()))
+                       else Qt.CheckState.Unchecked)
+            toggled = (state != implied)
+        else:
+            toggled = True
+        if toggled and state in (Qt.CheckState.Checked,
+                                 Qt.CheckState.Unchecked):
             self._set_children_check_state(item, state)
         # Correct ancestor checkboxes to match their children (Session
         # 71, Doug: an assembly could stay CHECKED after its last
