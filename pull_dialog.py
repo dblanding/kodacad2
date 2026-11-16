@@ -51,8 +51,7 @@ Layout follows the spec's own 4-section structure:
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
                                QLabel, QComboBox, QLineEdit,
                                QPushButton, QRadioButton, QButtonGroup,
-                               QStackedWidget, QWidget)
-from PySide6.QtGui import QFont
+                               QStackedWidget, QWidget, QGridLayout)
 
 import math
 
@@ -64,68 +63,75 @@ from OCP.gp import gp_Ax1, gp_Dir, gp_Vec, gp_Trsf
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 
 import docmodel
+import dialog_style
 # dm is created in mainwindow (module-global there); importing it at
 # module level here would be circular-adjacent -- fetch lazily, same
 # precedent as the old, now-removed mill_pull_dialog.py.
 from mainwindow import dm
 
 
-def _bold_label(text=""):
-    lbl = QLabel(text)
-    f = QFont()
-    f.setBold(True)
-    lbl.setFont(f)
-    lbl.setWordWrap(True)
-    return lbl
-
-
 class PullDialog(QDialog):
+    """Minimalist layout (Session 179, the Creo E/D Pull dialog as the
+    model; Doug: 'the workplane and profile are always kept, so no Keep
+    WP / Keep Prof boxes', and the dialog closes after Done):
+
+        check / cross / ?
+        Part         (the active part, read-only)
+        Workplane    (the active workplane, read-only)
+        Operation    Add Material / Remove Material
+        (o) Linear  ( ) Angular
+        Linear:   Direction, Distance (yellow until a valid number)
+        Angular:  Axis (yellow until both points are picked) + Pick,
+                  Angle (yellow until a number)
+
+    The long explanations (right-hand rule, why Angular has no
+    Direction, the full part path) live in the '?' info window."""
+
     def __init__(self, main_win):
         super().__init__(main_win)
         self.main_win = main_win
         self.setWindowTitle("Pull")
         self.setModal(False)
+        self._info = dialog_style.InfoWindow(main_win, "Pull details")
 
         lay = QVBoxLayout(self)
+        bar, self.ok_btn, self.cancel_btn, self.help_btn = \
+            dialog_style.icon_bar(self._on_done, self.close,
+                                  self._toggle_info)
+        lay.addLayout(bar)
 
-        # --- Top section: Active Part / Active Workplane, read-only ---
-        lay.addWidget(QLabel("Active Part:"))
-        self.part_label = _bold_label()
-        lay.addWidget(self.part_label)
-        lay.addWidget(QLabel("Active Workplane:"))
-        self.wp_label = _bold_label()
-        lay.addWidget(self.wp_label)
-
-        # --- Upper middle section: Method ---
-        lay.addWidget(_bold_label("Method"))
-
-        row_op = QHBoxLayout()
-        row_op.addWidget(QLabel("Operation:"))
+        rows = QGridLayout()
+        rows.addWidget(dialog_style.row_label("Part"), 0, 0)
+        self.part_edit = QLineEdit()
+        self.part_edit.setReadOnly(True)
+        rows.addWidget(self.part_edit, 0, 1)
+        rows.addWidget(dialog_style.row_label("Workplane"), 1, 0)
+        self.wp_edit = QLineEdit()
+        self.wp_edit.setReadOnly(True)
+        rows.addWidget(self.wp_edit, 1, 1)
+        rows.addWidget(dialog_style.row_label("Operation"), 2, 0)
         self.op_combo = QComboBox()
         self.op_combo.addItems(["Add Material", "Remove Material"])
-        row_op.addWidget(self.op_combo)
-        lay.addLayout(row_op)
+        rows.addWidget(self.op_combo, 2, 1)
+        rows.setColumnStretch(1, 1)
+        lay.addLayout(rows)
 
-        # Direction lives on the Linear page only, in the Lower
-        # Middle section below -- NOT here. Doug's own live test:
-        # once the axis has an explicit, user-picked direction (tail
-        # -> head), the right-hand rule already fully determines
-        # which way a positive angle rotates. There's no second,
-        # independent "+W/-W" choice left to make the way there is
-        # for Linear, where the same axis vector can push material
-        # two genuinely different ways. Confirmed directly -- a
-        # 180-degree pull swept into the -W half-plane with Direction
-        # still set to +W, proving it was inert for Angular, not
-        # merely redundant. Matches Creo's own reference screenshot:
-        # its Angular configuration shows no Direction row at all.
+        # Direction lives on the Linear page only. Once the axis has an
+        # explicit, user-picked direction (tail -> head) the right-hand
+        # rule fully determines which way a positive angle rotates;
+        # there is no second +W/-W choice for Angular (Doug's live
+        # test: a 180-degree pull swept into the -W half-plane with
+        # Direction still +W proved it inert). Matches Creo's own
+        # Angular layout, which shows no Direction row.
         self.dir_combo = QComboBox()
         self.dir_combo.addItems(["+W", "-W", "Both"])
         self._dir_touched = False
         self.dir_combo.activated.connect(self._mark_dir_touched)
         self.op_combo.currentIndexChanged.connect(self._op_changed)
+        self.op_combo.currentIndexChanged.connect(self._refresh_info)
+        self.dir_combo.currentIndexChanged.connect(self._refresh_info)
 
         row_mode = QHBoxLayout()
-        row_mode.addWidget(QLabel("Mode:"))
         self.linear_radio = QRadioButton("Linear")
         self.angular_radio = QRadioButton("Angular")
         self.linear_radio.setChecked(True)
@@ -135,62 +141,119 @@ class PullDialog(QDialog):
         self.linear_radio.toggled.connect(self._mode_changed)
         row_mode.addWidget(self.linear_radio)
         row_mode.addWidget(self.angular_radio)
+        row_mode.addStretch(1)
         lay.addLayout(row_mode)
 
-        # --- Lower middle section: unlabeled, swaps with Mode ---
+        # --- the part below swaps with the mode ---
         self.mode_stack = QStackedWidget()
 
-        # Page 0: Linear -- Direction, then Distance
         linear_page = QWidget()
-        linear_lay = QVBoxLayout(linear_page)
-        linear_lay.setContentsMargins(0, 0, 0, 0)
-        row_dir = QHBoxLayout()
-        row_dir.addWidget(QLabel("Direction:"))
-        row_dir.addWidget(self.dir_combo)
-        linear_lay.addLayout(row_dir)
-        dist_row = QHBoxLayout()
-        dist_row.addWidget(QLabel("Total Distance:"))
+        lg = QGridLayout(linear_page)
+        lg.setContentsMargins(0, 0, 0, 0)
+        lg.addWidget(dialog_style.row_label("Direction"), 0, 0)
+        lg.addWidget(self.dir_combo, 0, 1)
+        lg.addWidget(dialog_style.row_label("Distance"), 1, 0)
         self.dist_edit = QLineEdit()
         self.dist_edit.setPlaceholderText("e.g. 12.0")
         self.dist_edit.textChanged.connect(self._dist_changed)
-        dist_row.addWidget(self.dist_edit)
-        linear_lay.addLayout(dist_row)
+        self.dist_edit.returnPressed.connect(self._on_done)
+        lg.addWidget(self.dist_edit, 1, 1)
+        lg.setColumnStretch(1, 1)
         self.mode_stack.addWidget(linear_page)
 
-        # Page 1: Angular -- real (Step 3). No Direction control here
-        # at all -- see the note above self.dir_combo's construction.
         angular_page = QWidget()
-        angular_lay = QVBoxLayout(angular_page)
-        angular_lay.setContentsMargins(0, 0, 0, 0)
-        angle_row = QHBoxLayout()
-        angle_row.addWidget(QLabel("Angle (Degrees):"))
-        self.angle_edit = QLineEdit()
-        self.angle_edit.setPlaceholderText("e.g. 90")
-        angle_row.addWidget(self.angle_edit)
-        angular_lay.addLayout(angle_row)
-        self.select_axis_btn = QPushButton("Define Axis (2 points)")
+        ag = QGridLayout(angular_page)
+        ag.setContentsMargins(0, 0, 0, 0)
+        ag.addWidget(dialog_style.row_label("Axis"), 0, 0)
+        axis_row = QHBoxLayout()
+        self.axis_edit = QLineEdit()
+        self.axis_edit.setReadOnly(True)
+        axis_row.addWidget(self.axis_edit, 1)
+        self.select_axis_btn = QPushButton("Pick")
+        self.select_axis_btn.setAutoDefault(False)
+        self.select_axis_btn.setToolTip(
+            "Click two points: the axis's tail, then its head")
         self.select_axis_btn.clicked.connect(self._start_axis_pick)
-        angular_lay.addWidget(self.select_axis_btn)
-        self.axis_status_label = QLabel("No axis selected.")
-        angular_lay.addWidget(self.axis_status_label)
+        axis_row.addWidget(self.select_axis_btn)
+        ag.addLayout(axis_row, 0, 1)
+        ag.addWidget(dialog_style.row_label("Angle"), 1, 0)
+        self.angle_edit = QLineEdit()
+        self.angle_edit.setPlaceholderText("degrees, e.g. 90")
+        self.angle_edit.textChanged.connect(self._angle_changed)
+        self.angle_edit.returnPressed.connect(self._on_done)
+        ag.addWidget(self.angle_edit, 1, 1)
+        ag.setColumnStretch(1, 1)
         self.mode_stack.addWidget(angular_page)
 
         lay.addWidget(self.mode_stack)
 
         self.msg_label = QLabel("")
+        self.msg_label.setObjectName("KcStatus")
         self.msg_label.setWordWrap(True)
         lay.addWidget(self.msg_label)
 
-        # --- Bottom section: one Done button only (spec: no Reverse/
-        # Back, no Keep WP/Keep Prof -- shortcuts, not needed yet) ---
-        self.done_btn = QPushButton("\u2705 Done")
-        self.done_btn.clicked.connect(self._on_done)
-        lay.addWidget(self.done_btn)
+        dialog_style.apply_minimal(self)
+        self.setMinimumWidth(250)
 
         self._picked_axis = None  # gp_Ax1, set once both points picked
         self._axis_pt1 = None  # gp_Pnt, set after the first pick
         self._refresh_labels()
+        self._update_awaiting()
         self.dist_edit.setFocus()
+
+    def _toggle_info(self):
+        self._refresh_info()
+        self._info.toggle(self.main_win)
+
+    def _refresh_info(self, *_):
+        adding = self.op_combo.currentText() == "Add Material"
+        part = self.part_edit.toolTip() or "(none)"
+        h = ["<h3>Pull</h3>",
+             "<p>Sweeps the active workplane's profile(s) into a solid "
+             "and %s the active part. The workplane and profile are "
+             "always kept; delete them separately if you no longer "
+             "need them.</p>" % ("adds it to" if adding
+                                 else "removes it from"),
+             "<p><b>Part</b> (the active part):<br>%s</p>" % part,
+             "<p><b>Workplane</b>: %s</p>" % (
+                 self.wp_edit.text() or "(none)")]
+        if self.angular_radio.isChecked():
+            h.append("<p><b>Angular</b>: the profile is revolved about "
+                     "an axis in the workplane. Click <b>Pick</b>, then "
+                     "the axis's <b>tail</b> and its <b>head</b> (a "
+                     "workplane catch or a part vertex; they need not be "
+                     "on the part). A positive angle turns by the "
+                     "right-hand rule about tail &rarr; head; for the "
+                     "opposite rotation pick the points in the other "
+                     "order. There is no Direction choice, since the "
+                     "axis direction already fixes it.</p>")
+        else:
+            h.append("<p><b>Linear</b>: the profile is extruded along "
+                     "the workplane normal (W). <b>+W</b> / <b>-W</b> "
+                     "choose the side; <b>Both</b> splits the distance "
+                     "equally about the workplane. Direction follows the "
+                     "Operation (+W to add, -W to remove) until you "
+                     "choose one yourself.</p>")
+        h.append("<p>An open profile is reported with red markers at its "
+                 "unconnected ends. Done is one undo step (Ctrl+Z).</p>")
+        self._info.set_html("".join(h))
+
+    def _update_awaiting(self):
+        """Yellow = still needs a value (Creo's cue)."""
+        def valid_pos(txt):
+            try:
+                return float(txt) > 0.0
+            except ValueError:
+                return False
+        dialog_style.set_awaiting(self.dist_edit,
+                                  not valid_pos(self.dist_edit.text()))
+        dialog_style.set_awaiting(self.angle_edit,
+                                  not valid_pos(self.angle_edit.text()))
+        dialog_style.set_awaiting(self.axis_edit,
+                                  self._picked_axis is None)
+
+    def _angle_changed(self, text):
+        self._update_awaiting()
 
     # ------------------------------------------------------------------
 
@@ -208,12 +271,15 @@ class PullDialog(QDialog):
             0 if self.linear_radio.isChecked() else 1)
         if self.angular_radio.isChecked():
             self.main_win.statusBar().showMessage(
-                "Enter an angle, then click Define Axis (2 points).", 5000)
+                "Enter an angle, then click Pick to define the axis "
+                "(2 points).", 5000)
+        self._refresh_info()
 
     def _dist_changed(self, text):
         # Spec: "acknowledge value entered, prompt user to click
         # Done" -- brief status-bar note once a valid, positive
         # number is present, nothing louder than that.
+        self._update_awaiting()
         try:
             v = float(text)
             if v > 0.0:
@@ -227,23 +293,30 @@ class PullDialog(QDialog):
         uid = win.activePartUID
         if uid:
             try:
-                text = dm.get_full_path_name(uid)
+                path = dm.get_full_path_name(uid)
             except Exception:
-                try:
-                    text = dm.label_dict.get(uid, {}).get('name') or uid
-                except Exception:
-                    text = uid
-            self.part_label.setText(text)
+                path = str(dm.label_dict.get(uid, {}).get('name') or uid)
+            leaf = dm.label_dict.get(uid, {}).get('name') or path
+            self.part_edit.setText(str(leaf))
+            self.part_edit.setToolTip(path)
         else:
-            self.part_label.setText("NONE -- set one (RMB in the "
-                                    "tree)")
+            self.part_edit.setText("")
+            self.part_edit.setToolTip("")
+        dialog_style.set_awaiting(self.part_edit, not uid)
         wp_uid = getattr(win, "activeWpUID", 0)
-        # Workplanes aren't XDE-backed like parts -- their own uid IS
-        # their display name (e.g. "wp1"), confirmed directly against
-        # this project's own terminal output convention ("Part
-        # selected: wp1, UID: wp1" -- identical string both times).
-        self.wp_label.setText(str(wp_uid) if wp_uid else
-                              "NONE -- create and activate one first")
+        # Workplanes aren't XDE-backed like parts -- the uid ('wp1') or
+        # the name the user gave it (Session 179) is what is shown.
+        self.wp_edit.setText(win._wp_display_name(wp_uid) if wp_uid
+                             else "")
+        self.wp_edit.setToolTip(str(wp_uid) if wp_uid else "")
+        dialog_style.set_awaiting(self.wp_edit, not wp_uid)
+        if not uid:
+            self.msg_label.setText("Set an Active Part first (RMB in "
+                                   "the tree).")
+        elif not wp_uid:
+            self.msg_label.setText("Create and activate a workplane "
+                                   "first.")
+        self._refresh_info()
 
     def _say(self, text):
         self.msg_label.setText(text)
@@ -279,6 +352,9 @@ class PullDialog(QDialog):
             self._say("No active workplane.")
             return
         self._axis_pt1 = None
+        self._picked_axis = None
+        self.axis_edit.setText("pick point 1")
+        self._update_awaiting()
         self.main_win.registerCallback(self._axis_pick_callback)
         self.main_win._preview_start_meas(
             self._axis_pick_callback, self._axis_marker_builder,
@@ -337,8 +413,7 @@ class PullDialog(QDialog):
             return
         if self._axis_pt1 is None:
             self._axis_pt1 = pt
-            self.axis_status_label.setText(
-                "Point 1 picked -- pick point 2 (the axis's head).")
+            self.axis_edit.setText("pick point 2")
             self._say("Point 1 picked. Pick point 2 (the axis's "
                       "head).")
         else:
@@ -346,7 +421,8 @@ class PullDialog(QDialog):
                 self._axis_pt1, gp_Dir(gp_Vec(self._axis_pt1, pt)))
             win.clearCallback()
             win._preview_stop_meas()
-            self.axis_status_label.setText("Axis selected.")
+            self.axis_edit.setText("defined")
+            self._update_awaiting()
             self._say("Axis selected -- click Done.")
 
     def _axis_marker_builder(self, wp, uv):
@@ -374,9 +450,22 @@ class PullDialog(QDialog):
     # ------------------------------------------------------------------
 
     def done(self, r):
-        # Session 179: remove any open-profile markers when closing.
+        # Session 179: remove any open-profile markers, stop an axis
+        # pick left half-finished, and close the info window.
+        win = self.main_win
         try:
-            self.main_win.clear_open_ends()
+            win.clear_open_ends()
+        except Exception:
+            pass
+        try:
+            if win.registeredCallback == self._axis_pick_callback:
+                win.clearCallback()
+                win._preview_stop_meas()
+        except Exception:
+            pass
+        try:
+            self._info.hide()
+            self._info.deleteLater()
         except Exception:
             pass
         super().done(r)
@@ -407,7 +496,8 @@ class PullDialog(QDialog):
 
         if angular:
             if self._picked_axis is None:
-                self._say("Select an axis first (click Define Axis (2 points)).")
+                self._say("Define the axis first (click Pick, then the "
+                          "axis's two points).")
                 return
             try:
                 angle_deg = float(self.angle_edit.text())
@@ -513,7 +603,7 @@ class PullDialog(QDialog):
         # into the next one.
         self._picked_axis = None
         self._axis_pt1 = None
-        self.axis_status_label.setText("No axis selected.")
+        self.axis_edit.setText("")
         self.close()
 
 
@@ -527,3 +617,4 @@ def show_pull_dialog(main_win):
     dlg = PullDialog(main_win)
     main_win._pull_dlg = dlg
     dlg.show()
+    dialog_style.place_top_left(dlg, main_win)
