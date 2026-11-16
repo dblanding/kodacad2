@@ -37,6 +37,10 @@ QLineEdit { background: white; border: 1px solid #9a9a9a;
 QLineEdit[awaiting="true"] { background: #fff59d;
                              border: 1px solid #3b8eea; }
 QComboBox { padding: 0px 4px; min-height: 18px; }
+QPushButton { border: 1px solid #9a9a9a; border-radius: 3px;
+              padding: 1px 8px; background: #fafafa; }
+QPushButton:hover { background: #ffffff; border: 1px solid #3b8eea; }
+QPushButton:disabled { color: #b0b0b0; }
 QCheckBox { spacing: 4px; }
 QToolButton { border: 1px solid transparent; border-radius: 3px;
               font-size: 14pt; font-weight: bold; padding: 0px 14px; }
