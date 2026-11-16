@@ -1,5 +1,7 @@
 """
 face_color_dialog.py -- DISPLAY-ONLY per-face coloring (Session 145).
+Session 179: faces may be picked on ANY displayed part (not just the
+active one) and the dialog never changes the active part.
 
 For preparing tutorial illustrations (e.g. highlighting the faces a
 Defeaturing step will remove). Colors live only in the session's
@@ -14,7 +16,6 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PySide6.QtGui import QColor
 
 from OCP.TopoDS import TopoDS
-from OCCUtils import Topology
 
 import dialog_style
 
@@ -31,7 +32,10 @@ class FaceColorDialog(QDialog):
         self.win = main_win
         self.setWindowTitle("Color Faces")
         self.setModal(False)
-        self.faces = []
+        self.faces = {}   # uid -> [picked TopoDS_Face, ...]
+        self._face_cache = {}  # uid -> (display shape, its faces); a
+        # box-select calls _on_pick once per face, so listing every
+        # part's faces each time would be slow on a big model
         self.color = QColor(255, 0, 0)
         self._info = dialog_style.InfoWindow(main_win, "Color Faces details")
 
@@ -45,7 +49,7 @@ class FaceColorDialog(QDialog):
         lay.addLayout(bar)
 
         rows = QGridLayout()
-        rows.addWidget(dialog_style.row_label("Part"), 0, 0)
+        rows.addWidget(dialog_style.row_label("Parts"), 0, 0)
         self.part_edit = QLineEdit()
         self.part_edit.setReadOnly(True)
         rows.addWidget(self.part_edit, 0, 1)
@@ -66,7 +70,7 @@ class FaceColorDialog(QDialog):
         self.reset_btn.clicked.connect(self._clear_sel)
         row2.addWidget(self.reset_btn)
         self.clear_btn = QPushButton("Clear Colors")
-        self.clear_btn.setToolTip("Remove all face colors from the part")
+        self.clear_btn.setToolTip("Remove ALL face colors from every part")
         self.clear_btn.clicked.connect(self._clear_colors)
         row2.addWidget(self.clear_btn)
         lay.addLayout(row2)
@@ -86,26 +90,30 @@ class FaceColorDialog(QDialog):
     def _toggle_info(self):
         self._info.toggle(self.win)
 
-    def _set_info(self, part_path):
+    def _set_info(self, paths):
+        plist = "".join("<li>%s (%d face%s)</li>" % (
+            p, n, "" if n == 1 else "s") for p, n in paths)
         self._info.set_html(
             "<h3>Color Faces</h3>"
-            "<p>Click faces in the viewport to pick them (they are added "
-            "to <b>Faces</b>), choose a <b>Color</b>, then press the "
-            "check mark to apply. The dialog stays open so you can color "
-            "more faces.</p>"
+            "<p>Click faces in the viewport to pick them -- on ANY "
+            "displayed part, not only the active one (nothing here "
+            "changes which part is active). Choose a <b>Color</b>, then "
+            "press the check mark to apply. The dialog stays open so you "
+            "can color more faces.</p>"
             "<p><b>Display only:</b> these colors are not stored in the "
-            "document, not saved to STEP, and vanish when the part's "
+            "document, not saved to STEP, and vanish when a part's "
             "shape changes or it is redrawn from a modified shape.</p>"
-            "<p><b>Part</b> (the active part):<br>%s</p>"
+            "<p><b>Parts</b> with picked faces:</p>%s"
             "<p>Clear Picks drops the current picks; Clear Colors removes "
-            "every face color from the part.</p>" % (part_path or "(none)"))
+            "every face color from every part.</p>"
+            % (("<ul>%s</ul>" % plist) if plist else "<p>(none yet)</p>"))
 
     def _after_history(self):
         # Undo/Redo redraws parts and ends face picking: re-arm it
         # (unless another tool took over) and drop stale picks.
         cb = self.win.registeredCallback
         if cb is None or cb == self._on_pick:
-            self.faces = []
+            self.faces = {}
             self._refresh()
             self._start()
 
@@ -115,8 +123,9 @@ class FaceColorDialog(QDialog):
         except ValueError:
             pass
 
-    def _uid(self):
-        return self.win.activePartUID
+    def _name(self, uid):
+        from mainwindow import dm
+        return dm.label_dict.get(uid, {}).get('name', str(uid))
 
     def _swatch(self):
         self.color_btn.setStyleSheet(
@@ -124,52 +133,78 @@ class FaceColorDialog(QDialog):
             f"border: 1px solid #777777; min-height: 16px;")
 
     def _refresh(self, extra=""):
-        uid = self._uid()
-        path = ""
-        if uid:
-            try:
-                from mainwindow import dm
-                path = dm.get_full_path_name(uid)
-                leaf = dm.label_dict.get(uid, {}).get('name', path)
-            except Exception:
-                path = leaf = str(uid)
+        from mainwindow import dm
+        n = sum(len(f) for f in self.faces.values())
+        uids = list(self.faces)
+        if len(uids) == 1:
+            ptxt = self._name(uids[0])
+        elif uids:
+            ptxt = f"{len(uids)} parts"
         else:
-            leaf = ""
-        self.part_edit.setText(leaf)
-        self.part_edit.setToolTip(path)
-        n = len(self.faces)
+            ptxt = ""
+        self.part_edit.setText(ptxt)
+        self.part_edit.setToolTip("\n".join(
+            dm.get_full_path_name(u) for u in uids))
         self.faces_edit.setText(f"{n} selected" if n else "")
-        dialog_style.set_awaiting(self.faces_edit, bool(uid) and n == 0)
-        self.ok_btn.setEnabled(bool(uid) and n > 0)
+        dialog_style.set_awaiting(self.faces_edit, n == 0)
+        self.ok_btn.setEnabled(n > 0)
         self.status.setText(extra if extra else
                             ("" if n else "Click faces in the viewport."))
-        self._set_info(path)
+        self._set_info([(dm.get_full_path_name(u), len(self.faces[u]))
+                        for u in uids])
 
     def _start(self):
         self.win.registerCallback(self._on_pick)
         self.win.canvas._display.SetSelectionModeFace()
 
+    def _owner_uid(self, face, ais_obj, ref_cache):
+        """Which displayed part does a picked face belong to? A single
+        click reports the AIS object it hit (exact, and correct for
+        shared instances); a box-select reports none, so then every
+        shown part is searched. A part's faces are listed once per
+        pick or box (ref_cache is kept on the dialog)."""
+        from OCCUtils import Topology
+        win = self.win
+
+        def faces_of(uid):
+            cached = win._display_prep_cache.get(uid)
+            if cached is None:
+                return []
+            hit = ref_cache.get(uid)
+            if hit is None or not hit[0].IsSame(cached[1]):
+                hit = (cached[1], list(Topology.Topo(cached[1]).faces()))
+                ref_cache[uid] = hit   # re-listed only if the shape changed
+            return hit[1]
+
+        uid = win._uid_for_ais(ais_obj) if ais_obj is not None else None
+        if uid is not None and any(face.IsSame(f) for f in faces_of(uid)):
+            return uid
+        hidden = set(win.hide_list)
+        for u in list(win.ais_shape_dict):
+            if u in hidden or u == uid:
+                continue
+            if any(face.IsSame(f) for f in faces_of(u)):
+                return u
+        return None
+
     def _on_pick(self, shapeList, *args):
         if not shapeList:
             return
-        uid = self._uid()
-        cached = self.win._display_prep_cache.get(uid)
-        if cached is None:
-            self._refresh("Part is not displayed.")
-            return
-        ref_faces = list(Topology.Topo(cached[1]).faces())
+        ais_obj = args[0] if args else None
+        cache = self._face_cache
         for shape in shapeList:
             try:
                 face = TopoDS.Face_s(shape)
             except Exception:
                 self._refresh("Pick a face (not an edge or vertex).")
                 return
-            if not any(face.IsSame(f) for f in ref_faces):
-                self._refresh("Selected face must be in the active "
-                              "part.")
+            uid = self._owner_uid(face, ais_obj, cache)
+            if uid is None:
+                self._refresh("That face is not on a displayed part.")
                 return
-            if not any(face.IsSame(f) for f in self.faces):
-                self.faces.append(face)
+            mine = self.faces.setdefault(uid, [])
+            if not any(face.IsSame(f) for f in mine):
+                mine.append(face)
         self._refresh()
 
     def _choose(self):
@@ -179,24 +214,29 @@ class FaceColorDialog(QDialog):
             self._swatch()
 
     def _apply(self):
-        uid = self._uid()
         if not self.faces:
             self._refresh("Pick at least one face first.")
             return
         rgb = (self.color.redF(), self.color.greenF(), self.color.blueF())
-        ok = self.win.set_face_colors(uid, self.faces, rgb)
-        self.faces = []
-        self._refresh("Colored." if ok else "Part is not displayed.")
+        failed = 0
+        # one redraw per part (a big part takes about a second)
+        for uid, faces in list(self.faces.items()):
+            if not self.win.set_face_colors(uid, faces, rgb):
+                failed += 1
+        self.faces = {}
+        self._refresh("Colored." if not failed else
+                      f"{failed} part(s) are not displayed.")
         self._start()
 
     def _clear_sel(self):
-        self.faces = []
+        self.faces = {}
         self._refresh()
 
     def _clear_colors(self):
-        self.win.clear_face_colors(self._uid())
-        self.faces = []
-        self._refresh("Face colors cleared.")
+        for uid in list(self.win.face_colors):
+            self.win.clear_face_colors(uid)
+        self.faces = {}
+        self._refresh("All face colors cleared.")
         self._start()
 
     def _done(self):

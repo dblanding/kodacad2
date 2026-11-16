@@ -1464,15 +1464,10 @@ class MainWindow(QMainWindow):
             print("No item selected. Try first left clicking item then right clicking.")
 
     def colorFaces(self):
-        """RMB: open the display-only Color Faces dialog (Session 145)
-        for the clicked part, making it the active part first."""
-        try:
-            self.setClickedActive()
-        except Exception:
-            pass
-        if not self.activePartUID:
-            self.statusBar().showMessage("Set a part active first.", 4000)
-            return
+        """RMB: open the display-only Color Faces dialog (Session 145).
+        Session 179 (Doug): the dialog colors faces of ANY displayed
+        part, so opening it no longer makes the clicked part active
+        (an active part is only ever set deliberately)."""
         from face_color_dialog import show_face_color_dialog
         show_face_color_dialog(self)
 
