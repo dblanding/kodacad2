@@ -505,6 +505,8 @@ class MainWindow(QMainWindow):
         self.centerOnScreen()
 
         self.calculator = None
+        self._calc_target = None   # weakref to the dialog field the
+        # calculator's X/Y/Z/T buttons fill (see valueFromCalc)
 
         self.assy_root, self.wp_root = self.create_root_items()
         self.itemClicked = None  # TreeView item that has been mouse clicked
@@ -544,6 +546,10 @@ class MainWindow(QMainWindow):
         # longer status messages to display in full. Constrained
         # explicitly so the message area claims the rest.
         self.lineEdit.setMaximumWidth(90)
+        # Focusing the status-bar line edit hands the calculator back
+        # to the 2D tools (see valueFromCalc / dialog_style).
+        import dialog_style
+        dialog_style.accept_calc_value(self, self.lineEdit, claim=False)
 
         status = self.statusBar()
         status.setSizeGripEnabled(False)
@@ -2057,7 +2063,32 @@ class MainWindow(QMainWindow):
             self.showItemActive(uid)
 
     def valueFromCalc(self, value):
-        """Receive value from calculator."""
+        """Receive value from calculator.
+
+        Session 179 (Doug): if a dialog's numeric field was the last
+        input focused (dialog_style.accept_calc_value), the value goes
+        into THAT field -- the dialog comes forward with the field
+        focused so Enter / the check mark can follow. Otherwise the
+        old behaviour: the value joins lineEditStack and the active
+        operation's callback is called with an empty list."""
+        tgt = self._calc_target() if self._calc_target else None
+        try:
+            usable = (tgt is not None and tgt.isVisible()
+                      and tgt.isEnabled() and not tgt.isReadOnly())
+        except RuntimeError:   # the field's C++ object is gone
+            usable = False
+            self._calc_target = None
+        if usable:
+            tgt.setText(rpnCalculator.fmt(value))
+            try:
+                tgt.window().activateWindow()
+                tgt.setFocus()
+            except Exception:
+                pass
+            self.statusBar().showMessage(
+                f"Calculator value {rpnCalculator.fmt(value)} sent to "
+                f"the dialog.", 3000)
+            return
         cb = self.registeredCallback
         if cb:
             self.lineEditStack.append(str(value))

@@ -7502,3 +7502,10 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - The old explicit 'Enter must not press a button' guard became unnecessary: the icon buttons are QToolButtons, which are never default buttons.
 - kodacad.py now imports dialog_style and QGridLayout.
 - Untested (needs Qt/OCP).
+
+### The RPN calculator can fill a dialog's numeric field
+- Doug: in the early 2D tools the calculator could send a value to the status-bar line edit; dialogs with numeric fields (Pull) should receive calculator values too. Until now the X/Y/Z/T buttons called `MainWindow.valueFromCalc()`, which only pushed the value on `lineEditStack` and fired the active operation's callback with an empty list ('Enter pressed') - a dialog's own QLineEdit never saw it.
+- `dialog_style.accept_calc_value(win, edit)` installs a small focus watcher: the field becomes `win._calc_target` (a weakref) when it gets keyboard focus. The status-bar line edit is registered with `claim=False`, so focusing IT clears the target and the 2D tools work exactly as before: whichever input was focused last wins. (Clicking a calculator button does not take focus away from the dialog's own window, so the dialog's last-focused field is still known.)
+- `valueFromCalc()`: if the target is visible, enabled and editable, the value goes into it (formatted by `rpnCalculator.fmt`, which also tidies float noise), the dialog is activated with the field focused (so Enter, which presses Done in Pull, can follow) and a status-bar note says so. A field on the inactive page of a stacked widget is not visible, so it is skipped; a dead field is dropped. In every other case the old path runs unchanged.
+- Opted in so far: Pull's Distance and Angle. Units: the raw number is inserted, read in the current display units, like the 2D tools' values. Each later dialog opts in with one line per numeric field.
+- Untested (needs Qt).

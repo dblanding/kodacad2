@@ -20,11 +20,16 @@ Three shared pieces, so every dialog can be converted the same way:
                                 the lower-right of the viewport.
   * set_awaiting(widget, on) -- the Creo 'yellow field = pick something
                                 now' cue.
+  * accept_calc_value(win, edit) -- let the RPN calculator's X/Y/Z/T
+                                buttons fill a numeric field (the
+                                main window's valueFromCalc).
 
 Pure Qt layout and styling; no CAD logic lives here.
 """
 
-from PySide6.QtCore import Qt, QPoint
+import weakref
+
+from PySide6.QtCore import Qt, QPoint, QObject, QEvent
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout,
                                QToolButton, QTextBrowser, QLabel)
 
@@ -112,6 +117,31 @@ def set_awaiting(widget, on):
     st = widget.style()
     st.unpolish(widget)
     st.polish(widget)
+
+
+class _CalcTargetWatcher(QObject):
+    """Remembers which numeric field the calculator should fill.
+    claim=True: this field becomes the target when it gets keyboard
+    focus. claim=False (used on the status-bar line edit): focusing it
+    CLEARS the target, so the 2D tools' own line edit keeps working
+    exactly as before -- whichever input was focused last wins."""
+
+    def __init__(self, win, edit, claim):
+        super().__init__(edit)   # lifetime tied to the field
+        self._win = win
+        self._claim = claim
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.FocusIn:
+            self._win._calc_target = (weakref.ref(obj) if self._claim
+                                      else None)
+        return False   # never swallow the event
+
+
+def accept_calc_value(win, edit, claim=True):
+    """Session 179 (Doug): make `edit` a calculator target. Call once
+    per numeric QLineEdit when the dialog is built."""
+    edit.installEventFilter(_CalcTargetWatcher(win, edit, claim))
 
 
 class InfoWindow(QWidget):
