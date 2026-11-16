@@ -7494,3 +7494,11 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - The Axis row is deliberately local to pull_dialog.py for now. If Position's rotation (or the 3D arrays) need the same two-point axis row, extract it into dialog_style.py then, with its second consumer in hand.
 - Noted for the Position conversion: Doug saw that, in Position, switching the method (Dynamic / Mate Align / 2 Points) does not always switch the lower part of the dialog at once (Dynamic's nudge section stays visible), and that the Constraints section shows even in Dynamic.
 - Untested (needs Qt/OCP).
+
+### Dialog roll-out, step 4: Defeaturing in the minimal style
+- Presentation only (the face picking, the three methods and `_defeaturing_execute` are untouched). Layout: check / cross / ? bar; rows Part (read-only; full path in the tooltip), Method (combo) and Faces (yellow until some are picked, then '3 selected'); a one-line status that shows the method's hint until a face is picked, then any message. The check mark APPLIES and the dialog stays open (as the old Apply button did, for taking a part down feature by feature); the cross is the old Done and ends the session. The check is disabled until a face is picked. The method text, the pick instructions (box-select adds faces, Ctrl+click removes one, picks are orange, each Apply is one undo step) and the full part path live in the '?' info window.
+- Placed in the viewport's upper-left; the info window closes with the dialog.
+- The shared `_FacePickMixin` was not touched, so Move Face is unaffected and is the next conversion.
+- The old explicit 'Enter must not press a button' guard became unnecessary: the icon buttons are QToolButtons, which are never default buttons.
+- kodacad.py now imports dialog_style and QGridLayout.
+- Untested (needs Qt/OCP).

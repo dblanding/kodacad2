@@ -77,13 +77,15 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu,
+                               QGridLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QMenu,
                                QMessageBox, QPushButton,
                                QTreeWidgetItemIterator, QVBoxLayout)
 
 from m2d import M2D
 import stepanalyzer
 import docmodel
+import dialog_style
 from mainwindow import MainWindow, dm
 from OCCUtils import Topology
 import workplane
@@ -1470,54 +1472,49 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
         self.setWindowTitle("Defeaturing")
         self.setModal(False)
         self._init_face_pick()
+        self._info = dialog_style.InfoWindow(main_win,
+                                             "Defeaturing details")
 
+        # Minimalist layout (Session 179, the Creo E/D model): the
+        # check mark APPLIES (the dialog stays open for the next
+        # feature, as before), the cross ends the defeaturing session.
         lay = QVBoxLayout(self)
+        bar, self.apply_btn, self.done_btn, self.help_btn = \
+            dialog_style.icon_bar(self._on_apply, self._on_done,
+                                  self._toggle_info)
+        self.apply_btn.setToolTip("Apply (the dialog stays open)")
+        self.done_btn.setToolTip("Done -- end the defeaturing session")
+        lay.addLayout(bar)
 
-        # Header matches Mill/Pull's own convention exactly (Session
-        # 63, Doug: side-by-side dialogs should share one look):
-        # caption line + BOLD full-path breadcrumb.
-        lay.addWidget(QLabel("Modifying part:"))
-        self.part_label = QLabel()
-        _bold = QFont()
-        _bold.setBold(True)
-        self.part_label.setFont(_bold)
-        self.part_label.setWordWrap(True)
-        lay.addWidget(self.part_label)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Method:"))
+        rows = QGridLayout()
+        rows.addWidget(dialog_style.row_label("Part"), 0, 0)
+        self.part_edit = QLineEdit()
+        self.part_edit.setReadOnly(True)
+        rows.addWidget(self.part_edit, 0, 1)
+        rows.addWidget(dialog_style.row_label("Method"), 1, 0)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems([m[0] for m in self.MODES])
         self.mode_combo.currentIndexChanged.connect(
             self._on_mode_changed)
-        row.addWidget(self.mode_combo)
-        lay.addLayout(row)
-
-        self.instructions_label = QLabel()
-        self.instructions_label.setWordWrap(True)
-        lay.addWidget(self.instructions_label)
+        rows.addWidget(self.mode_combo, 1, 1)
+        rows.addWidget(dialog_style.row_label("Faces"), 2, 0)
+        self.faces_edit = QLineEdit()
+        self.faces_edit.setReadOnly(True)
+        rows.addWidget(self.faces_edit, 2, 1)
+        rows.setColumnStretch(1, 1)
+        lay.addLayout(rows)
 
         self.status_label = QLabel()
+        self.status_label.setObjectName("KcStatus")
         self.status_label.setWordWrap(True)
         lay.addWidget(self.status_label)
 
-        btn_row = QHBoxLayout()
-        self.apply_btn = QPushButton("✅ Apply")
-        self.apply_btn.clicked.connect(self._on_apply)
-        btn_row.addWidget(self.apply_btn)
-        self.done_btn = QPushButton("⏹ Done")
-        self.done_btn.clicked.connect(self._on_done)
-        btn_row.addWidget(self.done_btn)
-        lay.addLayout(btn_row)
+        dialog_style.apply_minimal(self)
+        self.setMinimumWidth(260)
 
         # Enter must never press a button for us: nothing is committed
-        # until the user clicks Apply. (Without this Qt makes Apply the
-        # default button, so Enter in the Distance box applied the move
-        # while Defeaturing ignored Enter; Session 169.)
-        for _b in (self.apply_btn, self.done_btn):
-            _b.setAutoDefault(False)
-            _b.setDefault(False)
-
+        # until the user clicks Apply (Session 169). The icon buttons
+        # are QToolButtons, which are never default buttons.
         self._refresh_header()
         self._on_mode_changed()
         self._start_picking()
@@ -1548,7 +1545,28 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
                 name = dm.get_full_path_name(uid)
             except Exception:
                 name = str(uid)
-        self.part_label.setText(name)
+        leaf = dm.label_dict.get(uid, {}).get('name', name) if uid else ""
+        self.part_edit.setText(str(leaf))
+        self.part_edit.setToolTip(name)
+        self._refresh_info()
+
+    def _toggle_info(self):
+        self._refresh_info()
+        self._info.toggle(win)
+
+    def _refresh_info(self):
+        idx = self.mode_combo.currentIndex()
+        self._info.set_html(
+            "<h3>Defeaturing - %s</h3><p>%s</p>"
+            "<p>Click faces in the viewport (a box-select adds every "
+            "face inside it; <b>Ctrl+click</b> a picked face to "
+            "remove it). Picked faces show orange. Press the check "
+            "mark to apply; the dialog stays open so you can remove "
+            "one feature after another. Each Apply is one undo "
+            "step.</p><p><b>Part</b> (the active part):<br>%s</p>"
+            "<p>The cross ends the defeaturing session.</p>" % (
+                self.MODES[idx][0], self.MODES[idx][1],
+                self.part_edit.toolTip() or "(none)"))
 
     def _on_clear(self):
         self.face_stack = []
@@ -1558,7 +1576,7 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
 
     def _on_mode_changed(self):
         idx = self.mode_combo.currentIndex()
-        self.instructions_label.setText(self.MODES[idx][1])
+        self._refresh_info()
         self.face_stack = []
         if getattr(self, "_colored_uid", None) is not None:
             self._clear_preview()
@@ -1566,8 +1584,15 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
 
     def _update_status(self, extra=""):
         n = len(self.face_stack)
-        base = f"{n} face(s) selected."
-        self.status_label.setText(f"{extra}  {base}" if extra else base)
+        self.faces_edit.setText(f"{n} selected" if n else "")
+        dialog_style.set_awaiting(self.faces_edit, n == 0)
+        self.apply_btn.setEnabled(n > 0)
+        if extra:
+            self.status_label.setText(extra)
+        else:
+            self.status_label.setText(
+                "" if n else self.MODES[
+                    self.mode_combo.currentIndex()][1])
 
     def _start_picking(self):
         win.registerCallback(self._on_pick)
@@ -1670,6 +1695,11 @@ class DefeaturingDialog(_FacePickMixin, QDialog):
             except Exception:
                 pass
         win.clearCallback()
+        try:
+            self._info.hide()
+            self._info.deleteLater()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
@@ -1681,6 +1711,7 @@ def show_defeaturing_dialog(main_win):
         dlg = DefeaturingDialog(main_win)
         main_win._defeaturing_dialog = dlg
         dlg.show()
+        dialog_style.place_top_left(dlg, main_win)
     else:
         dlg.raise_()
         dlg.activateWindow()
