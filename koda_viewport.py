@@ -157,6 +157,13 @@ class DisplayShim:
         self._viewport._vertex_center_pick_active = False
         self._set_selection_mode(TopAbs_FACE)
 
+    def SetSelectionModeFaceOrEdge(self):
+        # Faces AND edges pickable together (Position's picked gizmo
+        # frame: cylinder / flat face / circular or straight edge).
+        # Same concurrent-mode mechanism as SetSelectionModeVertex.
+        self._viewport._vertex_center_pick_active = False
+        self._set_selection_mode(TopAbs_FACE, extra_shape_type=TopAbs_EDGE)
+
     def SetSelectionModeShape(self):
         self._viewport._vertex_center_pick_active = False
         self._set_selection_mode(TopAbs_SHAPE)

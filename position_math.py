@@ -558,6 +558,76 @@ def compute_align_axis_pin_move(hole1: PickResult, hole2: PickResult,
     return TopLoc_Location(t)
 
 
+@dataclass
+class FramePick:
+    """A gizmo frame from a picked piece of geometry (Position, stage
+    D): origin ON the axis, W along the axis (or a flat face's outward
+    normal), U any unit vector perpendicular to W."""
+    origin: Vec3
+    w: Vec3
+    u: Vec3
+    label: str = ""
+
+
+def frame_from_axis(point: Vec3, direction: Vec3, near: Optional[Vec3] = None,
+                    label: str = "") -> FramePick:
+    """Frame whose W is `direction` and whose origin is `point`; with
+    `near` given, the origin is moved ALONG the axis to the spot
+    closest to `near` (a cylinder's stored location can be far from
+    the picked face, and the gizmo should sit by the geometry)."""
+    w = direction.normalized()
+    origin = point
+    if near is not None:
+        origin = point + w * ((near - point).dot(w))
+    return FramePick(origin=origin, w=w, u=_any_perpendicular(w), label=label)
+
+
+def _face_centroid(face) -> Vec3:
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props)
+    return Vec3.from_gp(props.CentreOfMass())
+
+
+def resolve_frame_pick(shape) -> FramePick:
+    """A picked face or edge -> FramePick:
+      flat face       -> its centroid, W = outward normal ('face normal')
+      cylindrical face-> its axis (also fitted, BSpline-typed cylinders;
+                         see resolve_cylinder_pick)
+      circular edge   -> the circle's center, W = its axis
+      straight edge   -> its midpoint, W = the edge direction
+    Raises ValueError for anything else."""
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE
+    from OCP.TopoDS import TopoDS
+    st = shape.ShapeType()
+    if st == TopAbs_FACE:
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_Plane
+        face = TopoDS.Face_s(shape)
+        if BRepAdaptor_Surface(face).GetType() == GeomAbs_Plane:
+            pk = resolve_face_pick(face)
+            return frame_from_axis(pk.point, pk.direction, label="flat face")
+        pk = resolve_cylinder_pick(face)       # ValueError if not round
+        return frame_from_axis(pk.point, pk.direction,
+                               near=_face_centroid(face), label=pk.label)
+    if st == TopAbs_EDGE:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_Line
+        edge = TopoDS.Edge_s(shape)
+        curve = BRepAdaptor_Curve(edge)
+        if curve.GetType() == GeomAbs_Line:
+            p0 = Vec3.from_gp(curve.Value(curve.FirstParameter()))
+            p1 = Vec3.from_gp(curve.Value(curve.LastParameter()))
+            d = p1 - p0
+            if d.length < 1e-9:
+                raise ValueError("Edge has no length.")
+            return frame_from_axis((p0 + p1) * 0.5, d, label="straight edge")
+        pk = resolve_circle_pick(edge)         # ValueError if not circular
+        return frame_from_axis(pk.point, pk.direction, label=pk.label)
+    raise ValueError("Pick a face or an edge.")
+
+
 def resolve_face_pick(face) -> PickResult:
     """Resolve a picked planar TopoDS_Face into a PickResult (centroid
     + outward normal). Reuses the exact face_normal() helper already

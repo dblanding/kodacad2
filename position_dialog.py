@@ -151,6 +151,7 @@ class PositionDialog(QDialog):
         # to its default placement.
         self._frame = None
         self._frame_name = ""    # display name of the workplane it came from
+        self._frame_picking = False   # waiting for a face / edge pick
 
         # Stage C (minimal layout) state: the stacked method pages, the
         # '?' window, the Re-Apply button and the last nudge's values.
@@ -289,11 +290,13 @@ class PositionDialog(QDialog):
         fr = QHBoxLayout()
         fr.addWidget(dialog_style.row_label("Frame"))
         self._frame_world_rb = QRadioButton("World")
-        self._frame_wp_rb = QRadioButton("Active Workplane")
+        self._frame_wp_rb = QRadioButton("Workplane")
+        self._frame_pick_rb = QRadioButton("Pick")
         self._frame_world_rb.setChecked(True)
         self._frame_group = QButtonGroup(self)
         self._frame_group.addButton(self._frame_world_rb)
         self._frame_group.addButton(self._frame_wp_rb)
+        self._frame_group.addButton(self._frame_pick_rb)
         self._frame_world_rb.setToolTip(
             "The gizmo's default place, axes X/Y/Z.")
         self._frame_wp_rb.setToolTip(
@@ -302,12 +305,21 @@ class PositionDialog(QDialog):
             "workplane's axis and typed distances run along U/V/W. It "
             "stays there after each move.\n"
             "Click it again to pick up a different active workplane.")
+        self._frame_pick_rb.setToolTip(
+            "Click a cylindrical face, a circular or straight edge, or a "
+            "flat face: the gizmo sits on that axis (W along the axis, "
+            "or the flat face's normal) and stays there after each move.\n"
+            "Click it again to pick a different one. The frame is a "
+            "snapshot: it does not follow the part if you pick on the "
+            "part being moved.")
         # clicked: re-clicking the checked button must re-read the
         # CURRENT active workplane
         self._frame_world_rb.clicked.connect(self._on_frame_chosen)
         self._frame_wp_rb.clicked.connect(self._on_frame_chosen)
+        self._frame_pick_rb.clicked.connect(self._on_frame_chosen)
         fr.addWidget(self._frame_world_rb)
         fr.addWidget(self._frame_wp_rb)
+        fr.addWidget(self._frame_pick_rb)
         fr.addStretch(1)
         g.addLayout(fr, 0, 0, 1, 6)
 
@@ -457,7 +469,11 @@ class PositionDialog(QDialog):
             "workplane's origin with its U/V/W, and stays there after "
             "each move, so repeated rotations about the same workplane "
             "axis need no re-aligning. Click it again to pick up a "
-            "different active workplane.</p>"
+            "different active workplane. <i>Pick</i>: click a cylindrical "
+            "face, a circular or straight edge, or a flat face and the "
+            "gizmo sits on its axis (a flat face uses its normal). It is "
+            "a snapshot: it does not follow the part if you pick on the "
+            "part being moved.</p>"
             "<p><b>Mate Align</b><br><i>Mate</i>: bring two faces "
             "together, facing each other. <i>Align</i>: make two faces "
             "face the same way. <i>Align Axis</i>: line up two hole or "
@@ -874,9 +890,17 @@ class PositionDialog(QDialog):
         # (re)starting Dynamic applies the Frame row's choice: World =
         # default gizmo; Active Workplane = a fresh snapshot of the
         # CURRENT active workplane (re-attached below).
+        self._frame_picking = False
+        prev_frame = self._frame
         self._frame = None
         if self._frame_wp_rb.isChecked():
             self._frame = self._read_active_wp_frame()
+            if self._frame is None:
+                self._frame_world_rb.setChecked(True)
+        elif self._frame_pick_rb.isChecked():
+            # a picked frame is kept (it is a snapshot); none picked
+            # yet -> World
+            self._frame = prev_frame
             if self._frame is None:
                 self._frame_world_rb.setChecked(True)
         self._set_nudge_labels()
@@ -919,10 +943,20 @@ class PositionDialog(QDialog):
     def _on_frame_chosen(self, _index=0):
         """The user clicked an entry in the Frame row (Session 76's
         'Align Gizmo to Active Workplane' button, promoted)."""
-        if self.main_win.canvas.manipulator_position() is None:
+        # (while a pick is pending the gizmo is deliberately detached)
+        if (not self._frame_picking
+                and self.main_win.canvas.manipulator_position() is None):
             self.main_win.statusBar().showMessage(
                 "No manipulator attached -- select Dynamic first.", 5000)
             return
+        if self._frame_pick_rb.isChecked():
+            self._start_frame_picking()
+            return
+        if self._frame_picking:
+            # World / Workplane chosen while a pick was pending: cancel it
+            self._frame_picking = False
+            self.main_win.clearCallback()
+            self._reattach_manipulator()       # the gizmo comes back
         if self._frame_wp_rb.isChecked():
             fr = self._read_active_wp_frame()
             if fr is None:
@@ -947,6 +981,56 @@ class PositionDialog(QDialog):
             self._set_nudge_labels()
             self.main_win.statusBar().showMessage(
                 "Gizmo back at its default place (World axes).", 5000)
+
+    def _start_frame_picking(self):
+        """Frame = Pick: wait for a face or an edge (stage D)."""
+        self._frame_picking = True
+        # Doug: picks often needed 2+ tries. Two likely causes, both
+        # fixed here: (1) the gizmo sits on the part and its arrows/rings
+        # win the hover/click over the geometry behind them, so the gizmo
+        # is detached while picking (it returns on the pick or when
+        # another Frame choice cancels); (2) the previous pick stays
+        # selected, and clicking a selected entity toggles it OFF.
+        self.main_win.canvas.detach_manipulator()
+        try:
+            self.main_win.canvas._display.Context.ClearSelected(True)
+        except Exception:
+            pass
+        self.main_win.registerCallback(self._frame_pick_callback)
+        self.main_win.canvas._display.SetSelectionModeFaceOrEdge()
+        self.main_win.statusBar().showMessage(
+            "Pick a cylindrical face, a circular or straight edge, or a "
+            "flat face -- the gizmo goes on its axis.")
+
+    def _frame_pick_callback(self, shapeList, *args):
+        for shape in shapeList:
+            try:
+                fr = position_math.resolve_frame_pick(shape)
+            except Exception as e:
+                print(f"[PositionDialog] pick gives no frame: {e}")
+                self.main_win.statusBar().showMessage(
+                    "That gives no axis -- pick a cylindrical face, a "
+                    "circular or straight edge, or a flat face.", 4000)
+                continue
+            self._frame = ((fr.origin.X, fr.origin.Y, fr.origin.Z),
+                           (fr.w.X, fr.w.Y, fr.w.Z),
+                           (fr.u.X, fr.u.Y, fr.u.Z))
+            self._frame_name = fr.label
+            self._frame_picking = False
+            self.main_win.clearCallback()   # also back to neutral picking
+            try:
+                # don't leave the picked entity selected (a second click
+                # on a selected entity would toggle it off)
+                self.main_win.canvas._display.Context.ClearSelected(True)
+            except Exception:
+                pass
+            # the gizmo (detached while picking) lands on the new frame
+            self._reattach_manipulator()
+            self._set_nudge_labels()
+            self.main_win.statusBar().showMessage(
+                f"Gizmo placed on the {fr.label} and it stays there. "
+                f"Click Pick again for another.", 6000)
+            return
 
     def _reattach_manipulator(self):
         """(Re)attach the manipulator to every leaf part under self.uid.
