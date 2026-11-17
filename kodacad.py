@@ -73,13 +73,12 @@ from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtCore import Qt, QTimer, QLocale
+from PySide6.QtGui import QDoubleValidator, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
-                               QDoubleSpinBox,
-                               QGridLayout, QHBoxLayout, QLabel,
+                                                              QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QMenu,
-                               QMessageBox, QPushButton,
+                               QMessageBox, QPushButton, QSizePolicy,
                                QTreeWidgetItemIterator, QVBoxLayout)
 
 from m2d import M2D
@@ -1760,70 +1759,78 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self.setWindowTitle("Move Face")
         self.setModal(False)
         self._init_face_pick()
+        self._info = dialog_style.InfoWindow(main_win, "Move Face details")
+        self._full_status = ""    # complete texts for the info window;
+        self._full_preview = ""   # the dialog shows one elided line each
+        self._advice = ""         # suspect-face advice (long)
 
+        # Minimalist layout (Session 179, the Creo E/D model). The
+        # dialog must NOT grow when a long warning appears (Doug), so
+        # the status and preview lines are single, elided lines; the
+        # complete text, the suspect-face advice and the instructions
+        # live in the '?' info window.
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Modifying part:"))
-        self.part_label = QLabel()
-        _bold = QFont()
-        _bold.setBold(True)
-        self.part_label.setFont(_bold)
-        self.part_label.setWordWrap(True)
-        lay.addWidget(self.part_label)
+        bar, self.apply_btn, self.done_btn, self.help_btn = \
+            dialog_style.icon_bar(self._on_apply, self._on_done,
+                                  self._toggle_info)
+        self.apply_btn.setToolTip("Apply (the dialog stays open)")
+        self.done_btn.setToolTip("Done -- end the Move Face session")
+        lay.addLayout(bar)
 
-        info = QLabel(
-            "Click the face(s) to move, enter a distance, then Apply.\n"
-            "+ adds material (narrows a slot or hole); "
-            "- removes material (widens it).\n"
-            "Orange = picked (Ctrl+click a picked face to unpick it).  "
-            "Yellow = also moves (tangent to a picked face).\n"
-            "Not for faces bounded by fillets (blends): remove them "
-            "first (Defeaturing), move the face, then re-fillet.")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Distance:"))
-        self.dist_edit = QDoubleSpinBox()
-        self.dist_edit.setDecimals(4)
-        self.dist_edit.setRange(-1.0e6, 1.0e6)
-        self.dist_edit.setKeyboardTracking(True)   # preview while typing
-        self.dist_edit.setToolTip("Type a distance, or use Up/Down keys "
-                                  "or the mouse wheel to step it.")
-        row.addWidget(self.dist_edit)
+        rows = QGridLayout()
+        rows.addWidget(dialog_style.row_label("Part"), 0, 0)
+        self.part_edit = QLineEdit()
+        self.part_edit.setReadOnly(True)
+        rows.addWidget(self.part_edit, 0, 1, 1, 2)
+        rows.addWidget(dialog_style.row_label("Faces"), 1, 0)
+        self.faces_edit = QLineEdit()
+        self.faces_edit.setReadOnly(True)
+        rows.addWidget(self.faces_edit, 1, 1, 1, 2)
+        rows.addWidget(dialog_style.row_label("Distance"), 2, 0)
+        # A plain line edit (like Pull's), not a spin box: the RPN
+        # calculator can fill it, and it can show the yellow 'needs a
+        # value' cue (Doug does not use the spin arrows).
+        self.dist_edit = QLineEdit()
+        _dv = QDoubleValidator(-1.0e6, 1.0e6, 4, self.dist_edit)
+        _dv.setNotation(QDoubleValidator.Notation.StandardNotation)
+        _dv.setLocale(QLocale.c())     # '.' as the decimal point
+        self.dist_edit.setValidator(_dv)
+        self.dist_edit.setPlaceholderText("+ adds, - removes")
+        self.dist_edit.setToolTip("Distance to move the picked faces "
+                                  "along their outward normal. + adds "
+                                  "material, - removes it.")
+        rows.addWidget(self.dist_edit, 2, 1)
         self.units_label = QLabel(win.units)
-        row.addWidget(self.units_label)
-        lay.addLayout(row)
+        rows.addWidget(self.units_label, 2, 2)
+        rows.setColumnStretch(1, 1)
+        lay.addLayout(rows)
+        # the RPN calculator can fill the distance
+        dialog_style.accept_calc_value(main_win, self.dist_edit)
 
-        self.live_box = QCheckBox("Live preview (ghost of the result)")
+        opts = QHBoxLayout()
+        self.live_box = QCheckBox("Live Preview")
+        self.live_box.setToolTip("Show a ghost of the result while you "
+                                 "type the distance.")
         self.live_box.setChecked(True)
-        lay.addWidget(self.live_box)
-        self.preview_label = QLabel()
-        self.preview_label.setWordWrap(True)
-        lay.addWidget(self.preview_label)
+        opts.addWidget(self.live_box)
+        self.clear_btn = QPushButton("Clear Picks")
+        self.clear_btn.clicked.connect(self._on_clear)
+        self.clear_btn.setAutoDefault(False)
+        opts.addWidget(self.clear_btn)
+        lay.addLayout(opts)
 
+        self.preview_label = QLabel()
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                         QSizePolicy.Policy.Preferred)
+        lay.addWidget(self.preview_label)
         self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
+        self.status_label.setObjectName("KcStatus")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                        QSizePolicy.Policy.Preferred)
         lay.addWidget(self.status_label)
 
-        btn_row = QHBoxLayout()
-        self.apply_btn = QPushButton("\u2705 Apply")
-        self.apply_btn.clicked.connect(self._on_apply)
-        btn_row.addWidget(self.apply_btn)
-        self.clear_btn = QPushButton("Clear Selection")
-        self.clear_btn.clicked.connect(self._on_clear)
-        btn_row.addWidget(self.clear_btn)
-        self.done_btn = QPushButton("\u23f9 Done")
-        self.done_btn.clicked.connect(self._on_done)
-        btn_row.addWidget(self.done_btn)
-        lay.addLayout(btn_row)
-
-        # Enter must never press a button for us: nothing is committed
-        # until the user clicks Apply. (Without this Qt makes Apply the
-        # default button, so Enter in the Distance box applied the move
-        # while Defeaturing ignored Enter; Session 169.)
-        for _b in (self.apply_btn, self.clear_btn, self.done_btn):
-            _b.setAutoDefault(False)
-            _b.setDefault(False)
+        dialog_style.apply_minimal(self)
+        self.setMinimumWidth(280)
 
         # --- live preview machinery (Session 161) ---
         self._epoch = 0           # bumps when the part changes/ghost cleared
@@ -1847,8 +1854,8 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self._offset_timer.setSingleShot(True)
         self._offset_timer.setInterval(350)
         self._offset_timer.timeout.connect(self._request_offset)
-        self.dist_edit.valueChanged.connect(
-            lambda _v: self._schedule_offset())
+        self.dist_edit.textChanged.connect(self._dist_changed)
+        dialog_style.set_awaiting(self.dist_edit, True)   # yellow until typed
         self.live_box.toggled.connect(self._on_live_toggled)
 
         self._refresh_header()
@@ -1864,6 +1871,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 win.registeredCallback == self._on_pick:
             self._drop_preview()
             self._suspects = []
+            self._advice = ""
             self.face_stack = []
             self._colored_uid = None
             self._refresh_header()
@@ -1884,16 +1892,82 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
                 name = dm.get_full_path_name(uid)
             except Exception:
                 name = str(uid)
-        self.part_label.setText(name)
+        leaf = dm.label_dict.get(uid, {}).get('name', name) if uid else ""
+        self.part_edit.setText(str(leaf))
+        self.part_edit.setToolTip(name)
         self.units_label.setText(win.units)
-        # arrow-key / wheel step: a sensible bit of the chosen unit
-        self.dist_edit.setSingleStep({"mm": 0.1, "in": 0.01,
-                                      "ft": 0.001, "m": 0.001}.get(win.units, 0.1))
+        self._refresh_info()
+
+    def _dist_value(self):
+        """The typed distance in display units (0.0 if blank/partial,
+        e.g. '-' or '3.')."""
+        try:
+            return float(self.dist_edit.text())
+        except ValueError:
+            return 0.0
+
+    def _dist_changed(self, _text=""):
+        dialog_style.set_awaiting(self.dist_edit,
+                                  abs(self._dist_value()) < 1.0e-9)
+        self._schedule_offset()
+
+    def _set_line(self, label, text):
+        """One elided line (never wraps, so the dialog never grows);
+        the whole text is in the tooltip and the '?' window."""
+        fm = label.fontMetrics()
+        label.setText(fm.elidedText(text, Qt.TextElideMode.ElideRight,
+                                    max(label.width(), 240)))
+        label.setToolTip(text if text else "")
+
+    def _toggle_info(self):
+        self._refresh_info()
+        self._info.toggle(win)
+
+    def _refresh_info(self):
+        import html as _html
+        h = ["<h3>Move Face</h3>",
+             "<p>Click the face(s) to move, enter a distance, then "
+             "Apply. Each picked face moves along its outward normal "
+             "and its neighbours are extended or trimmed to follow.</p>"
+             "<p><b>+</b> adds material (narrows a slot or hole); "
+             "<b>-</b> removes material (widens it).</p>"
+             "<p><b>Orange</b> = picked (Ctrl+click a picked face to "
+             "unpick it). <b>Yellow</b> = also moves (tangent to a "
+             "picked face). <b>Red</b> = suspect narrow face.</p>"
+             "<p>Not for faces bounded by fillets (blends): remove them "
+             "first (Defeaturing), move the face, then re-fillet.</p>"
+             "<p>The dialog stays open after Apply; each Apply is one "
+             "undo step.</p>",
+             "<p><b>Part</b> (the active part):<br>%s</p>" % (
+                 _html.escape(self.part_edit.toolTip() or "(none)"))]
+        if self._full_status:
+            h.append("<p><b>Status:</b> %s</p>" %
+                     _html.escape(self._full_status))
+        if self._full_preview:
+            h.append("<p><b>Preview:</b> %s</p>" %
+                     _html.escape(self._full_preview))
+        if self._advice:
+            h.append("<p><b>Advice:</b> %s</p>" %
+                     _html.escape(self._advice))
+        self._info.set_html("".join(h))
 
     def _update_status(self, extra=""):
-        base = f"{len(self.face_stack)} face(s) picked."
-        self.status_label.setText(f"{extra}  {base}" if extra else base)
-        QTimer.singleShot(0, self._fit_height)
+        n = len(self.face_stack)
+        self.faces_edit.setText(f"{n} selected" if n else "")
+        dialog_style.set_awaiting(self.faces_edit, n == 0)
+        self.apply_btn.setEnabled(n > 0)
+        short = extra
+        marker = "  Suspect:"
+        if marker in extra:
+            short, _sep, tail = extra.partition(marker)
+            self._advice = "Suspect:" + tail
+            short = (short.strip() + "  Suspect faces are shown red -- "
+                     "see ? for advice.")
+        if not short and n == 0:
+            short = "Click the face(s) to move."
+        self._full_status = short
+        self._set_line(self.status_label, short)
+        self._refresh_info()
 
     def _start_picking(self):
         win.registerCallback(self._on_pick)
@@ -1967,20 +2041,9 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
 
     # -- live offset preview (Session 161) --------------------------
     def _set_preview_text(self, text):
-        self.preview_label.setText(text)
-        # word-wrapped labels don't make the dialog grow by themselves,
-        # so a long warning was clipped; grow (never shrink) to fit
-        QTimer.singleShot(0, self._fit_height)
-
-    def _fit_height(self):
-        try:
-            lay = self.layout()
-            lay.activate()
-            h = lay.totalHeightForWidth(self.width()) + 24   # last line was clipped
-            if h > self.height():
-                self.resize(self.width(), h)
-        except Exception as e:
-            print(f"[MoveFace] fit height failed: {e}")
+        self._full_preview = text
+        self._set_line(self.preview_label, text)
+        self._refresh_info()
 
     def _on_live_toggled(self, on):
         if on:
@@ -2251,7 +2314,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         if uid is None or not self.face_stack:
             self._drop_preview()
             return
-        dist = self.dist_edit.value() * win.unitscale
+        dist = self._dist_value() * win.unitscale
         if abs(dist) < 1.0e-9:
             self._drop_preview()
             return
@@ -2411,7 +2474,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         if not self.face_stack:
             self._update_status("Pick at least one face before Apply.")
             return
-        dist_user = self.dist_edit.value()
+        dist_user = self._dist_value()
         if abs(dist_user) < 1.0e-9:
             self._update_status("Enter a distance (negative removes "
                                 "material).")
@@ -2469,6 +2532,7 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
         self.face_stack = []
         self._drop_preview()
         self._suspects = []
+        self._advice = ""
         committed, cmsg = _commit_shape(uid, newPart, "MoveFace")
         if committed:
             dv = (v1 - v0) / (win.unitscale ** 3)
@@ -2503,6 +2567,11 @@ class MoveFaceDialog(_FacePickMixin, QDialog):
             except Exception:
                 pass
         win.clearCallback()
+        try:
+            self._info.hide()
+            self._info.deleteLater()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
@@ -2514,6 +2583,7 @@ def show_move_face_dialog(main_win):
         dlg = MoveFaceDialog(main_win)
         main_win._move_face_dialog = dlg
         dlg.show()
+        dialog_style.place_top_left(dlg, main_win)
     else:
         dlg.raise_()
         dlg.activateWindow()

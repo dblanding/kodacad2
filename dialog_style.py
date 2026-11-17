@@ -130,17 +130,24 @@ class _CalcTargetWatcher(QObject):
         super().__init__(edit)   # lifetime tied to the field
         self._win = win
         self._claim = claim
+        # Keep the Python wrapper of the field ALIVE. A weakref to a
+        # wrapper nobody else holds (e.g. a spin box's internal
+        # lineEdit(), which no attribute owns) dies the moment the
+        # focus handler returns -- the calculator then found no target
+        # (Move Face's Distance, Session 179).
+        self._edit = edit
 
     def eventFilter(self, obj, ev):
         if ev.type() == QEvent.Type.FocusIn:
-            self._win._calc_target = (weakref.ref(obj) if self._claim
-                                      else None)
+            self._win._calc_target = (weakref.ref(self._edit)
+                                      if self._claim else None)
         return False   # never swallow the event
 
 
 def accept_calc_value(win, edit, claim=True):
     """Session 179 (Doug): make `edit` a calculator target. Call once
-    per numeric QLineEdit when the dialog is built."""
+    per numeric QLineEdit when the dialog is built (a plain QLineEdit:
+    a spin box's internal line edit did not work as a target)."""
     edit.installEventFilter(_CalcTargetWatcher(win, edit, claim))
 
 
