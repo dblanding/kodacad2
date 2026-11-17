@@ -79,6 +79,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                                               QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QMenu,
                                QMessageBox, QPushButton, QSizePolicy,
+                               QRadioButton, QButtonGroup,
                                QTreeWidgetItemIterator, QVBoxLayout)
 
 from m2d import M2D
@@ -959,138 +960,6 @@ def chamferC(shapeList, *args):
         chamfer()
 
 
-def shell(event=None):
-    """Shell active part"""
-
-    if win.lineEditStack and win.faceStack:
-        text = win.lineEditStack.pop()
-        # Session 91 (Doug's own session-60 connection): shell() was
-        # operating on the NurbsConvert surrogate (cached[1]) -- the
-        # SAME multi-patch geometry that made picking cylindrical
-        # faces reliable in the first place, but MakeThickSolidByJoin
-        # chokes offsetting across the seams between converted
-        # patches on any face that's still part of the result (not
-        # necessarily the one being removed). Fixed by mapping each
-        # picked (surrogate) face back to the original, analytic face
-        # it came from, via the map draw_shape now builds, and
-        # operating on the analytic shape instead of the surrogate.
-        face_prep = win._face_prep_map.get(win.activePartUID)
-        faces = TopTools_ListOfShape()
-        if face_prep is not None:
-            analytic_shape, face_pairs, _edge_pairs = face_prep
-            workPart = analytic_shape
-            for picked_face in win.faceStack:
-                matched = _match_analytic_subshape(
-                    picked_face, analytic_shape, face_pairs, TopAbs_FACE)
-                if matched is not None:
-                    faces.Append(matched)
-                else:
-                    # Genuinely unexpected (every analytic face should
-                    # match, whether via face_pairs or the fallback
-                    # direct check) -- loud rather than silently
-                    # appending a face that doesn't belong to
-                    # workPart's own topology, which would just
-                    # recreate the original Session 79 bug.
-                    print(f"[shell] picked face has no analytic "
-                         f"counterpart at all -- skipping it rather "
-                         f"than risk a mismatch")
-        else:
-            # No face-prep map -- this part never needed the Session
-            # 60 workaround (never NurbsConverted). A prior investigation
-            # (Doug's STEP-import report) traced an apparent map-miss
-            # here to a corrupt test file, not a real gap in this
-            # branch -- confirmed and resolved.
-            cached = win._display_prep_cache.get(win.activePartUID)
-            workPart = cached[1] if cached is not None else win.activePart
-            for face in win.faceStack:
-                faces.Append(face)
-        win.faceStack = []
-        uid = win.activePartUID
-        shellT = float(text) * win.unitscale
-        mkShell = BRepOffsetAPI_MakeThickSolid()
-        mkShell.MakeThickSolidByJoin(workPart, faces, -shellT, 1.0e-3)
-        try:
-            newPart = mkShell.Shape()
-            newPart = _heal_if_invalid(newPart, "shell")
-            print(f"[shell] SUCCESS -- result ShapeType="
-                 f"{newPart.ShapeType()} (analytic mapping "
-                 f"{'used' if face_prep is not None else 'not needed'})")
-        except Exception as e:
-            # Session 79: same fix as fillet's identical guard above
-            # -- RuntimeError did not catch the real
-            # OCP.StdFail.StdFail_NotDone Doug's traceback showed.
-            print(f"Unable to make Shell shape. {e}")
-            win.clearCallback()
-            return
-        try:
-            win.erase_shape(uid)
-            ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
-            old_uids = set(dm.part_dict.keys())
-            with docmodel.undo_transaction(dm):
-                dm.replace_shape(uid, newPart)
-            _redraw_after_shape_replace(ref_entry, old_uids)
-            shell_ok = True
-        except Exception as e:
-            # Session 79, Doug: the part vanished from the viewport
-            # but stayed in the tree after a replace_shape failure --
-            # erase_shape(uid) had already run, but nothing recovered
-            # the display when the operation failed partway through.
-            # Same protective structure fillet() already has.
-            print(f"Unable to replace/draw shape. {e}")
-            win.redraw()
-            shell_ok = False
-        win.setActivePart(uid)
-        win.clearCallback()
-        # FIX (Doug: "the terminal says it's there, but it is most
-        # definitely not there"): clearCallback() itself calls
-        # statusBar().showMessage("") -- it was silently wiping this
-        # message the moment it was set, before any repaint could
-        # ever show it. The message now has to be set AFTER
-        # clearCallback runs, not before, so nothing overwrites it.
-        if shell_ok:
-            win.statusBar().showMessage("Shell operation complete")
-    elif not require_active_part("Shell"):
-        return
-    else:
-        win.registerCallback(shellC)
-        display.SetSelectionModeFace()
-        statusText = "Select face(s) to remove then specify shell thickness."
-        win.statusBar().showMessage(statusText)
-
-
-def shellC(shapeList, *args):
-    """Callback (collector) for shell -- same ownership-check pattern
-    as filletC()/chamferC(), previously missing here (flagged during
-    the UI Interaction Policy review as a live example of exactly the
-    copy-paste drift that document's "promote helper functions" goal
-    was meant to prevent)."""
-
-    win.lineEdit.setFocus()
-    uid = win.activePartUID
-    cached = win._display_prep_cache.get(uid)
-    ref_shape = cached[1] if cached is not None else win.activePart
-    ref_faces = list(Topology.Topo(ref_shape).faces()) \
-        if ref_shape is not None else []
-    for shape in shapeList:
-        try:
-            face = TopoDS.Face_s(shape)
-        except Exception:
-            win.statusBar().showMessage(
-                "Pick a face (not an edge or vertex).")
-            return
-        if not any(face.IsSame(f) for f in ref_faces):
-            win.statusBar().showMessage(
-                "Selected face(s) must be in Active Part.")
-            return
-        win.faceStack.append(face)
-    count = len(win.faceStack)
-    if count:
-        win.statusBar().showMessage(
-            f"Face {count} selected. Add more faces or enter thickness + Enter.")
-    if win.faceStack and win.lineEditStack:
-        shell()
-
-
 def _defeaturing_workpart(uid):
     """Return (workPart, ref_shape, face_pairs) for the active part --
     same analytic-mapping lookup fillet()/shell() and the old
@@ -1733,6 +1602,295 @@ def _commit_shape(uid, newPart, label=""):
         print(f"[{label}] unable to replace/draw shape: {e}")
         win.redraw()
         return False, f"Unable to replace/draw shape: {e}"
+
+
+def _shell_make(workPart, faces, offset):
+    """Hollow workPart: remove `faces` (a TopTools_ListOfShape) and
+    leave a wall of |offset| (internal units). offset < 0 grows the wall
+    INWARD (the outside stays as it was), offset > 0 OUTWARD (the
+    original surface becomes the inside of the wall). Raises on failure."""
+    mk = BRepOffsetAPI_MakeThickSolid()
+    mk.MakeThickSolidByJoin(workPart, faces, offset, 1.0e-3)
+    if not mk.IsDone():
+        raise RuntimeError("MakeThickSolidByJoin did not finish")
+    return mk.Shape()
+
+
+class ShellDialog(_FacePickMixin, QDialog):
+    """Shell dialog (Session 179, minimal style). Replaces the old
+    status-bar-driven shell() tool: pick the face(s) to remove, type a
+    thickness, choose Inward / Outward, press the check mark.
+
+    Why a dialog: the picked faces can be seen (orange), counted and
+    un-picked (Ctrl+click, Clear); the thickness is a field that takes
+    calculator values; a failed shell keeps the picks and the dialog so
+    the thickness or direction can be changed and retried (the old tool
+    ended on failure, and its message went to the terminal only).
+
+    Like Defeaturing: the check mark applies and the dialog stays open
+    (each Apply is one undo step); the cross ends the session."""
+
+    def __init__(self, main_win):
+        super().__init__(main_win)
+        self.main_win = main_win
+        self.setWindowTitle("Shell")
+        self.setModal(False)
+        self._init_face_pick()
+        self._info = dialog_style.InfoWindow(main_win, "Shell details")
+
+        lay = QVBoxLayout(self)
+        bar, self.apply_btn, self.done_btn, self.help_btn = \
+            dialog_style.icon_bar(self._on_apply, self._on_done,
+                                  self._toggle_info)
+        self.apply_btn.setToolTip("Apply (the dialog stays open)")
+        self.done_btn.setToolTip("Done -- end the shell session")
+        lay.addLayout(bar)
+
+        rows = QGridLayout()
+        rows.addWidget(dialog_style.row_label("Part"), 0, 0)
+        self.part_edit = QLineEdit()
+        self.part_edit.setReadOnly(True)
+        rows.addWidget(self.part_edit, 0, 1, 1, 2)
+        rows.addWidget(dialog_style.row_label("Faces"), 1, 0)
+        self.faces_edit = QLineEdit()
+        self.faces_edit.setReadOnly(True)
+        self.faces_edit.setToolTip("The faces to remove (open). Click or "
+                                   "box-select to add, Ctrl+click to "
+                                   "remove.")
+        rows.addWidget(self.faces_edit, 1, 1)
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setAutoDefault(False)
+        self.clear_btn.clicked.connect(self._on_clear)
+        rows.addWidget(self.clear_btn, 1, 2)
+        rows.addWidget(dialog_style.row_label("Thickness"), 2, 0)
+        # A plain line edit (like Pull / Move Face): the calculator can
+        # fill it and it can show the yellow 'needs a value' cue.
+        self.thick_edit = QLineEdit()
+        _dv = QDoubleValidator(0.0, 1.0e6, 4, self.thick_edit)
+        _dv.setNotation(QDoubleValidator.Notation.StandardNotation)
+        _dv.setLocale(QLocale.c())     # '.' as the decimal point
+        self.thick_edit.setValidator(_dv)
+        self.thick_edit.setToolTip("Wall thickness (always positive; "
+                                   "the direction is set below).")
+        self.thick_edit.textChanged.connect(self._update_status)
+        rows.addWidget(self.thick_edit, 2, 1)
+        self.units_label = QLabel(win.units)
+        rows.addWidget(self.units_label, 2, 2)
+        dialog_style.accept_calc_value(main_win, self.thick_edit)
+        rows.setColumnStretch(1, 1)
+        lay.addLayout(rows)
+
+        dirs = QHBoxLayout()
+        dirs.addWidget(dialog_style.row_label("Wall"))
+        self.in_rb = QRadioButton("Inward")
+        self.out_rb = QRadioButton("Outward")
+        self.in_rb.setChecked(True)
+        self.in_rb.setToolTip("The outside of the part stays as it is; "
+                              "the wall is cut into the inside.")
+        self.out_rb.setToolTip("The original surface becomes the inside "
+                               "of the wall; the part grows outward by "
+                               "the thickness.")
+        grp = QButtonGroup(self)
+        grp.addButton(self.in_rb)
+        grp.addButton(self.out_rb)
+        dirs.addWidget(self.in_rb)
+        dirs.addWidget(self.out_rb)
+        dirs.addStretch(1)
+        lay.addLayout(dirs)
+
+        self.status_label = QLabel()
+        self.status_label.setObjectName("KcStatus")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                        QSizePolicy.Policy.Preferred)
+        lay.addWidget(self.status_label)
+
+        dialog_style.apply_minimal(self)
+        self.setMinimumWidth(280)
+
+        self._refresh_header()
+        self._update_status()
+        self._start_picking()
+        win._history_listeners.append(self._after_history)
+
+    # -- housekeeping (same pattern as Defeaturing) ----------------
+    def _after_history(self):
+        if win.registeredCallback is None or \
+                win.registeredCallback == self._on_pick:
+            self.face_stack = []
+            self._colored_uid = None
+            self._refresh_header()
+            self._update_status()
+            self._start_picking()
+
+    def _detach_history(self):
+        try:
+            win._history_listeners.remove(self._after_history)
+        except ValueError:
+            pass
+
+    def _refresh_header(self):
+        uid = win.activePartUID
+        name = ""
+        if uid is not None and hasattr(dm, "get_full_path_name"):
+            try:
+                name = dm.get_full_path_name(uid)
+            except Exception:
+                name = str(uid)
+        leaf = dm.label_dict.get(uid, {}).get('name', name) if uid else ""
+        self.part_edit.setText(str(leaf))
+        self.part_edit.setToolTip(name)
+        self.units_label.setText(win.units)
+
+    def _toggle_info(self):
+        self._info.set_html(
+            "<h3>Shell</h3>"
+            "<p>Hollows the active part: click the face(s) to remove "
+            "(a box-select adds every face inside it; <b>Ctrl+click</b> "
+            "a picked face to remove it; Clear empties the list). Picked "
+            "faces show orange. Type the wall thickness (the calculator "
+            "can fill it), choose the wall side, and press the check "
+            "mark. The dialog stays open; each Apply is one undo "
+            "step.</p>"
+            "<p><b>Inward</b>: the outside of the part stays as it is "
+            "and the wall is cut into the inside (the part keeps its "
+            "size). <b>Outward</b>: the original surface becomes the "
+            "inside of the wall and the part grows by the thickness (a "
+            "100 mm cube with 5 mm walls becomes 110 mm outside, 100 mm "
+            "inside).</p>"
+            "<p>If the shell fails (a thick wall, an awkward corner) the "
+            "picks and values are kept: try a smaller thickness, the "
+            "other direction, or other faces. Details are in the "
+            "terminal.</p>"
+            "<p><b>Part</b> (the active part):<br>%s</p>"
+            "<p>The cross ends the shell session.</p>"
+            % (self.part_edit.toolTip() or "(none)"))
+        self._info.toggle(win)
+
+    # -- state ------------------------------------------------------
+    def _thickness(self):
+        """Typed thickness in display units (0.0 if blank/partial)."""
+        try:
+            return float(self.thick_edit.text())
+        except ValueError:
+            return 0.0
+
+    def _update_status(self, extra=""):
+        n = len(self.face_stack)
+        t_ok = self._thickness() > 1.0e-9
+        self.faces_edit.setText(f"{n} selected" if n else "")
+        dialog_style.set_awaiting(self.faces_edit, n == 0)
+        dialog_style.set_awaiting(self.thick_edit, not t_ok)
+        self.apply_btn.setEnabled(n > 0 and t_ok)
+        if extra:
+            self.status_label.setText(extra)
+        elif n == 0:
+            self.status_label.setText(
+                "Click the face(s) to remove (open).")
+        elif not t_ok:
+            self.status_label.setText("Enter the wall thickness.")
+        else:
+            self.status_label.setText("")
+
+    def _start_picking(self):
+        win.registerCallback(self._on_pick)
+        display.SetSelectionModeFace()
+
+    def _on_pick(self, shapeList, *args):
+        if not shapeList:
+            return
+        changed, err = self._pick_update(shapeList)
+        if err:
+            self._update_status(err)
+            return
+        self._update_status()
+        if changed:
+            self._schedule_preview()
+
+    def _on_clear(self):
+        self.face_stack = []
+        self._clear_preview()
+        self._update_status()
+        self._start_picking()
+
+    # -- apply --------------------------------------------------------
+    def _on_apply(self):
+        if not require_active_part("Shell"):
+            return
+        uid = win.activePartUID
+        t = self._thickness()
+        if not self.face_stack or t <= 1.0e-9:
+            self._update_status("Pick at least one face and enter a "
+                                "thickness first.")
+            return
+        workPart, _ref, face_pairs = _defeaturing_workpart(uid)
+        mapped = _defeaturing_map_picked_faces(
+            list(self.face_stack), workPart, face_pairs)
+        if not mapped:
+            self._update_status("No usable faces to apply.")
+            return
+        faces = TopTools_ListOfShape()
+        for f in mapped:
+            faces.Append(f)
+        offset = t * win.unitscale
+        if self.in_rb.isChecked():
+            offset = -offset
+        try:
+            newPart = _shell_make(workPart, faces, offset)
+            newPart = _heal_if_invalid(newPart, "shell")
+        except Exception as e:
+            # keep the picks, the values and the dialog: change the
+            # thickness or direction and retry
+            print(f"[shell] failed: {e}")
+            self._update_status("Could not make the shell -- try a "
+                                "smaller thickness, the other direction "
+                                "or other faces.")
+            return
+        print(f"[shell] SUCCESS -- result ShapeType={newPart.ShapeType()}"
+              f" ({len(mapped)} face(s) removed, "
+              f"{'inward' if offset < 0 else 'outward'} "
+              f"{t:g} {win.units})")
+
+        self.face_stack = []
+        self._clear_preview(redraw=False)   # colors belong to the old shape
+        ok, msg = _commit_shape(uid, newPart, "shell")
+        self._refresh_header()
+        self._update_status("Shell applied." if ok else msg)
+        self._start_picking()
+
+    def _on_done(self):
+        self._detach_history()
+        self._clear_preview()
+        win.clearCallback()
+        self.close()
+
+    def closeEvent(self, event):
+        self._detach_history()
+        if self._colored_uid is not None:
+            try:
+                self._clear_preview()
+            except Exception:
+                pass
+        win.clearCallback()
+        try:
+            self._info.hide()
+            self._info.deleteLater()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+
+def show_shell_dialog(main_win):
+    if not require_active_part("Shell"):
+        return
+    dlg = getattr(main_win, "_shell_dialog", None)
+    if dlg is None or not dlg.isVisible():
+        dlg = ShellDialog(main_win)
+        main_win._shell_dialog = dlg
+        dlg.show()
+        dialog_style.place_top_left(dlg, main_win)
+    else:
+        dlg.raise_()
+        dlg.activateWindow()
 
 
 class MoveFaceDialog(_FacePickMixin, QDialog):
@@ -3739,7 +3897,8 @@ if __name__ == "__main__":
         "Create/Modify", "Pull", lambda: show_pull_dialog(win))
     win.add_function_to_menu("Create/Modify", "Fillet", fillet)
     win.add_function_to_menu("Create/Modify", "Chamfer", chamfer)
-    win.add_function_to_menu("Create/Modify", "Shell", shell)
+    win.add_function_to_menu(
+        "Create/Modify", "Shell...", lambda: show_shell_dialog(win))
     win.add_function_to_menu("Create/Modify", "Loft", loftWpSet)
     from boolean_dialog import show_boolean_dialog
     win.add_function_to_menu(
