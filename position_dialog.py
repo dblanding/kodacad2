@@ -147,6 +147,7 @@ class PositionDialog(QDialog):
         # Cleared when Dynamic is (re)started: that returns the gizmo
         # to its default placement.
         self._frame = None
+        self._frame_name = ""    # display name of the workplane it came from
 
         self.setWindowTitle("Position")
         self._build_ui()
@@ -194,6 +195,46 @@ class PositionDialog(QDialog):
         # docs/DEVELOPMENT_LOG.md, Session 23).
         self._nudge_box = QGroupBox("Nudge (after a drag)")
         nudge_layout = QVBoxLayout(self._nudge_box)
+        # FRAME row (Session 179, Doug: promote the workplane method
+        # from a buried button to a deliberate, visible choice).
+        # World = the gizmo at its default place with world X/Y/Z;
+        # Active Workplane = the gizmo on the workplane's origin and
+        # U/V/W, where it STAYS after each move (see _frame). It is
+        # the first of the 'axis sources' the 3D arrays will reuse.
+        frame_row = QHBoxLayout()
+        frame_row.addWidget(QLabel("Frame:"))
+        # Two radio buttons, not a combo box: in this (unstyled) dialog
+        # the combo's text did not draw until the window lost focus
+        # (Doug, Nov 17); radio buttons are what the Methods box above
+        # already uses and they draw fine.
+        self._frame_world_rb = QRadioButton("World")
+        self._frame_wp_rb = QRadioButton("Active Workplane")
+        self._frame_world_rb.setChecked(True)
+        self._frame_group = QButtonGroup(self)
+        self._frame_group.addButton(self._frame_world_rb)
+        self._frame_group.addButton(self._frame_wp_rb)
+        self._frame_world_rb.setToolTip(
+            "The gizmo's default place, axes X/Y/Z.")
+        self._frame_wp_rb.setToolTip(
+            "The gizmo sits on the active workplane's origin with its "
+            "own U/V/W as the axes, so a Nudge rotation turns about the "
+            "workplane's axis and typed distances run along U/V/W. It "
+            "stays there after each move.\n"
+            "Click it again to pick up a different active workplane.")
+        # clicked (not toggled): re-clicking the checked button must
+        # re-read the CURRENT active workplane
+        self._frame_world_rb.clicked.connect(self._on_frame_chosen)
+        self._frame_wp_rb.clicked.connect(self._on_frame_chosen)
+        frame_row.addWidget(self._frame_world_rb)
+        frame_row.addWidget(self._frame_wp_rb)
+        self._frame_wp_label = QLabel("")
+        bold_f = QFont()
+        bold_f.setBold(True)
+        self._frame_wp_label.setFont(bold_f)
+        frame_row.addWidget(self._frame_wp_label)
+        frame_row.addStretch(1)
+        nudge_layout.addLayout(frame_row)
+
         trans_row = QHBoxLayout()
         self._nudge_dx = QLineEdit("0")
         self._nudge_dy = QLineEdit("0")
@@ -206,22 +247,6 @@ class PositionDialog(QDialog):
             field.setMaximumWidth(80)
             trans_row.addWidget(field)
         nudge_layout.addLayout(trans_row)
-        # Session 76, Doug: rotate about a remote axis (e.g. the
-        # active workplane's own W, tilted relative to world) by
-        # first moving the gizmo's pivot AND orientation there, then
-        # nudging a rotation. Placed here, between translate and
-        # rotate fields, matching the natural workflow order: align
-        # the pivot/axes first, THEN type the rotation.
-        self._align_wp_btn = QPushButton("Align Gizmo to Active Workplane")
-        self._align_wp_btn.setToolTip(
-            "Move the manipulator's pivot to the active workplane's "
-            "origin, with its rotation axes matching the workplane's "
-            "own U/V/W -- so a Nudge rotation turns about the "
-            "workplane's axis, not always world X/Y/Z. The gizmo STAYS "
-            "there after each move (and the Nudge fields then work "
-            "along the workplane's U/V/W) until you click Dynamic "
-            "again, which returns it to its default place.")
-        nudge_layout.addWidget(self._align_wp_btn)
         # Rotation nudges (degrees, about the manipulator's OWN
         # current X/Y/Z -- world X/Y/Z by default, or the active
         # workplane's U/V/W after using the button above; see
@@ -284,7 +309,6 @@ class PositionDialog(QDialog):
         self._two_points_btn.clicked.connect(self._start_two_points_picking)
         self._dynamic_btn.clicked.connect(self._start_dynamic_mode)
         self._nudge_apply_btn.clicked.connect(self._apply_nudge)
-        self._align_wp_btn.clicked.connect(self._align_manipulator_to_wp)
         self._mate_btn.clicked.connect(lambda: self._on_constraint_chosen("mate"))
         self._align_btn.clicked.connect(lambda: self._on_constraint_chosen("align"))
         self._align_axis_btn.clicked.connect(lambda: self._on_constraint_chosen("axis"))
@@ -694,7 +718,14 @@ class PositionDialog(QDialog):
         self.main_win.clearCallback()
         self._reset_mate_align_dof()
         self._picking_for = "dynamic"
-        self._frame = None            # (re)starting Dynamic = default gizmo
+        # (re)starting Dynamic applies the Frame row's choice: World =
+        # default gizmo; Active Workplane = a fresh snapshot of the
+        # CURRENT active workplane (re-attached below).
+        self._frame = None
+        if self._frame_wp_rb.isChecked():
+            self._frame = self._read_active_wp_frame()
+            if self._frame is None:
+                self._frame_world_rb.setChecked(True)
         self._set_nudge_labels()
         if self._reattach_manipulator():
             self._nudge_box.setVisible(True)
@@ -704,47 +735,66 @@ class PositionDialog(QDialog):
             self.main_win.statusBar().showMessage(
                 "Could not attach manipulator -- see console.", 5000)
 
-    def _align_manipulator_to_wp(self):
-        """Move the attached manipulator's pivot and orientation to
-        the active workplane's own origin/U/V/W (Session 76, Doug:
-        rotate an assembly about a remote, possibly-tilted axis by
-        aligning the gizmo to a workplane first, then Nudging)."""
-        if self.main_win.canvas.manipulator_position() is None:
-            self.main_win.statusBar().showMessage(
-                "No manipulator attached -- start Dynamic mode "
-                "first (drag the gizmo once, or just select Dynamic).",
-                5000)
-            return
+    def _read_active_wp_frame(self):
+        """(origin_xyz, w_xyz, u_xyz) of the active workplane, or None
+        (with a status-bar message) if there is none / it can't be
+        read."""
         wp = self.main_win.activeWp
         if wp is None:
             self.main_win.statusBar().showMessage(
                 "No active workplane -- select or create one first.",
                 5000)
-            return
+            return None
+        try:
+            uid = getattr(self.main_win, "activeWpUID", 0)
+            self._frame_name = (self.main_win._wp_display_name(uid)
+                                if uid else "")
+        except Exception:
+            self._frame_name = ""
         try:
             ax3 = wp.gpPlane.Position()
             loc = ax3.Location()
             w_dir = ax3.Direction()
             u_dir = ax3.XDirection()
-            origin_xyz = (loc.X(), loc.Y(), loc.Z())
-            w_xyz = (w_dir.X(), w_dir.Y(), w_dir.Z())
-            u_xyz = (u_dir.X(), u_dir.Y(), u_dir.Z())
+            return ((loc.X(), loc.Y(), loc.Z()),
+                    (w_dir.X(), w_dir.Y(), w_dir.Z()),
+                    (u_dir.X(), u_dir.Y(), u_dir.Z()))
         except Exception as e:
             self.main_win.statusBar().showMessage(
                 f"Could not read the workplane's frame ({e}).", 5000)
+            return None
+
+    def _on_frame_chosen(self, _index=0):
+        """The user clicked an entry in the Frame row (Session 76's
+        'Align Gizmo to Active Workplane' button, promoted)."""
+        if self.main_win.canvas.manipulator_position() is None:
+            self.main_win.statusBar().showMessage(
+                "No manipulator attached -- select Dynamic first.", 5000)
             return
-        ok = self.main_win.canvas.reposition_manipulator(
-            origin_xyz, w_xyz, u_xyz)
-        if ok:
-            self._frame = (origin_xyz, w_xyz, u_xyz)   # sticky
+        if self._frame_wp_rb.isChecked():
+            fr = self._read_active_wp_frame()
+            if fr is None:
+                self._frame_world_rb.setChecked(True)
+                self._frame = None
+                self._set_nudge_labels()
+                return
+            if self.main_win.canvas.reposition_manipulator(*fr):
+                self._frame = fr               # sticky snapshot
+                self._set_nudge_labels()
+                self.main_win.statusBar().showMessage(
+                    "Gizmo placed on the active workplane and it stays "
+                    "there -- rW (the 3rd rotation) turns about the "
+                    "workplane's own normal. Choose World to release "
+                    "it.", 6000)
+            else:
+                self.main_win.statusBar().showMessage(
+                    "Could not align the gizmo -- see console.", 5000)
+        else:
+            self._frame = None
+            self._reattach_manipulator()       # default place again
             self._set_nudge_labels()
             self.main_win.statusBar().showMessage(
-                "Gizmo aligned to the active workplane and it stays "
-                "there -- rW (the 3rd rotation) turns about the "
-                "workplane's own normal. Click Dynamic to reset.", 6000)
-        else:
-            self.main_win.statusBar().showMessage(
-                "Could not align the gizmo -- see console.", 5000)
+                "Gizmo back at its default place (World axes).", 5000)
 
     def _reattach_manipulator(self):
         """(Re)attach the manipulator to every leaf part under self.uid.
@@ -780,6 +830,12 @@ class PositionDialog(QDialog):
             lab.setText(txt)
         for lab, txt in zip(self._rot_labels, r):
             lab.setText(txt)
+        if self._frame is not None:
+            # the name of the workplane the frame was TAKEN from (the
+            # active workplane may have changed since)
+            self._frame_wp_label.setText(self._frame_name)
+        else:
+            self._frame_wp_label.setText("")
 
     def _on_manip_move(self, delta_trsf):
         """Live status update during a drag. Translation distance only
