@@ -137,6 +137,17 @@ class PositionDialog(QDialog):
         self._step2_wall_normal = None
         self._align_axis_pivot = None
 
+        # Sticky gizmo frame (Session 179, Doug: after each nudge the
+        # gizmo jumped back to its default place, losing 'Align Gizmo
+        # to Active Workplane'). When set, it is
+        # (origin_xyz, w_dir_xyz, u_dir_xyz), a SNAPSHOT of the
+        # workplane's frame taken when the user aligned; every
+        # re-attach of the manipulator re-applies it, so repeated
+        # rotations about the same workplane axis need no re-aligning.
+        # Cleared when Dynamic is (re)started: that returns the gizmo
+        # to its default placement.
+        self._frame = None
+
         self.setWindowTitle("Position")
         self._build_ui()
 
@@ -187,8 +198,11 @@ class PositionDialog(QDialog):
         self._nudge_dx = QLineEdit("0")
         self._nudge_dy = QLineEdit("0")
         self._nudge_dz = QLineEdit("0")
+        self._trans_labels = []
         for label, field in (("dX", self._nudge_dx), ("dY", self._nudge_dy), ("dZ", self._nudge_dz)):
-            trans_row.addWidget(QLabel(label))
+            _lab = QLabel(label)
+            self._trans_labels.append(_lab)
+            trans_row.addWidget(_lab)
             field.setMaximumWidth(80)
             trans_row.addWidget(field)
         nudge_layout.addLayout(trans_row)
@@ -203,7 +217,10 @@ class PositionDialog(QDialog):
             "Move the manipulator's pivot to the active workplane's "
             "origin, with its rotation axes matching the workplane's "
             "own U/V/W -- so a Nudge rotation turns about the "
-            "workplane's axis, not always world X/Y/Z.")
+            "workplane's axis, not always world X/Y/Z. The gizmo STAYS "
+            "there after each move (and the Nudge fields then work "
+            "along the workplane's U/V/W) until you click Dynamic "
+            "again, which returns it to its default place.")
         nudge_layout.addWidget(self._align_wp_btn)
         # Rotation nudges (degrees, about the manipulator's OWN
         # current X/Y/Z -- world X/Y/Z by default, or the active
@@ -216,8 +233,11 @@ class PositionDialog(QDialog):
         self._nudge_rx = QLineEdit("0")
         self._nudge_ry = QLineEdit("0")
         self._nudge_rz = QLineEdit("0")
+        self._rot_labels = []
         for label, field in (("rX\u00b0", self._nudge_rx), ("rY\u00b0", self._nudge_ry), ("rZ\u00b0", self._nudge_rz)):
-            rot_row.addWidget(QLabel(label))
+            _lab = QLabel(label)
+            self._rot_labels.append(_lab)
+            rot_row.addWidget(_lab)
             field.setMaximumWidth(80)
             rot_row.addWidget(field)
         nudge_layout.addLayout(rot_row)
@@ -674,6 +694,8 @@ class PositionDialog(QDialog):
         self.main_win.clearCallback()
         self._reset_mate_align_dof()
         self._picking_for = "dynamic"
+        self._frame = None            # (re)starting Dynamic = default gizmo
+        self._set_nudge_labels()
         if self._reattach_manipulator():
             self._nudge_box.setVisible(True)
             self.main_win.statusBar().showMessage(
@@ -714,9 +736,12 @@ class PositionDialog(QDialog):
         ok = self.main_win.canvas.reposition_manipulator(
             origin_xyz, w_xyz, u_xyz)
         if ok:
+            self._frame = (origin_xyz, w_xyz, u_xyz)   # sticky
+            self._set_nudge_labels()
             self.main_win.statusBar().showMessage(
-                "Gizmo aligned to the active workplane -- rZ now "
-                "rotates about the workplane's own normal (W).", 5000)
+                "Gizmo aligned to the active workplane and it stays "
+                "there -- rW (the 3rd rotation) turns about the "
+                "workplane's own normal. Click Dynamic to reset.", 6000)
         else:
             self.main_win.statusBar().showMessage(
                 "Could not align the gizmo -- see console.", 5000)
@@ -735,9 +760,26 @@ class PositionDialog(QDialog):
                        if u in self.main_win.ais_shape_dict]
         if not leaf_shapes:
             return False
-        return self.main_win.canvas.attach_manipulator(
+        ok = self.main_win.canvas.attach_manipulator(
             leaf_shapes, move_callback=self._on_manip_move,
             done_callback=self._on_manip_done)
+        if ok and self._frame is not None:
+            # sticky frame: put the gizmo back on the workplane
+            if not self.main_win.canvas.reposition_manipulator(*self._frame):
+                print("[position] could not re-apply the sticky frame")
+        return ok
+
+    def _set_nudge_labels(self):
+        """Nudge fields are in world X/Y/Z, or in the sticky frame's
+        U/V/W once the gizmo has been aligned to a workplane."""
+        if self._frame is not None:
+            t, r = ("dU", "dV", "dW"), ("rU\u00b0", "rV\u00b0", "rW\u00b0")
+        else:
+            t, r = ("dX", "dY", "dZ"), ("rX\u00b0", "rY\u00b0", "rZ\u00b0")
+        for lab, txt in zip(self._trans_labels, t):
+            lab.setText(txt)
+        for lab, txt in zip(self._rot_labels, r):
+            lab.setText(txt)
 
     def _on_manip_move(self, delta_trsf):
         """Live status update during a drag. Translation distance only
@@ -873,7 +915,15 @@ class PositionDialog(QDialog):
             combined = t.Multiplied(combined)
         if dx or dy or dz:
             t = gp_Trsf()
-            t.SetTranslation(gp_Vec(dx, dy, dz))
+            if self._frame is not None and axes is not None:
+                # sticky frame: dU/dV/dW run along the gizmo's own axes
+                vec = gp_Vec(
+                    dx * x_xyz[0] + dy * y_xyz[0] + dz * z_xyz[0],
+                    dx * x_xyz[1] + dy * y_xyz[1] + dz * z_xyz[1],
+                    dx * x_xyz[2] + dy * y_xyz[2] + dz * z_xyz[2])
+            else:
+                vec = gp_Vec(dx, dy, dz)    # world axes, as before
+            t.SetTranslation(vec)
             combined = t.Multiplied(combined)
 
         move = TopLoc_Location(combined)
