@@ -3784,9 +3784,9 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "set Units ->ft", setUnits_ft)
     win.add_function_to_menu("Utility", "set Units ->m", setUnits_m)
 
-    drawSubMenu = QMenu("Draw")
-    win.popMenu.addMenu(drawSubMenu)
-    drawSubMenu.addAction("Fit", win.fitAll)
+    # Session 179 (Doug): the View Cube now covers the view directions,
+    # so the RMB menu entry is just 'Fit' (no 'Draw' submenu).
+    win.popMenu.addAction("Fit", win.fitAll)
 
     win.show()
     win.canvas.InitDriver()

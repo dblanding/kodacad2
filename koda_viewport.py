@@ -399,6 +399,14 @@ class KodaViewport(QWidget):
             vc.SetAxesPadding(5)
             vc.SetFontHeight(12)
             vc.SetDrawAxes(True)
+            # Session 179 (Doug): a cube click should only turn the
+            # view, not also fit everything. AIS_ViewCube's automatic
+            # click animation always fits (SetFitSelected only picks
+            # 'selection' vs 'whole scene'), so the automatic move is
+            # switched off and _view_cube_click() sets the direction
+            # itself, leaving scale and center alone. An RMB click
+            # still does Fit All.
+            vc.SetAutoStartAnimation(False)
 
             # RGB axes: X=red, Y=green, Z=blue, matching CAD Assistant.
             # DatumAspect() returns null on a freshly-constructed
@@ -936,6 +944,36 @@ class KodaViewport(QWidget):
         self._vc.UpdateMousePosition(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
 
+    def _detected_cube_owner(self):
+        """The AIS_ViewCube part under the cursor, or None."""
+        if self._view_cube is None:
+            return None
+        try:
+            if not self.context.HasDetected():
+                return None
+            owner = self.context.DetectedOwner()
+            if owner is not None and callable(
+                    getattr(owner, "MainOrientation", None)):
+                return owner
+        except Exception:
+            pass
+        return None
+
+    def _view_cube_click(self, owner):
+        """Show the view from the clicked cube side / edge / corner:
+        direction only, no fit (see _add_view_cube). If that fails,
+        hand the click back to the cube's own animation for next time."""
+        try:
+            self.view.SetProj(owner.MainOrientation())
+            self.view.Redraw()
+        except Exception as e:
+            print(f"[viewcube] manual orientation failed ({e}); "
+                  f"restoring the cube's own animation")
+            try:
+                self._view_cube.SetAutoStartAnimation(True)
+            except Exception:
+                pass
+
     def mouseReleaseEvent(self, event):
         if (event.button() == Qt.MouseButton.LeftButton
                 and self._manip_dragging and self._manipulator is not None):
@@ -969,11 +1007,18 @@ class KodaViewport(QWidget):
             return  # suppress the normal LMB click/selection handling
 
         pt = self._vec2i(event.position())
+        # read what is under the cursor BEFORE the release is handed to
+        # the view controller (which may change the detection state)
+        cube_owner = (self._detected_cube_owner()
+                      if event.button() == Qt.MouseButton.LeftButton
+                      else None)
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
         if event.button() == Qt.MouseButton.LeftButton:
             if self._press_pos is not None:
                 if self._drag_distance < self._drag_threshold:
+                    if cube_owner is not None:
+                        self._view_cube_click(cube_owner)
                     self._on_click(event.position().x(), event.position().y())
                 else:
                     # LMB is bound to SelectRectangle only (Session

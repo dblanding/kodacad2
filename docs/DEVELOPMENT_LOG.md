@@ -7550,3 +7550,11 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 ### Position: old layout removed
 - Stage C passed Doug's tests (Nov 17), so the old layout is gone: `_build_ui_old`, the Nudge group box, the `_nudge_visible` shim, the `KODACAD_OLD_POSITION_UI` switch and the `QGroupBox` import. `_build_ui` is now the stacked-page layout directly; the module docstring describes it. Positioning logic untouched.
 - Untested with real Qt (offline smoke test only).
+
+### View Cube: turn the view only (no Fit All); RMB menu 'Fit'
+- Doug: a cube click should show the view from that direction and nothing more (an RMB click already does Fit All), and the RMB menu entry should be 'Fit', not 'Draw > Fit'.
+- Cause: `AIS_ViewCube`'s automatic click animation ends in `viewFitAll()` (a protected virtual). `SetFitSelected(False/True)` only chooses 'whole scene' vs 'selection', it cannot turn the fit off.
+- Change (`koda_viewport.py`): `vc.SetAutoStartAnimation(False)` (documented as 'the application can act manually based on picking results'). `mouseReleaseEvent` reads the detected owner under the cursor BEFORE the release goes to the view controller (`_detected_cube_owner()`: the detected owner that has `MainOrientation()`), and on a click (not a drag) `_view_cube_click()` does `view.SetProj(owner.MainOrientation())` + `Redraw()`. SetProj changes the direction only; scale and center are untouched. Z is up for the new direction. If anything fails, it prints a message and switches the cube's own animation back on.
+- Side effects: the 0.5 s animated swing is gone (the view turns at once), and sides, edges and corners all go through `MainOrientation()`.
+- `kodacad.py`: the 'Draw' submenu is gone; `popMenu.addAction("Fit", win.fitAll)`.
+- Untested (needs Qt/OCP). Assumptions to verify: the detected owner is still available at mouse release; `MainOrientation()` is exposed in OCP; clicking the cube no longer leaves it highlighted or selected.
