@@ -4,20 +4,19 @@ position_dialog.py
 THE POSITION DIALOG -- layout follows Doug's design PDF
 ("Position function for Kodacad2"):
 
-  TOP section:     full breadcrumb path (root down to the item) in
-                    bold, read-only -- a bare name doesn't disambiguate
-                    which instance is meant when the same part/
-                    assembly appears more than once in the tree
-                    (shared instances) -- see Session 16.
-  METHODS section: Dynamic (AIS_Manipulator drag + numeric Nudge
-                    refinement -- see Session 23), Mate Align, 2 Points.
-  CONSTRAINTS section: Mate, Align, Align Axis (disabled -- needs its
-                    own axis-picking machinery, not built yet).
-  BOTTOM section:   Reverse / Back side by side, Done below. Status
-                    messages go to the main window's status bar (not
-                    printed in the dialog), per Doug's explicit note
-                    that Basicad's dialog "often has to be resized...
-                    let's put it on a diet."
+  Object row:      full breadcrumb path, read-only -- a bare name doesn't
+                    disambiguate which instance is meant when the same
+                    part/assembly appears more than once (shared
+                    instances -- see Session 16).
+  METHODS:         Dynamic, Mate Align, 2 Points (radios); below them a
+                    stacked page per method (Session 179, minimal style):
+                    Dynamic = Frame + Nudge fields + Apply/Re-Apply (see
+                    Session 23 for the numeric Nudge); Mate Align =
+                    Mate / Align / Align Axis + Reverse; 2 Points = hint.
+  ALWAYS:          check / cross / ? bar on top, Back at the bottom.
+                    Status messages go to the main window's status bar,
+                    per Doug's note that Basicad's dialog "often has to
+                    be resized... let's put it on a diet."
 
 THIS ROUND: the full 3-2-1 Mate/Align workflow (Step 1: rotate about
 the intersection line of two picked face planes; Step 2: rotate within
@@ -55,7 +54,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QButtonGroup,
     QRadioButton,
-    QGroupBox,
     QLineEdit,
     QGridLayout,
     QStackedWidget,
@@ -156,7 +154,6 @@ class PositionDialog(QDialog):
 
         # Stage C (minimal layout) state: the stacked method pages, the
         # '?' window, the Re-Apply button and the last nudge's values.
-        # None in the old layout (KODACAD_OLD_POSITION_UI=1).
         self._stack = None
         self._info = None
         self._reapply_btn = None
@@ -168,13 +165,6 @@ class PositionDialog(QDialog):
     # -----------------------------------------------------------------
     # UI
     # -----------------------------------------------------------------
-
-    def _build_ui(self):
-        import os
-        if os.environ.get("KODACAD_OLD_POSITION_UI"):
-            self._build_ui_old()
-        else:
-            self._build_ui_minimal()
 
     # -- stage C: minimal layout ---------------------------------------
     # One fixed-size dialog. The three Methods are radios; the section
@@ -188,7 +178,7 @@ class PositionDialog(QDialog):
 
     _PAGE_DYNAMIC, _PAGE_MATE, _PAGE_TWO_POINTS, _PAGE_NONE = 0, 1, 2, 3
 
-    def _build_ui_minimal(self):
+    def _build_ui(self):
         lay = QVBoxLayout(self)
         self._info = dialog_style.InfoWindow(self.main_win,
                                              "Position details")
@@ -398,22 +388,13 @@ class PositionDialog(QDialog):
         return self._hint_page("Pick point 1, then point 2.")
 
     def _show_page(self, idx):
-        """Select the method page (and keep the Methods radios in step).
-        No-op in the old layout."""
-        if self._stack is None:
-            return
+        """Select the method page (and keep the Methods radios in step)."""
         self._stack.setCurrentIndex(idx)
         if idx < 3:
             btn = (self._dynamic_btn, self._mate_align_btn,
                    self._two_points_btn)[idx]
             if not btn.isChecked():
                 btn.setChecked(True)
-
-    def _nudge_visible(self, on):
-        """Old layout only: the Nudge group box is shown/hidden by hand.
-        In the stacked layout the method's page owns this."""
-        if self._stack is None:
-            self._nudge_box.setVisible(on)
 
     def _on_mate_align_method(self):
         """The 'Mate Align' method radio itself (the constraint radios
@@ -490,168 +471,6 @@ class PositionDialog(QDialog):
             "<b>✔</b> finishes; <b>✖</b> closes (like the window's X) "
             "and keeps the moves already made; Ctrl+Z afterwards undoes "
             "the whole placement.</p>")
-
-    def _build_ui_old(self):
-        layout = QVBoxLayout(self)
-
-        # TOP: full breadcrumb path of item being moved (read-only).
-        # Bare name alone doesn't disambiguate WHICH instance is meant
-        # when the same part/assembly appears more than once in the
-        # tree (shared instances) -- see Session 16.
-        name_label = QLabel(self.dm.get_full_path_name(self.uid))
-        bold = QFont()
-        bold.setBold(True)
-        name_label.setFont(bold)
-        name_label.setWordWrap(True)
-        self._name_label = name_label
-        layout.addWidget(QLabel("Moving part / assembly:"))
-        layout.addWidget(name_label)
-
-        # METHODS
-        methods_box = QGroupBox("Methods")
-        methods_layout = QVBoxLayout(methods_box)
-        self._method_group = QButtonGroup(self)
-        self._dynamic_btn = QRadioButton("Dynamic")
-        self._dynamic_btn.setToolTip(
-            "Drag the gizmo's arrows to translate or rings to rotate. "
-            "After releasing, use Nudge below for an exact adjustment.")
-        self._mate_align_btn = QRadioButton("Mate Align")
-        self._two_points_btn = QRadioButton("2 Points")
-        for i, btn in enumerate([self._dynamic_btn, self._mate_align_btn, self._two_points_btn]):
-            self._method_group.addButton(btn, i)
-            methods_layout.addWidget(btn)
-        layout.addWidget(methods_box)
-
-        # NUDGE -- shown only while using Dynamic. A drag with
-        # AIS_Manipulator is inherently mouse-driven, not exact; this
-        # gives a way to refine the result with a typed value
-        # afterward, rather than needing a Creo-style floating input
-        # box mid-drag (real, but a much bigger UI undertaking -- see
-        # docs/DEVELOPMENT_LOG.md, Session 23).
-        self._nudge_box = QGroupBox("Nudge (after a drag)")
-        nudge_layout = QVBoxLayout(self._nudge_box)
-        # FRAME row (Session 179, Doug: promote the workplane method
-        # from a buried button to a deliberate, visible choice).
-        # World = the gizmo at its default place with world X/Y/Z;
-        # Active Workplane = the gizmo on the workplane's origin and
-        # U/V/W, where it STAYS after each move (see _frame). It is
-        # the first of the 'axis sources' the 3D arrays will reuse.
-        frame_row = QHBoxLayout()
-        frame_row.addWidget(QLabel("Frame:"))
-        # Two radio buttons, not a combo box: in this (unstyled) dialog
-        # the combo's text did not draw until the window lost focus
-        # (Doug, Nov 17); radio buttons are what the Methods box above
-        # already uses and they draw fine.
-        self._frame_world_rb = QRadioButton("World")
-        self._frame_wp_rb = QRadioButton("Active Workplane")
-        self._frame_world_rb.setChecked(True)
-        self._frame_group = QButtonGroup(self)
-        self._frame_group.addButton(self._frame_world_rb)
-        self._frame_group.addButton(self._frame_wp_rb)
-        self._frame_world_rb.setToolTip(
-            "The gizmo's default place, axes X/Y/Z.")
-        self._frame_wp_rb.setToolTip(
-            "The gizmo sits on the active workplane's origin with its "
-            "own U/V/W as the axes, so a Nudge rotation turns about the "
-            "workplane's axis and typed distances run along U/V/W. It "
-            "stays there after each move.\n"
-            "Click it again to pick up a different active workplane.")
-        # clicked (not toggled): re-clicking the checked button must
-        # re-read the CURRENT active workplane
-        self._frame_world_rb.clicked.connect(self._on_frame_chosen)
-        self._frame_wp_rb.clicked.connect(self._on_frame_chosen)
-        frame_row.addWidget(self._frame_world_rb)
-        frame_row.addWidget(self._frame_wp_rb)
-        self._frame_wp_label = QLabel("")
-        bold_f = QFont()
-        bold_f.setBold(True)
-        self._frame_wp_label.setFont(bold_f)
-        frame_row.addWidget(self._frame_wp_label)
-        frame_row.addStretch(1)
-        nudge_layout.addLayout(frame_row)
-
-        trans_row = QHBoxLayout()
-        self._nudge_dx = QLineEdit("0")
-        self._nudge_dy = QLineEdit("0")
-        self._nudge_dz = QLineEdit("0")
-        self._trans_labels = []
-        for label, field in (("dX", self._nudge_dx), ("dY", self._nudge_dy), ("dZ", self._nudge_dz)):
-            _lab = QLabel(label)
-            self._trans_labels.append(_lab)
-            trans_row.addWidget(_lab)
-            field.setMaximumWidth(80)
-            trans_row.addWidget(field)
-        nudge_layout.addLayout(trans_row)
-        # Rotation nudges (degrees, about the manipulator's OWN
-        # current X/Y/Z -- world X/Y/Z by default, or the active
-        # workplane's U/V/W after using the button above; see
-        # _apply_nudge) -- pivot about the part's CURRENT world
-        # position (see _apply_nudge), not the global origin, so a
-        # small angle can't swing a part that's far from (0,0,0)
-        # wildly across the scene.
-        rot_row = QHBoxLayout()
-        self._nudge_rx = QLineEdit("0")
-        self._nudge_ry = QLineEdit("0")
-        self._nudge_rz = QLineEdit("0")
-        self._rot_labels = []
-        for label, field in (("rX\u00b0", self._nudge_rx), ("rY\u00b0", self._nudge_ry), ("rZ\u00b0", self._nudge_rz)):
-            _lab = QLabel(label)
-            self._rot_labels.append(_lab)
-            rot_row.addWidget(_lab)
-            field.setMaximumWidth(80)
-            rot_row.addWidget(field)
-        nudge_layout.addLayout(rot_row)
-        self._nudge_apply_btn = QPushButton("Apply Nudge")
-        nudge_layout.addWidget(self._nudge_apply_btn)
-        self._nudge_box.setVisible(False)
-        layout.addWidget(self._nudge_box)
-
-        # CONSTRAINTS (only meaningful for Mate Align)
-        constraints_box = QGroupBox("Constraints")
-        constraints_layout = QVBoxLayout(constraints_box)
-        self._constraint_group = QButtonGroup(self)
-        self._mate_btn = QRadioButton("Mate")
-        self._align_btn = QRadioButton("Align")
-        self._align_axis_btn = QRadioButton("Align Axis")
-        self._align_axis_btn.setToolTip(
-            "Used as Step 2, after mating/aligning a face first: pick "
-            "a hole on the moving part, then a hole on the fixed part. "
-            "Pins the two hole/face intersection points together, "
-            "leaving only rotation for a final Align.")
-        for i, btn in enumerate([self._mate_btn, self._align_btn, self._align_axis_btn]):
-            self._constraint_group.addButton(btn, i)
-            constraints_layout.addWidget(btn)
-        layout.addWidget(constraints_box)
-
-        # BOTTOM: Reverse / Back, then Done
-        btn_row = QHBoxLayout()
-        self._reverse_btn = QPushButton("Reverse")
-        self._back_btn = QPushButton("Back")
-        btn_row.addWidget(self._reverse_btn)
-        btn_row.addWidget(self._back_btn)
-        layout.addLayout(btn_row)
-        self._done_btn = QPushButton("\u2705 Done")
-        layout.addWidget(self._done_btn)
-
-        # Wiring
-        # IMPORTANT: use clicked, not toggled, for anything that should
-        # start a NEW pick sequence. Qt's toggled signal only fires on
-        # an actual state change -- clicking an already-selected radio
-        # button again is a no-op as far as toggled is concerned, which
-        # silently breaks "apply a second Mate in a row" (clicking Mate
-        # again while Mate is already selected would do nothing). clicked
-        # fires on every user click regardless of prior state.
-        self._two_points_btn.clicked.connect(self._start_two_points_picking)
-        self._dynamic_btn.clicked.connect(self._start_dynamic_mode)
-        self._nudge_apply_btn.clicked.connect(self._apply_nudge)
-        self._mate_btn.clicked.connect(lambda: self._on_constraint_chosen("mate"))
-        self._align_btn.clicked.connect(lambda: self._on_constraint_chosen("align"))
-        self._align_axis_btn.clicked.connect(lambda: self._on_constraint_chosen("axis"))
-        self._reverse_btn.clicked.connect(self._on_reverse)
-        self._back_btn.clicked.connect(self._on_back)
-        self._done_btn.clicked.connect(self._on_done)
-
-        self._update_ui_state()
 
     def _update_ui_state(self):
         self._back_btn.setEnabled(len(self._history) > 0)
@@ -734,7 +553,6 @@ class PositionDialog(QDialog):
 
     def _start_face_picking(self):
         self.main_win.canvas.detach_manipulator()
-        self._nudge_visible(False)
         self._picking_for = "mate_align"
         self._picking_kind = "face"
         self._pick1 = None
@@ -827,7 +645,6 @@ class PositionDialog(QDialog):
 
     def _start_axis_pin_picking(self):
         self.main_win.canvas.detach_manipulator()
-        self._nudge_visible(False)
         self._picking_for = "mate_align"
         self._picking_kind = "circle"
         self._pick1 = None
@@ -896,7 +713,6 @@ class PositionDialog(QDialog):
 
     def _start_axis_face_picking(self):
         self.main_win.canvas.detach_manipulator()
-        self._nudge_visible(False)
         self._picking_for = "mate_align"
         self._picking_kind = "cylinder"
         self._pick1 = None
@@ -961,7 +777,6 @@ class PositionDialog(QDialog):
 
     def _start_two_points_picking(self):
         self.main_win.canvas.detach_manipulator()
-        self._nudge_visible(False)
         self._show_page(self._PAGE_TWO_POINTS)
         self._reset_mate_align_dof()
         self._picking_for = "two_points"
@@ -1066,7 +881,6 @@ class PositionDialog(QDialog):
                 self._frame_world_rb.setChecked(True)
         self._set_nudge_labels()
         if self._reattach_manipulator():
-            self._nudge_visible(True)
             self.main_win.statusBar().showMessage(
                 "Drag an arrow to translate or a ring to rotate.")
         else:

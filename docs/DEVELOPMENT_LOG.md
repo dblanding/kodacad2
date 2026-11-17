@@ -7546,3 +7546,7 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - Choosing the 'Mate Align' method radio from another method is a clean slate (gizmo detached, callback cleared, DOF count reset); the constraint radios start the picking as before. In-dialog status line NOT added: messages still go to the main window's status bar, as in the old dialog.
 - The old layout is kept behind `KODACAD_OLD_POSITION_UI=1` for A/B testing and will be deleted in a follow-up commit. `_nudge_box`, `_build_ui_old` and the `_nudge_visible` shim go with it.
 - Offline checks: both layouts construct and the Re-Apply path runs with Qt/OCP stubbed; undefined-name scan clean. Untested with real Qt/OCP.
+
+### Position: old layout removed
+- Stage C passed Doug's tests (Nov 17), so the old layout is gone: `_build_ui_old`, the Nudge group box, the `_nudge_visible` shim, the `KODACAD_OLD_POSITION_UI` switch and the `QGroupBox` import. `_build_ui` is now the stacked-page layout directly; the module docstring describes it. Positioning logic untouched.
+- Untested with real Qt (offline smoke test only).

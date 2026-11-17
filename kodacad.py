@@ -353,8 +353,7 @@ def position_selected():
 
     from position_dialog import PositionDialog
     dlg = PositionDialog(win, dm, uid, name)
-    if getattr(dlg, "_stack", None) is not None:   # minimal layout
-        dialog_style.place_top_left(dlg, win)
+    dialog_style.place_top_left(dlg, win)
     dlg.show()
     win._position_dialog = dlg  # keep a reference so it isn't garbage collected
 
