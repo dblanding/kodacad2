@@ -1672,7 +1672,7 @@ class ShellDialog(_FacePickMixin, QDialog):
         self.thick_edit.setValidator(_dv)
         self.thick_edit.setToolTip("Wall thickness (always positive; "
                                    "the direction is set below).")
-        self.thick_edit.textChanged.connect(self._update_status)
+        self.thick_edit.textChanged.connect(self._edited)
         rows.addWidget(self.thick_edit, 2, 1)
         self.units_label = QLabel(win.units)
         rows.addWidget(self.units_label, 2, 2)
@@ -1773,6 +1773,10 @@ class ShellDialog(_FacePickMixin, QDialog):
             return float(self.thick_edit.text())
         except ValueError:
             return 0.0
+
+    def _edited(self, _text=""):
+        # textChanged passes the new text: it must not become the status
+        self._update_status()
 
     def _update_status(self, extra=""):
         n = len(self.face_stack)

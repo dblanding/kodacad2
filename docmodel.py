@@ -1744,6 +1744,80 @@ class DocModel:
             print(f"[copy_part] failed for uid={uid}: {e}")
             return False
 
+    def create_array(self, uid, world_moves, share=True):
+        """Add one new component per entry of `world_moves` next to the
+        component `uid` (Session 180, the 3D arrays). Each entry is a
+        world-space TopLoc_Location DELTA applied to the source's
+        current world location, so the item lands exactly where the
+        array wants it -- no superimpose-then-Position round trip, and
+        ONE parse_doc() (one uid renumbering) at the end instead of one
+        per item. The ORIGINAL is not touched; the caller counts it as
+        item 0 (Number includes it).
+
+        share=True:  every new item is one more NAUO on the SAME
+                     referred shape (exactly create_shared_instance()'s
+                     structure -- parts AND assemblies).
+        share=False: every new item gets its own, genuinely independent
+                     prototype (copy_part()'s mechanism: BRepBuilderAPI_
+                     Copy + AddShape) -- SIMPLE PARTS ONLY.
+
+        New items go under the SAME parent as the source and are named
+        with next_sibling_name(). Raises on failure (the caller's
+        undo_transaction then aborts the whole array); returns the list
+        of new item names. Call inside docmodel.undo_transaction(dm)."""
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+        if uid not in self.label_dict:
+            raise ValueError(f"Unknown uid {uid}")
+        if not self.label_dict[uid].get('parent_uid'):
+            raise ValueError("The root cannot be arrayed.")
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        color_tool = XCAFDoc_DocumentTool.ColorTool_s(self.doc.Main())
+        comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
+        if comp_label is None:
+            raise ValueError(f"Could not find the label for {uid}")
+        ref_label = TDF_Label()
+        if not shape_tool.GetReferredShape_s(comp_label, ref_label):
+            raise ValueError(f"'{get_label_name(comp_label)}' is not a "
+                             f"component reference -- cannot array it.")
+        if not share and shape_tool.IsAssembly_s(ref_label):
+            raise ValueError("Copy needs a simple part (an assembly can "
+                             "only be shared).")
+        parent_assy = comp_label.Father()
+        src_world = self.get_world_loc(uid)
+        ref_name = get_label_name(ref_label)
+        ref_shape = old_color = None
+        if not share:
+            ref_shape = shape_tool.GetShape_s(ref_label)
+            old_color = get_part_display_color(
+                color_tool, shape_tool, ref_label, ref_shape)
+        names = []
+        for move in world_moves:
+            new_local = self.world_to_local(
+                uid, move.Multiplied(src_world))
+            if share:
+                target_ref = ref_label
+            else:
+                copied = BRepBuilderAPI_Copy(ref_shape).Shape()
+                target_ref = shape_tool.AddShape(copied, False)
+                set_label_name(target_ref, ref_name)
+                if old_color is not None:
+                    color_tool.SetColor(target_ref, old_color,
+                                        XCAFDoc_ColorSurf)
+                    color_tool.SetColor(target_ref, old_color,
+                                        XCAFDoc_ColorGen)
+            new_comp = shape_tool.AddComponent(
+                parent_assy, target_ref, new_local)
+            occ_name = next_sibling_name(shape_tool, parent_assy, ref_name)
+            set_label_name(new_comp, occ_name)
+            names.append(occ_name)
+        shape_tool.UpdateAssemblies()
+        self.parse_doc()
+        print(f"[create_array] {len(names)} new "
+              f"{'shared instance(s)' if share else 'independent copy(ies)'}"
+              f" of '{ref_name}': {', '.join(names)}")
+        return names
+
     def _find_label_by_entry(self, entry):
         """Find a TDF_Label by its entry string.
 

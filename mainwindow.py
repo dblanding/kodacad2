@@ -928,6 +928,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Create Empty Part", self.createEmptyPart)
         menu.addAction("Create Shared Instance", self.createSharedInstance)
         menu.addAction("Copy Part", self.copyPart)
+        menu.addAction("Create Array...", self.createArray)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
@@ -1894,6 +1895,22 @@ class MainWindow(QMainWindow):
             self.build_tree()
             self._incremental_reconcile(old_uids)
         self.treeView.clearSelection()
+        self.itemClicked = None
+
+    def createArray(self):
+        """RMB: 3D array (linear, later angular) of the clicked part or
+        assembly -- opens the Create Array dialog (Session 180)."""
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        if uid not in dm.label_dict:
+            print(f"'{item.text(0)}' cannot be arrayed.")
+            self.itemClicked = None
+            return
+        import array_dialog
+        array_dialog.show_array_dialog(self, dm, uid)
         self.itemClicked = None
 
     def editName(self):
