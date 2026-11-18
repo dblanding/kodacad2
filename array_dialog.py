@@ -16,18 +16,24 @@ out like Position: Linear | Angular radios on top, a common block
           in a workplane / picked frame); Offset is the spacing between
           items (negative runs the other way; the RPN calculator can
           fill it).
-  Angular (next step -- the radio is present but greyed out)
+  Angular Frame row as above; Axis picks one of the frame's axes (the
+          rotation axis passes through the frame's ORIGIN: World = the
+          world origin); Angle is the step between neighbouring items,
+          right-hand rule about the axis; 'Full circle' sets the step
+          to 360 / Number (6 items -> 60 degrees).
 
 The check mark creates the array as ONE undo step and closes the dialog;
 the cross closes it. New items go under the same parent as the source
 (docmodel.create_array). A ghost preview of the items is planned.
 """
 
-from OCP.gp import gp_Trsf, gp_Vec
+import math
+
+from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.TopLoc import TopLoc_Location
 from PySide6.QtCore import QLocale
 from PySide6.QtGui import QDoubleValidator, QFont, QIntValidator
-from PySide6.QtWidgets import (QButtonGroup, QDialog, QGridLayout,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit,
                                QRadioButton, QSizePolicy, QStackedWidget,
                                QVBoxLayout, QWidget)
@@ -73,8 +79,8 @@ class ArrayDialog(QDialog):
         self.linear_rb = QRadioButton("Linear")
         self.angular_rb = QRadioButton("Angular")
         self.linear_rb.setChecked(True)
-        self.angular_rb.setEnabled(False)
-        self.angular_rb.setToolTip("Angular arrays: the next step.")
+        self.linear_rb.clicked.connect(self._on_type_changed)
+        self.angular_rb.clicked.connect(self._on_type_changed)
         self._type_group = QButtonGroup(self)
         self._type_group.addButton(self.linear_rb)
         self._type_group.addButton(self.angular_rb)
@@ -124,9 +130,20 @@ class ArrayDialog(QDialog):
         rows.setColumnStretch(1, 1)
         lay.addLayout(rows)
 
+        # the axis source, common to both types
+        lay.addLayout(self._fc.row_layout())
+        self._frame_name_label = QLabel("")
+        bold = QFont()
+        bold.setBold(True)
+        self._frame_name_label.setFont(bold)
+        self._frame_name_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                             QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._frame_name_label)
+
         # one page per type
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_linear_page())
+        self._stack.addWidget(self._build_angular_page())
         lay.addWidget(self._stack)
 
         self.status_label = QLabel()
@@ -147,17 +164,7 @@ class ArrayDialog(QDialog):
         g.setContentsMargins(0, 0, 0, 0)
         g.setHorizontalSpacing(4)
         g.setVerticalSpacing(4)
-        g.addLayout(self._fc.row_layout(), 0, 0, 1, 3)
-
-        self._frame_name_label = QLabel("")
-        bold = QFont()
-        bold.setBold(True)
-        self._frame_name_label.setFont(bold)
-        self._frame_name_label.setSizePolicy(QSizePolicy.Policy.Ignored,
-                                             QSizePolicy.Policy.Preferred)
-        g.addWidget(self._frame_name_label, 1, 0, 1, 3)
-
-        g.addWidget(dialog_style.row_label("Direction"), 2, 0)
+        g.addWidget(dialog_style.row_label("Direction"), 0, 0)
         drow = QHBoxLayout()
         self._dir_group = QButtonGroup(self)
         self._dir_rbs = []
@@ -168,9 +175,9 @@ class ArrayDialog(QDialog):
             self._dir_rbs.append(rb)
         self._dir_rbs[0].setChecked(True)
         drow.addStretch(1)
-        g.addLayout(drow, 2, 1, 1, 2)
+        g.addLayout(drow, 0, 1, 1, 2)
 
-        g.addWidget(dialog_style.row_label("Offset"), 3, 0)
+        g.addWidget(dialog_style.row_label("Offset"), 1, 0)
         self.offset_edit = QLineEdit()
         dv = QDoubleValidator(-1.0e6, 1.0e6, 4, self.offset_edit)
         dv.setNotation(QDoubleValidator.Notation.StandardNotation)
@@ -180,20 +187,82 @@ class ArrayDialog(QDialog):
                                     "direction; negative runs the other "
                                     "way.")
         self.offset_edit.textChanged.connect(self._edited)
-        g.addWidget(self.offset_edit, 3, 1)
+        g.addWidget(self.offset_edit, 1, 1)
         self.units_label = QLabel(self.main_win.units)
-        g.addWidget(self.units_label, 3, 2)
+        g.addWidget(self.units_label, 1, 2)
         g.setColumnStretch(1, 1)
         # the RPN calculator can fill the offset (click the field first)
         dialog_style.accept_calc_value(self.main_win, self.offset_edit)
         return page
+
+    def _build_angular_page(self):
+        page = QWidget()
+        g = QGridLayout(page)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setHorizontalSpacing(4)
+        g.setVerticalSpacing(4)
+        g.addWidget(dialog_style.row_label("Axis"), 0, 0)
+        arow = QHBoxLayout()
+        self._axis_group = QButtonGroup(self)
+        self._axis_rbs = []
+        for i in range(3):
+            rb = QRadioButton("XYZ"[i])
+            self._axis_group.addButton(rb, i)
+            arow.addWidget(rb)
+            self._axis_rbs.append(rb)
+        self._axis_rbs[2].setChecked(True)     # Z / W: the usual axis
+        arow.addStretch(1)
+        g.addLayout(arow, 0, 1, 1, 2)
+
+        g.addWidget(dialog_style.row_label("Angle"), 1, 0)
+        self.angle_edit = QLineEdit()
+        av = QDoubleValidator(-3600.0, 3600.0, 4, self.angle_edit)
+        av.setNotation(QDoubleValidator.Notation.StandardNotation)
+        av.setLocale(QLocale.c())              # '.' as the decimal point
+        self.angle_edit.setValidator(av)
+        self.angle_edit.setToolTip("Step between neighbouring items, in "
+                                   "degrees (right-hand rule about the "
+                                   "axis; negative turns the other way).")
+        self.angle_edit.textChanged.connect(self._edited)
+        g.addWidget(self.angle_edit, 1, 1)
+        g.addWidget(QLabel("\u00b0"), 1, 2)
+        dialog_style.accept_calc_value(self.main_win, self.angle_edit)
+
+        self.full_cb = QCheckBox("Full circle")
+        self.full_cb.setToolTip("Space the items evenly round a full "
+                                "circle: the step is 360 / Number (6 "
+                                "items -> 60\u00b0).")
+        self.full_cb.clicked.connect(self._on_full_toggled)
+        g.addWidget(self.full_cb, 2, 1, 1, 2)
+        g.setColumnStretch(1, 1)
+        return page
+
+    def _on_type_changed(self, _checked=False):
+        self._stack.setCurrentIndex(
+            _PAGE_ANGULAR if self.angular_rb.isChecked() else _PAGE_LINEAR)
+        self._update_status()
+
+    def _on_full_toggled(self, _checked=False):
+        self._sync_full()
+        self._update_status()
+
+    def _sync_full(self):
+        """'Full circle' ticked: the Angle field shows 360 / Number and
+        cannot be edited (it follows Number)."""
+        on = self.full_cb.isChecked()
+        self.angle_edit.setEnabled(not on)
+        if on and self._number() >= 2:
+            txt = f"{array_math.full_circle_angle(self._number()):.4f}"
+            txt = txt.rstrip("0").rstrip(".")
+            if self.angle_edit.text() != txt:
+                self.angle_edit.setText(txt)
 
     def _frame_changed(self):
         """FrameChooser hook: relabel Direction (X Y Z for World, U V W
         for a workplane / picked frame) and show where the frame came
         from."""
         names = "XYZ" if self._fc.frame is None else "UVW"
-        for rb, n in zip(self._dir_rbs, names):
+        for rb, n in zip(self._dir_rbs + self._axis_rbs, names * 2):
             rb.setText(n)
         self._frame_name_label.setText(
             "" if self._fc.frame is None else self._fc.name)
@@ -215,18 +284,32 @@ class ArrayDialog(QDialog):
         # textChanged passes the new text: it must not become the status
         self._update_status()
 
+    def _angle(self):
+        try:
+            return float(self.angle_edit.text())
+        except ValueError:
+            return 0.0
+
     def _update_status(self, extra=""):
+        angular = self.angular_rb.isChecked()
+        self._sync_full()
         n_ok = self._number() >= 2
         off_ok = abs(self._offset()) > 1.0e-9
+        ang_ok = abs(self._angle()) > 1.0e-9
         dialog_style.set_awaiting(self.number_edit, not n_ok)
-        dialog_style.set_awaiting(self.offset_edit, not off_ok)
-        self.ok_btn.setEnabled(n_ok and off_ok)
+        dialog_style.set_awaiting(self.offset_edit,
+                                  not angular and not off_ok)
+        dialog_style.set_awaiting(self.angle_edit,
+                                  angular and not ang_ok)
+        self.ok_btn.setEnabled(n_ok and (ang_ok if angular else off_ok))
         if extra:
             self.status_label.setText(extra)
         elif not n_ok:
             self.status_label.setText("Number must be 2 or more "
                                       "(the original counts).")
-        elif not off_ok:
+        elif angular and not ang_ok:
+            self.status_label.setText("Enter the angle.")
+        elif not angular and not off_ok:
             self.status_label.setText("Enter the offset.")
         else:
             self.status_label.setText("")
@@ -250,11 +333,19 @@ class ArrayDialog(QDialog):
             "<p><b>Frame</b> gives the axes: <i>World</i> X/Y/Z; "
             "<i>Workplane</i> the active workplane's U/V/W; "
             "<i>Pick</i> a cylindrical face, a circular or straight "
-            "edge or a flat face (its axis is W). <b>Direction</b> picks "
-            "one of them; <b>Offset</b> is the spacing between items "
-            "(negative runs the other way; the calculator can fill it "
-            "-- click the field first).</p>"
-            "<p>Angular arrays and a ghost preview are planned.</p>"
+            "edge or a flat face (its axis is W).</p>"
+            "<p><b>Linear</b>: <b>Direction</b> picks one of the "
+            "frame's axes; <b>Offset</b> is the spacing between items "
+            "(negative runs the other way).</p>"
+            "<p><b>Angular</b>: <b>Axis</b> picks one of the frame's "
+            "axes; the items turn about it THROUGH THE FRAME'S ORIGIN "
+            "(World: the world origin; Pick: a point on the picked "
+            "axis, so picking a hub's cylinder spins the items about "
+            "the hub). <b>Angle</b> is the step between neighbours "
+            "(right-hand rule); <b>Full circle</b> makes it 360 / "
+            "Number, so Number 6 gives 60\u00b0.</p>"
+            "<p>The calculator can fill Offset and Angle -- click the "
+            "field first. A ghost preview is planned.</p>"
             "<p><b>Source</b>:<br>%s</p>" % full)
         self._info.toggle(self.main_win)
 
@@ -266,24 +357,33 @@ class ArrayDialog(QDialog):
                                 "close and reopen the dialog.")
             return
         n = self._number()
+        angular = self.angular_rb.isChecked()
         dist = self._offset()
-        if n < 2 or abs(dist) <= 1.0e-9:
+        angle = self._angle()
+        if n < 2 or abs(angle if angular else dist) <= 1.0e-9:
             self._update_status()
             return
         share = self.share_rb.isChecked()
-        _o, u, v, w = self._fc.triad()
-        direction = (u, v, w)[max(self._dir_group.checkedId(), 0)]
+        origin, u, v, w = self._fc.triad()
+        moves = []
         try:
-            offsets = array_math.linear_offsets(
-                n, dist * self.main_win.unitscale, direction)
+            if angular:
+                axis = (u, v, w)[max(self._axis_group.checkedId(), 0)]
+                ax1 = gp_Ax1(gp_Pnt(*origin), gp_Dir(*axis))
+                for a in array_math.angular_angles(n, angle):
+                    t = gp_Trsf()
+                    t.SetRotation(ax1, math.radians(a))
+                    moves.append(TopLoc_Location(t))
+            else:
+                direction = (u, v, w)[max(self._dir_group.checkedId(), 0)]
+                for (x, y, z) in array_math.linear_offsets(
+                        n, dist * self.main_win.unitscale, direction):
+                    t = gp_Trsf()
+                    t.SetTranslation(gp_Vec(x, y, z))
+                    moves.append(TopLoc_Location(t))
         except ValueError as e:
             self._update_status(str(e))
             return
-        moves = []
-        for (x, y, z) in offsets:
-            t = gp_Trsf()
-            t.SetTranslation(gp_Vec(x, y, z))
-            moves.append(TopLoc_Location(t))
 
         old_uids = set(dm.part_dict.keys())
         try:

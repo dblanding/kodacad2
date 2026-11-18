@@ -27,3 +27,21 @@ def linear_offsets(n, distance, direction):
     d = _unit(direction)
     return [(k * distance * d[0], k * distance * d[1], k * distance * d[2])
             for k in range(1, n)]
+
+
+def full_circle_angle(n):
+    """Angle (degrees) between neighbours when n items fill a circle:
+    6 items -> 60."""
+    if n < 2:
+        raise ValueError("An array needs Number >= 2 (the original "
+                         "counts as one).")
+    return 360.0 / n
+
+
+def angular_angles(n, angle):
+    """Rotation angles (degrees, right-hand rule about the axis) of the
+    new items k = 1 .. n-1 of an angular array: k * angle."""
+    if n < 2:
+        raise ValueError("An array needs Number >= 2 (the original "
+                         "counts as one).")
+    return [k * angle for k in range(1, n)]
