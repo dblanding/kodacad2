@@ -7567,3 +7567,19 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - Removed: `shell()` and `shellC()` (the status-bar tool); the menu item is now 'Shell...'. Comments elsewhere that mention shell() are historical.
 - Not included (by design): a live preview (a shell on a complex part can take seconds), Creo's Keep Blend / Suppress Features.
 - Offline checks: undefined-name scan clean; the apply logic run with the Qt/OCP names stubbed (inward gives offset = -t * unitscale, outward +t, success clears the picks, a failure keeps them). Untested with real Qt/OCP.
+
+## Session 180
+
+### Arrays (#6): design decisions (Doug)
+- 3D linear and angular arrays of parts / assemblies, as a dialog launched from the tree's RMB menu ('Create Array...', next to Create Shared Instance and Copy Part): the array source is the clicked component, and an array changes the assembly structure (Create/Modify is for solid-modelling operations on the active part).
+- Layout like Position: Linear | Angular radios on top, a common block (Source, Copy | Share, Number) and a stacked lower page per type (Linear: Direction + Offset; Angular: Axis + Angle, with a 'full circle' tick = 360 / Number). 'Angular', not Creo's 'Radial'. Creo's Basename / Owner / One Level / Keep Attr are dropped: new instances go under the SAME parent as the source and are named by `next_sibling_name`.
+- Number = the TOTAL including the original (6 angular parts 60 degrees apart = Number 6).
+- Share (default) = more instances of one prototype (`create_shared_instance`, parts and assemblies). Copy = independent parts (`copy_part`, SIMPLE PARTS ONLY): the Copy radio is greyed out for an assembly source (a deep, independent copy is a bigger job, left out on purpose). Doug's use: a crane wheel, a hub-to-rim 'spoke + diagonal' A-frame sub-assembly (parts kept unfused, since a fuse cannot be undone in a later session), arrayed around the hub.
+- Direction / axis come from the same Frame choices as Position (World | Workplane | Pick).
+- Ghost preview of the instances: wanted, but a later commit; each commit stays small. Order: (1) extract the Frame row (this entry), (2) Linear, (3) Angular, then preview.
+
+### Frame row extracted into frame_chooser.py (no behaviour change)
+- The World | Workplane | Pick row and its state moved out of `position_dialog.py` into `frame_chooser.FrameChooser` (a QObject owning the three radios, `frame` = (origin, w, u) or None for World, `name`, `picking`), so the array dialogs can use it as their axis source. `frame_triad(frame)` / `FrameChooser.triad()` return (origin, u, v, w) as xyz tuples (World = origin 0 and X / Y / Z; V = W x U), which is what an array needs (direction = U, V or W; axis = U, V or W through the origin).
+- What a frame DOES stays with the dialog, through three hooks: `on_changed` (Position: re-attach the gizmo on the frame and relabel the Nudge fields - its old status messages are kept), `on_pick_started` (Position: detach the gizmo while picking, the fix for 'picks need 2+ tries'), `guard` (Position: the row only works with the gizmo attached). An array passes none of the gizmo hooks.
+- Position: `_frame` is now a read-only property onto the chooser; `_read_active_wp_frame`, `_on_frame_chosen`, `_start_frame_picking`, `_frame_pick_callback` and the radios moved out; `_start_dynamic_mode` calls `restart()` (World = default, Workplane = a fresh snapshot, Pick = the earlier pick is kept); its status text on a frame change now says the rotation fields turn about the frame's own axes (the old text named rW).
+- Offline checks: `frame_triad` (World, a general frame, W = X / U = Y gives V = Z); the chooser's flows with Qt / OCP stubbed (pick, pick then World cancelling it, Workplane with and without an active workplane, Pick kept on restart, guard refusal); Position builds, changes frame, restarts Dynamic. Untested with real Qt / OCP.
