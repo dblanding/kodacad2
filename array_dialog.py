@@ -24,7 +24,17 @@ out like Position: Linear | Angular radios on top, a common block
 
 The check mark creates the array as ONE undo step and closes the dialog;
 the cross closes it. New items go under the same parent as the source
-(docmodel.create_array). A ghost preview of the items is planned.
+(docmodel.create_array).
+
+Preview (Doug: the axis was invisible, so the sign of the angle was a
+guess): while the dialog is open the viewport shows
+  * the chosen axis as a dark-blue arrow from the frame's origin -- the
+    arrow points to the axis' + end (a positive angle turns
+    counter-clockwise seen from the tip), and
+  * the items to be created as translucent cyan GHOSTS (the same look as
+    Move Face's ghost), refreshed on every change. Ghosts are the source's
+    shapes moved with TopoDS_Shape.Moved (a location only: no geometry is
+    copied), never pickable, and removed when the dialog closes.
 """
 
 import math
@@ -52,6 +62,9 @@ class ArrayDialog(QDialog):
         self.main_win = main_win
         self.dm = dm
         self.uid = uid
+        self._ghost = None          # AIS of the ghost items
+        self._axis_ais = None       # AIS of the axis arrow
+        self._preview_note = ""
         self.setWindowTitle("Create Array")
         self.setModal(False)
         self._info = dialog_style.InfoWindow(main_win, "Array details")
@@ -174,6 +187,7 @@ class ArrayDialog(QDialog):
             drow.addWidget(rb)
             self._dir_rbs.append(rb)
         self._dir_rbs[0].setChecked(True)
+        self._dir_group.idClicked.connect(self._on_axis_clicked)
         drow.addStretch(1)
         g.addLayout(drow, 0, 1, 1, 2)
 
@@ -211,6 +225,7 @@ class ArrayDialog(QDialog):
             arow.addWidget(rb)
             self._axis_rbs.append(rb)
         self._axis_rbs[2].setChecked(True)     # Z / W: the usual axis
+        self._axis_group.idClicked.connect(self._on_axis_clicked)
         arow.addStretch(1)
         g.addLayout(arow, 0, 1, 1, 2)
 
@@ -222,7 +237,10 @@ class ArrayDialog(QDialog):
         self.angle_edit.setValidator(av)
         self.angle_edit.setToolTip("Step between neighbouring items, in "
                                    "degrees (right-hand rule about the "
-                                   "axis; negative turns the other way).")
+                                   "axis: positive turns counter-"
+                                   "clockwise seen from the tip of the "
+                                   "blue arrow; negative turns the "
+                                   "other way).")
         self.angle_edit.textChanged.connect(self._edited)
         g.addWidget(self.angle_edit, 1, 1)
         g.addWidget(QLabel("\u00b0"), 1, 2)
@@ -236,6 +254,9 @@ class ArrayDialog(QDialog):
         g.addWidget(self.full_cb, 2, 1, 1, 2)
         g.setColumnStretch(1, 1)
         return page
+
+    def _on_axis_clicked(self, _id=0):
+        self._update_status()
 
     def _on_type_changed(self, _checked=False):
         self._stack.setCurrentIndex(
@@ -266,6 +287,7 @@ class ArrayDialog(QDialog):
             rb.setText(n)
         self._frame_name_label.setText(
             "" if self._fc.frame is None else self._fc.name)
+        self._refresh_preview()
 
     # -- state -------------------------------------------------------
     def _number(self):
@@ -293,6 +315,7 @@ class ArrayDialog(QDialog):
     def _update_status(self, extra=""):
         angular = self.angular_rb.isChecked()
         self._sync_full()
+        self._refresh_preview()          # also sets self._preview_note
         n_ok = self._number() >= 2
         off_ok = abs(self._offset()) > 1.0e-9
         ang_ok = abs(self._angle()) > 1.0e-9
@@ -311,6 +334,8 @@ class ArrayDialog(QDialog):
             self.status_label.setText("Enter the angle.")
         elif not angular and not off_ok:
             self.status_label.setText("Enter the offset.")
+        elif self._preview_note:
+            self.status_label.setText(self._preview_note)
         else:
             self.status_label.setText("")
 
@@ -345,9 +370,176 @@ class ArrayDialog(QDialog):
             "(right-hand rule); <b>Full circle</b> makes it 360 / "
             "Number, so Number 6 gives 60\u00b0.</p>"
             "<p>The calculator can fill Offset and Angle -- click the "
-            "field first. A ghost preview is planned.</p>"
-            "<p><b>Source</b>:<br>%s</p>" % full)
+            "field first.</p>"
+            "<p><b>Preview</b>: the dark-blue arrow is the chosen "
+            "axis; it points to its + end, and a positive Angle turns "
+            "counter-clockwise seen from the arrow's tip. The "
+            "translucent cyan ghosts are the items that the check mark "
+            "will create (the first %d at most).</p>"
+            "<p><b>Source</b>:<br>%s</p>" % (self.PREVIEW_MAX, full))
         self._info.toggle(self.main_win)
+
+    # -- the items, as world-space location deltas ---------------------
+    def _chosen_axis(self):
+        """(origin, axis) in world xyz: the frame's origin and the
+        direction (Linear) / rotation axis (Angular) picked on the
+        visible page."""
+        origin, u, v, w = self._fc.triad()
+        grp = self._axis_group if self.angular_rb.isChecked() \
+            else self._dir_group
+        return origin, (u, v, w)[max(grp.checkedId(), 0)]
+
+    def _build_moves(self):
+        """The world-space TopLoc_Location delta of each NEW item (items
+        1 .. n-1). Raises ValueError for a bad Number / zero offset."""
+        n = self._number()
+        origin, axis = self._chosen_axis()
+        moves = []
+        step = self._angle() if self.angular_rb.isChecked() \
+            else self._offset()
+        if n < 2 or abs(step) <= 1.0e-9:
+            raise ValueError("Enter Number (2 or more) and a non-zero "
+                             "offset / angle.")
+        if self.angular_rb.isChecked():
+            ax1 = gp_Ax1(gp_Pnt(*origin), gp_Dir(*axis))
+            for a in array_math.angular_angles(n, self._angle()):
+                t = gp_Trsf()
+                t.SetRotation(ax1, math.radians(a))
+                moves.append(TopLoc_Location(t))
+        else:
+            for (x, y, z) in array_math.linear_offsets(
+                    n, self._offset() * self.main_win.unitscale, axis):
+                t = gp_Trsf()
+                t.SetTranslation(gp_Vec(x, y, z))
+                moves.append(TopLoc_Location(t))
+        return moves
+
+    # -- preview: axis arrow + ghost items ---------------------------
+    PREVIEW_MAX = 60                  # ghosts drawn at most
+
+    def _source_shapes(self):
+        """The source's displayed (world-placed) shapes: its own leaf
+        parts, or those of every part under an assembly."""
+        pd = self.dm.part_dict
+        return [pd[u]['shape'] for u in self.dm.get_descendant_part_uids(
+            self.uid) if u in pd and pd[u].get('shape') is not None]
+
+    def _refresh_preview(self):
+        """Redraw the axis arrow and the ghosts for the current inputs.
+        Never raises: a preview problem must not break the dialog."""
+        try:
+            self._erase_preview(update=False)
+            if not self.isVisible():
+                # (called from __init__ before show(): draw nothing yet;
+                # show_array_dialog refreshes after show)
+                return
+            shapes = self._source_shapes()
+            if not shapes:
+                return
+            self._preview_note = ""
+            self._draw_axis(shapes)
+            try:
+                moves = self._build_moves()
+            except ValueError:
+                moves = []
+            if len(moves) > self.PREVIEW_MAX:
+                moves = moves[:self.PREVIEW_MAX]
+                self._preview_note = (f"Preview shows the first "
+                                      f"{self.PREVIEW_MAX} items.")
+            if moves:
+                self._draw_ghosts(shapes, moves)
+            self.main_win.canvas._display.Context.UpdateCurrentViewer()
+        except Exception as e:
+            print(f"[array] preview failed: {type(e).__name__}: {e}")
+
+    def _draw_ghosts(self, shapes, moves):
+        from OCP.AIS import AIS_Shape
+        from OCP.BRep import BRep_Builder
+        from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+        from OCP.TopoDS import TopoDS_Compound
+        bld = BRep_Builder()
+        comp = TopoDS_Compound()
+        bld.MakeCompound(comp)
+        for mv in moves:
+            for sh in shapes:
+                bld.Add(comp, sh.Moved(mv))      # a location only
+        disp = self.main_win.canvas._display
+        ctx = disp.Context
+        ais = AIS_Shape(comp)
+        ctx.Display(ais, False)
+        disp.add_never_pick(ais)                 # clicks pass through
+        ctx.SetColor(ais, Quantity_Color(
+            0.05, 0.75, 0.95, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
+        ctx.SetTransparency(ais, 0.6, False)
+        self._ghost = ais
+
+    def _draw_axis(self, shapes):
+        """Dark-blue arrow from the frame's origin along the chosen axis;
+        its tip is the axis' + end."""
+        from OCP.AIS import AIS_Shape
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRep import BRep_Builder
+        from OCP.BRepBndLib import BRepBndLib
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone
+        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+        from OCP.Quantity import Quantity_Color, Quantity_TypeOfColor
+        from OCP.TopoDS import TopoDS_Compound
+        from OCP.gp import gp_Ax2
+        box = Bnd_Box()
+        for sh in shapes:
+            BRepBndLib.Add_s(sh, box)
+        if box.IsVoid():
+            return
+        x0, y0, z0, x1, y1, z1 = box.Get()
+        diag = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2)
+        length = max(1.5 * diag, 10.0)
+        head = 0.12 * length
+        origin, ax = self._chosen_axis()
+        tip = gp_Pnt(*(origin[i] + length * ax[i] for i in range(3)))
+        base = gp_Pnt(*(origin[i] + (length - head) * ax[i]
+                        for i in range(3)))
+        bld = BRep_Builder()
+        comp = TopoDS_Compound()
+        bld.MakeCompound(comp)
+        bld.Add(comp, BRepBuilderAPI_MakeEdge(gp_Pnt(*origin), base).Edge())
+        cone = BRepPrimAPI_MakeCone(gp_Ax2(base, gp_Dir(*ax)),
+                                    0.35 * head, 0.0, head).Shape()
+        bld.Add(comp, cone)
+        disp = self.main_win.canvas._display
+        ctx = disp.Context
+        ais = AIS_Shape(comp)
+        ctx.Display(ais, False)
+        disp.add_never_pick(ais)
+        ctx.SetColor(ais, Quantity_Color(
+            0.05, 0.15, 0.75, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
+        ctx.SetWidth(ais, 3.0, False)
+        ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
+        self._axis_ais = ais
+
+    def _erase_preview(self, update=True):
+        disp = None
+        try:
+            disp = self.main_win.canvas._display
+        except Exception:
+            return
+        gone = False
+        for name in ("_ghost", "_axis_ais"):
+            ais = getattr(self, name, None)
+            setattr(self, name, None)
+            if ais is None:
+                continue
+            gone = True
+            try:
+                disp.remove_never_pick(ais)
+                disp.Context.Remove(ais, False)
+            except Exception as e:
+                print(f"[array] preview erase failed: {e}")
+        if gone and update:
+            try:
+                disp.Context.UpdateCurrentViewer()
+            except Exception:
+                pass
 
     # -- apply -------------------------------------------------------
     def _on_apply(self):
@@ -364,27 +556,13 @@ class ArrayDialog(QDialog):
             self._update_status()
             return
         share = self.share_rb.isChecked()
-        origin, u, v, w = self._fc.triad()
-        moves = []
         try:
-            if angular:
-                axis = (u, v, w)[max(self._axis_group.checkedId(), 0)]
-                ax1 = gp_Ax1(gp_Pnt(*origin), gp_Dir(*axis))
-                for a in array_math.angular_angles(n, angle):
-                    t = gp_Trsf()
-                    t.SetRotation(ax1, math.radians(a))
-                    moves.append(TopLoc_Location(t))
-            else:
-                direction = (u, v, w)[max(self._dir_group.checkedId(), 0)]
-                for (x, y, z) in array_math.linear_offsets(
-                        n, dist * self.main_win.unitscale, direction):
-                    t = gp_Trsf()
-                    t.SetTranslation(gp_Vec(x, y, z))
-                    moves.append(TopLoc_Location(t))
+            moves = self._build_moves()
         except ValueError as e:
             self._update_status(str(e))
             return
 
+        self._erase_preview()
         old_uids = set(dm.part_dict.keys())
         try:
             with docmodel.undo_transaction(dm):
@@ -404,6 +582,7 @@ class ArrayDialog(QDialog):
         self.close()
 
     def closeEvent(self, event):
+        self._erase_preview()
         if self._fc.picking:
             self.main_win.clearCallback()
         try:
@@ -431,3 +610,4 @@ def show_array_dialog(main_win, dm, uid):
     main_win._array_dlg = dlg
     dlg.show()
     dialog_style.place_top_left(dlg, main_win)
+    dlg._refresh_preview()            # now visible: draw the first preview
