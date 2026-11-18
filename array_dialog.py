@@ -28,9 +28,10 @@ the cross closes it. New items go under the same parent as the source
 
 Preview (Doug: the axis was invisible, so the sign of the angle was a
 guess): while the dialog is open the viewport shows
-  * the chosen axis as a dark-blue arrow from the frame's origin -- the
-    arrow points to the axis' + end (a positive angle turns
-    counter-clockwise seen from the tip), and
+  * a non-interactive RGB triad at the frame's origin, like the Position
+    gizmo's axes (X / U red, Y / V green, Z / W blue); the chosen axis is
+    longer and heavier, every tip is that axis' + end (a positive angle
+    turns counter-clockwise seen from the tip), and
   * the items to be created as translucent cyan GHOSTS (the same look as
     Move Face's ghost), refreshed on every change. Ghosts are the source's
     shapes moved with TopoDS_Shape.Moved (a location only: no geometry is
@@ -63,7 +64,7 @@ class ArrayDialog(QDialog):
         self.dm = dm
         self.uid = uid
         self._ghost = None          # AIS of the ghost items
-        self._axis_ais = None       # AIS of the axis arrow
+        self._axis_list = []        # AIS of the three triad arrows
         self._preview_note = ""
         self.setWindowTitle("Create Array")
         self.setModal(False)
@@ -239,7 +240,7 @@ class ArrayDialog(QDialog):
                                    "degrees (right-hand rule about the "
                                    "axis: positive turns counter-"
                                    "clockwise seen from the tip of the "
-                                   "blue arrow; negative turns the "
+                                   "chosen (heavier) arrow; negative turns the "
                                    "other way).")
         self.angle_edit.textChanged.connect(self._edited)
         g.addWidget(self.angle_edit, 1, 1)
@@ -371,9 +372,11 @@ class ArrayDialog(QDialog):
             "Number, so Number 6 gives 60\u00b0.</p>"
             "<p>The calculator can fill Offset and Angle -- click the "
             "field first.</p>"
-            "<p><b>Preview</b>: the dark-blue arrow is the chosen "
-            "axis; it points to its + end, and a positive Angle turns "
-            "counter-clockwise seen from the arrow's tip. The "
+            "<p><b>Preview</b>: the red / green / blue triad shows the "
+            "frame's axes (X / U red, Y / V green, Z / W blue, like the "
+            "Position gizmo); the chosen one is longer and heavier. Each "
+            "arrow points to its + end, and a positive Angle turns "
+            "counter-clockwise seen from the tip. The "
             "translucent cyan ghosts are the items that the check mark "
             "will create (the first %d at most).</p>"
             "<p><b>Source</b>:<br>%s</p>" % (self.PREVIEW_MAX, full))
@@ -473,9 +476,15 @@ class ArrayDialog(QDialog):
         ctx.SetTransparency(ais, 0.6, False)
         self._ghost = ais
 
+    # the gizmo's colours: X / U red, Y / V green, Z / W blue
+    TRIAD_RGB = ((0.90, 0.10, 0.10), (0.10, 0.70, 0.10),
+                 (0.15, 0.30, 0.95))
+
     def _draw_axis(self, shapes):
-        """Dark-blue arrow from the frame's origin along the chosen axis;
-        its tip is the axis' + end."""
+        """A non-interactive RGB triad at the frame's origin, like the
+        Position gizmo's axes: three arrows (X / U red, Y / V green,
+        Z / W blue). The CHOSEN axis (Direction / Axis radio) is longer
+        and heavier; every arrow's tip is its + end."""
         from OCP.AIS import AIS_Shape
         from OCP.Bnd import Bnd_Box
         from OCP.BRep import BRep_Builder
@@ -493,29 +502,34 @@ class ArrayDialog(QDialog):
             return
         x0, y0, z0, x1, y1, z1 = box.Get()
         diag = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2)
-        length = max(1.5 * diag, 10.0)
-        head = 0.12 * length
-        origin, ax = self._chosen_axis()
-        tip = gp_Pnt(*(origin[i] + length * ax[i] for i in range(3)))
-        base = gp_Pnt(*(origin[i] + (length - head) * ax[i]
-                        for i in range(3)))
-        bld = BRep_Builder()
-        comp = TopoDS_Compound()
-        bld.MakeCompound(comp)
-        bld.Add(comp, BRepBuilderAPI_MakeEdge(gp_Pnt(*origin), base).Edge())
-        cone = BRepPrimAPI_MakeCone(gp_Ax2(base, gp_Dir(*ax)),
-                                    0.35 * head, 0.0, head).Shape()
-        bld.Add(comp, cone)
+        base_len = max(0.6 * diag, 8.0)
+        origin, u, v, w = self._fc.triad()
+        _o, chosen = self._chosen_axis()
         disp = self.main_win.canvas._display
         ctx = disp.Context
-        ais = AIS_Shape(comp)
-        ctx.Display(ais, False)
-        disp.add_never_pick(ais)
-        ctx.SetColor(ais, Quantity_Color(
-            0.05, 0.15, 0.75, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
-        ctx.SetWidth(ais, 3.0, False)
-        ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
-        self._axis_ais = ais
+        for ax, rgb in zip((u, v, w), self.TRIAD_RGB):
+            is_chosen = all(abs(ax[i] - chosen[i]) < 1.0e-9
+                            for i in range(3))
+            length = base_len * (1.4 if is_chosen else 1.0)
+            head = 0.14 * length
+            base = gp_Pnt(*(origin[i] + (length - head) * ax[i]
+                            for i in range(3)))
+            bld = BRep_Builder()
+            comp = TopoDS_Compound()
+            bld.MakeCompound(comp)
+            bld.Add(comp, BRepBuilderAPI_MakeEdge(
+                gp_Pnt(*origin), base).Edge())
+            bld.Add(comp, BRepPrimAPI_MakeCone(
+                gp_Ax2(base, gp_Dir(*ax)), (0.4 if is_chosen else 0.3)
+                * head, 0.0, head).Shape())
+            ais = AIS_Shape(comp)
+            ctx.Display(ais, False)
+            disp.add_never_pick(ais)
+            ctx.SetColor(ais, Quantity_Color(
+                *rgb, Quantity_TypeOfColor.Quantity_TOC_RGB), False)
+            ctx.SetWidth(ais, 5.0 if is_chosen else 2.0, False)
+            ctx.SetZLayer(ais, Graphic3d_ZLayerId_Topmost)
+            self._axis_list.append(ais)
 
     def _erase_preview(self, update=True):
         disp = None
@@ -523,10 +537,11 @@ class ArrayDialog(QDialog):
             disp = self.main_win.canvas._display
         except Exception:
             return
+        olds = [self._ghost] + list(self._axis_list)
+        self._ghost = None
+        self._axis_list = []
         gone = False
-        for name in ("_ghost", "_axis_ais"):
-            ais = getattr(self, name, None)
-            setattr(self, name, None)
+        for ais in olds:
             if ais is None:
                 continue
             gone = True
