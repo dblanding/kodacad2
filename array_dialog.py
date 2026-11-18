@@ -286,8 +286,12 @@ class ArrayDialog(QDialog):
         names = "XYZ" if self._fc.frame is None else "UVW"
         for rb, n in zip(self._dir_rbs + self._axis_rbs, names * 2):
             rb.setText(n)
-        self._frame_name_label.setText(
-            "" if self._fc.frame is None else self._fc.name)
+        name = "" if self._fc.frame is None else self._fc.name
+        self._frame_name_label.setText(name)
+        # no name (World) -> no empty line; the dialog follows the change
+        self._frame_name_label.setVisible(bool(name))
+        if self.isVisible():
+            self.adjustSize()
         self._refresh_preview()
 
     # -- state -------------------------------------------------------
