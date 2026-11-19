@@ -441,6 +441,13 @@ def rotate_pt(pt, ang, ctr):
 # ===========================================================================
 
 
+# Profile ends closer than this are one point when edges are chained into
+# loops. 1e-4 mm (was 1e-5): Session 181, a STEP part's two half-hole edges
+# met 2.87e-5 apart (its vertices carry tolerance ~2.6e-5), so a profile
+# projected from it showed 4 'unconnected ends'. Far below anything drawn.
+PROFILE_CHAIN_TOL = 1.0e-4
+
+
 class WorkPlane():
     """A 2D plane for creating 2D 'Profiles' for building or modifying 3D geometry.
 
@@ -1055,7 +1062,7 @@ class WorkPlane():
         unchanged docstring: 'chain edgeList into closed loops by
         endpoint adjacency.'"""
         from OCP.BRepAdaptor import BRepAdaptor_Curve
-        tol = 1.0e-5
+        tol = PROFILE_CHAIN_TOL
         self.open_ends = []  # filled in only when a chain is open
 
         infos = []  # (edge, p_start(3d), p_end(3d))
@@ -1136,6 +1143,31 @@ class WorkPlane():
                     clusters.append([p, 1])
         return [c[0] for c in clusters if c[1] % 2 == 1]
 
+    def _wire_with_tolerance(self, chain):
+        """A wire from `chain` (edges whose ends meet within
+        PROFILE_CHAIN_TOL but not exactly), or None. ShapeFix_Wire
+        merges the near ends (raising the shared vertices' tolerance)."""
+        try:
+            from OCP.ShapeExtend import ShapeExtend_WireData
+            from OCP.ShapeFix import ShapeFix_Wire
+            from OCP.Geom import Geom_Plane
+            wd = ShapeExtend_WireData()
+            for e in chain:
+                wd.Add(e)
+            sfw = ShapeFix_Wire()
+            sfw.Load(wd)
+            sfw.SetPrecision(PROFILE_CHAIN_TOL)
+            sfw.SetMaxTolerance(PROFILE_CHAIN_TOL)
+            sfw.SetSurface(Geom_Plane(self.gpPlane))
+            sfw.FixReorder()
+            sfw.FixConnected(PROFILE_CHAIN_TOL)
+            sfw.FixClosed(PROFILE_CHAIN_TOL)
+            w = sfw.Wire()
+            return w if w is not None and not w.IsNull() else None
+        except Exception as ex:
+            print(f"[wire tolerance fix] {type(ex).__name__}: {ex}")
+            return None
+
     def _loops_to_wires_and_polys(self, loops):
         """Build a TopoDS_Wire and a UV polygon (for containment
         testing) for each edge chain in loops. Returns (wires, polys,
@@ -1152,9 +1184,16 @@ class WorkPlane():
             mkw = BRepBuilderAPI_MakeWire()
             for e in chain:
                 mkw.Add(e)
-            if not mkw.IsDone():
-                return [], [], "wire construction failed on a loop"
-            wires.append(mkw.Wire())
+            if mkw.IsDone():
+                wires.append(mkw.Wire())
+            else:
+                # Session 181: ends that miss by more than MakeWire's own
+                # 1e-7 but less than PROFILE_CHAIN_TOL (projected from a
+                # STEP part whose faces were stitched at ~3e-5): join them.
+                w = self._wire_with_tolerance(chain)
+                if w is None:
+                    return [], [], "wire construction failed on a loop"
+                wires.append(w)
             pts = []
             for e in chain:
                 crv = BRepAdaptor_Curve(e)
