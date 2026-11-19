@@ -929,6 +929,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Create Shared Instance", self.createSharedInstance)
         menu.addAction("Copy Part", self.copyPart)
         menu.addAction("Create Array...", self.createArray)
+        menu.addAction("Make Workplane Set", self.makeWorkplaneSet)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
@@ -1912,6 +1913,35 @@ class MainWindow(QMainWindow):
         import array_dialog
         array_dialog.show_array_dialog(self, dm, uid)
         self.itemClicked = None
+
+    def makeWorkplaneSet(self):
+        """RMB: group the SELECTED workplanes into a new Workplane Set
+        (Session 181). Select two or more workplanes in the tree
+        (Ctrl/Shift-click), right-click one of them. The members go in
+        creation order -- the order a Loft will use. A workplane that
+        was in another set is moved out of it. See wp_sets.py."""
+        import wp_sets
+        uids = [it.text(1) for it in self.treeView.selectedItems()]
+        if not uids:
+            it = self._get_clicked_or_current_item()
+            uids = [it.text(1)] if it else []
+        try:
+            set_uid, members, emptied = wp_sets.make_set(
+                self.wp_dict, self.wp_set_dict, self.wp_parent_set,
+                self.wp_names, uids)
+        except ValueError as e:
+            self.statusBar().showMessage(str(e), 8000)
+            print(e)
+            self.itemClicked = None
+            return
+        self._renumber_wp_counters()
+        self.build_tree()
+        self.itemClicked = None
+        msg = (f"Made {self._wp_display_name(set_uid)} from "
+               f"{len(members)} workplanes (loft order: "
+               f"{', '.join(self._wp_display_name(u) for u in members)}).")
+        self.statusBar().showMessage(msg, 10000)
+        print(msg)
 
     def editName(self):
         """Edit name of treeView item clicked"""
