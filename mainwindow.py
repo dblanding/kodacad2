@@ -1193,8 +1193,21 @@ class MainWindow(QMainWindow):
                 sbText = f"{name} [uid={uid}] is now the active part"
             elif uid in wd:
                 old_uid = self.activeWpUID
+                # Session 181 (Doug): a 2D tool left active when another
+                # workplane was made active stopped responding (its
+                # state belonged to the old workplane) although
+                # 'Current Operation' still named it. Ending the
+                # operation here avoids that stale state; the tool
+                # button is one click away.
+                ended = ""
+                if uid != old_uid and self.registeredCallback:
+                    ended = self.currOpLabel.text().replace(
+                        "Current Operation:", "").strip()
+                    self.clearCallback()
                 self.setActiveWp(uid)
                 sbText = f"{name} [uid={uid}] is now the active workplane"
+                if ended and ended != "None":
+                    sbText += f" ('{ended}' ended -- pick the tool again)"
                 # Session 132 (Doug: every workplane flashed when a new
                 # one was made active). Only the border COLOR differs
                 # between active and inactive, so only the previously
