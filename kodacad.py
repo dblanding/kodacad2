@@ -4002,8 +4002,9 @@ if __name__ == "__main__":
         ("ccirc.gif", "Construction Circle", a2d.ccirc),
         ("cc3p.gif", "Constr Circle by 3 Points", a2d.cc3p),
         ("cccirc.gif", "Concentric Constr Circle", a2d.cccirc),
-        ("proj_edge.gif", "Project Edge", a2d.projectEdge),
-        ("proj_face.gif", "Project Face Edges", a2d.projectFaceEdges),
+        ("proj_edge.gif", "Project Edge as Construction", a2d.projectEdge),
+        ("proj_face.gif", "Project Face Edges as Construction",
+         a2d.projectFaceEdges),
         # Session 181: the same two, but the result is PROFILE geometry
         # (blue icons), not construction -- what a Loft / Pull profile
         # needs.
