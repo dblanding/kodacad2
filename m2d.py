@@ -184,10 +184,11 @@ class M2D:
     # with a count in the status bar -- honest v1 scope. Both tools
     # chain (pick face after face); middle-click ends. ---
 
-    def _project_edge_as_segment(self, wp, crv, n=256):
+    def _project_edge_as_segment(self, wp, crv, n=256, geom=False):
         """If edge curve crv projects onto wp as a STRAIGHT line --
         a straight edge, or a circle/B-spline seen edge-on -- add one
-        construction segment spanning its full projected extent.
+        construction segment (geom=True: a profile SEGMENT, Session 181)
+        spanning its full projected extent.
         Returns (is_collinear, kind): (False, None) if the projection
         is not straight (or collapses to a single point); (True,
         'cseg') if a segment was added. Session 135 (Doug's lofted
@@ -233,13 +234,25 @@ class M2D:
         p1, p2 = uv(f_lo), uv(f_hi)
         if abs(p2[0] - p1[0]) < 1.0e-9 and abs(p2[1] - p1[1]) < 1.0e-9:
             return (True, None)
+        if geom:
+            self._add_geom_seg(wp, p1, p2)
+            return (True, 'seg')
         wp.cseg(p1, p2)
         return (True, 'cseg')
 
-    def _project_edge_onto_wp(self, wp, edge, verbose=False):
+    def _project_edge_onto_wp(self, wp, edge, verbose=False, geom=False):
         """Project one TopoDS edge onto the active wp. Returns
         'cseg', 'ccirc', 'carc', or None (skipped). verbose=True
-        prints the edge's curve type (single-edge pick)."""
+        prints the edge's curve type (single-edge pick).
+
+        geom=True (Session 181, Doug's Linn Cove viaduct loft: the
+        construction elements are not profile geometry, so a loft never
+        saw them): the same projection, but the result is PROFILE
+        geometry -- a line, circle or arc -- returned as 'seg', 'circ'
+        or 'arc'. An element already on the workplane (same ends /
+        centre and radius) is not added twice, so projecting two
+        neighbouring faces, or one face twice, leaves no doubled
+        edges."""
         from OCP.BRepAdaptor import BRepAdaptor_Curve
         from OCP.GeomAbs import GeomAbs_CurveType
         from snap_engine import _elslib
@@ -258,6 +271,9 @@ class M2D:
                 if abs(u2 - u1) < 1.0e-9 and abs(v2 - v1) < 1.0e-9:
                     return None  # edge perpendicular to wp: projects
                     # to a point
+                if geom:
+                    self._add_geom_seg(wp, (u1, v1), (u2, v2))
+                    return 'seg'
                 wp.cseg((u1, v1), (u2, v2))
                 return 'cseg'
             if ctype == GeomAbs_CurveType.GeomAbs_Circle:
@@ -271,7 +287,7 @@ class M2D:
                         # edge-on: projects to a straight line, one
                         # diameter long (Session 135)
                         straight, kind = self._project_edge_as_segment(
-                            wp, crv)
+                            wp, crv, geom=geom)
                         if straight:
                             return kind
                     print(f"[proj]   skipped circle: oblique "
@@ -280,6 +296,9 @@ class M2D:
                 u, v = _elslib("Parameters")(wp.gpPlane, c.Location())
                 span = abs(crv.LastParameter() - crv.FirstParameter())
                 if span >= 2.0 * _m.pi - 1.0e-3:
+                    if geom:
+                        self._add_geom_circle(wp, (u, v), c.Radius())
+                        return 'circ'
                     wp.circle((u, v), c.Radius(), constr=True)
                     return 'ccirc'
                 # PARTIAL arc (Session 63, Doug: a full c-circle from
@@ -287,6 +306,9 @@ class M2D:
                 # construction ARC, angles measured in UV about the
                 # projected center from sampled points.
                 a0, a1 = self._arc_angles_from_samples(wp, crv, (u, v))
+                if geom:
+                    self._add_geom_arc(wp, (u, v), c.Radius(), a0, a1)
+                    return 'arc'
                 wp.carc((u, v), c.Radius(), a0, a1)
                 return 'carc'
             # Fall-through (Session 63, Doug's plate): hole arcs can
@@ -301,7 +323,8 @@ class M2D:
             # end-to-end chord test could not see the closed case, and
             # the circle fit below then turned its near-collinear
             # samples into a huge-radius arc.)
-            straight, kind = self._project_edge_as_segment(wp, crv)
+            straight, kind = self._project_edge_as_segment(wp, crv,
+                                                           geom=geom)
             if straight:
                 return kind
             f0, f1 = crv.FirstParameter(), crv.LastParameter()
@@ -324,6 +347,16 @@ class M2D:
                 # gigantic circle that "verifies" trivially)
                 if ok and 1.0e-6 < rad < 1.0e3 * max(ext, 1.0e-6):
                     a0, a1, span = self._uv_arc_span(uvs, ctr)
+                    if span >= 2.0 * _m.pi - 5.0e-2 and geom:
+                        self._add_geom_circle(
+                            wp, (round(ctr[0], 9), round(ctr[1], 9)),
+                            round(rad, 9))
+                        return 'circ'
+                    if geom:
+                        self._add_geom_arc(
+                            wp, (round(ctr[0], 9), round(ctr[1], 9)),
+                            round(rad, 9), a0, a1)
+                        return 'arc'
                     if span >= 2.0 * _m.pi - 5.0e-2:
                         # full circle -- dedupe (0.1um apart is the
                         # same hole)
@@ -345,6 +378,44 @@ class M2D:
         except Exception as pe:
             print(f"[proj]   edge projection raised: {pe}")
         return None
+
+    # --- profile-geometry adders for the geometry projection tools
+    # (Session 181). Each skips an element that is already there.
+    @staticmethod
+    def _uv_near(a, b, tol=1.0e-6):
+        return abs(a[0] - b[0]) < tol and abs(a[1] - b[1]) < tol
+
+    def _add_geom_seg(self, wp, p1, p2):
+        for prim, _edge in wp._elements:
+            if prim["type"] != "line":
+                continue
+            a, b = prim["p1"], prim["p2"]
+            if ((self._uv_near(a, p1) and self._uv_near(b, p2))
+                    or (self._uv_near(a, p2) and self._uv_near(b, p1))):
+                return
+        wp.line(p1, p2)
+
+    def _add_geom_circle(self, wp, ctr, rad):
+        for prim, _edge in wp._elements:
+            if (prim["type"] == "circle"
+                    and self._uv_near(prim["c"], ctr)
+                    and abs(prim["r"] - rad) < 1.0e-6):
+                return
+        wp.circle(ctr, rad)
+
+    def _add_geom_arc(self, wp, ctr, rad, a0, a1):
+        """Arc about ctr from angle a0 to a1 (CCW, radians from +U), as
+        the centre + start + end form arcc2p wants."""
+        import math as _m
+        ps = (ctr[0] + rad * _m.cos(a0), ctr[1] + rad * _m.sin(a0))
+        pe = (ctr[0] + rad * _m.cos(a1), ctr[1] + rad * _m.sin(a1))
+        for prim, _edge in wp._elements:
+            if (prim["type"] == "arcc2p"
+                    and self._uv_near(prim["pc"], ctr)
+                    and self._uv_near(prim["ps"], ps)
+                    and self._uv_near(prim["pe"], pe)):
+                return
+        wp.arcc2p(ctr, ps, pe)
 
     def _uv_arc_span(self, uvs, ctr):
         """Angles (a0, a1 stored CCW) and span of an arc from its
@@ -399,9 +470,9 @@ class M2D:
                     wp.carcs.remove(a)
                 wp.circle((key[0], key[1]), key[2], constr=True)
 
-    def _project_shape_edges(self, wp, shape):
+    def _project_shape_edges(self, wp, shape, geom=False):
         """Project every edge of shape (a face). Returns
-        (n_projected, n_skipped)."""
+        (n_projected, n_skipped). geom=True: as profile geometry."""
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopAbs import TopAbs_ShapeEnum
         n_proj = 0
@@ -417,7 +488,8 @@ class M2D:
             edge = TopoDS.Edge_s(exp.Current())
             if not any(edge.IsSame(e) for e in seen):
                 seen.append(edge)
-                if self._project_edge_onto_wp(wp, edge) is not None:
+                if self._project_edge_onto_wp(wp, edge,
+                                              geom=geom) is not None:
                     n_proj += 1
                 else:
                     n_skip += 1
@@ -437,25 +509,50 @@ class M2D:
             "Pick a face to project its edges onto the active "
             "workplane (middle-click to end).")
 
-    def projectFaceEdgesC(self, shapeList, *args):
+    def projectFaceEdgesC(self, shapeList, *args, geom=False):
         wp = self.win.activeWp
         if wp is None:
             return
         for shape in shapeList:
             if shape is None:
                 continue
-            n_proj, n_skip = self._project_shape_edges(wp, shape)
-            self._coalesce_carcs(wp)
-            print(f"[proj] {n_proj} projected, {n_skip} skipped; "
-                  f"wp: {len(wp.csegs)} cseg(s), "
-                  f"{len(wp.ccircs)} ccirc(s), "
-                  f"{len(wp.carcs)} carc(s)")
+            n_proj, n_skip = self._project_shape_edges(wp, shape,
+                                                       geom=geom)
+            if geom:
+                print(f"[proj] {n_proj} projected as geometry, "
+                      f"{n_skip} skipped; wp: "
+                      f"{len(wp._elements)} profile element(s)")
+            else:
+                self._coalesce_carcs(wp)
+                print(f"[proj] {n_proj} projected, {n_skip} skipped; "
+                      f"wp: {len(wp.csegs)} cseg(s), "
+                      f"{len(wp.ccircs)} ccirc(s), "
+                      f"{len(wp.carcs)} carc(s)")
             msg = (f"{n_proj} edge(s) projected"
+                   + (" as profile geometry" if geom else "")
                    + (f", {n_skip} skipped (oblique/unsupported)"
                       if n_skip else "")
                    + ". Pick another face (middle-click to end).")
             self.win.statusBar().showMessage(msg)
         self.win.draw_wp(self.win.activeWpUID)
+
+    def projectFaceEdgesGeom(self):
+        """Like Project Face Edges, but the edges become PROFILE
+        geometry (lines / circles / arcs), not construction elements
+        (Session 181)."""
+        if self.win.activeWp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane -- activate one first.", 4000)
+            return
+        self.win.registerCallback(self.projectFaceEdgesGeomC)
+        self.win.lineEdit.setFocus()
+        self.display.SetSelectionModeFace()
+        self.win.statusBar().showMessage(
+            "Pick a face to project its edges onto the active "
+            "workplane as profile geometry (middle-click to end).")
+
+    def projectFaceEdgesGeomC(self, shapeList, *args):
+        return self.projectFaceEdgesC(shapeList, *args, geom=True)
 
     def projectEdge(self):
         """Project a single picked edge onto the active wp."""
@@ -470,7 +567,7 @@ class M2D:
             "Pick an edge to project onto the active workplane "
             "(middle-click to end).")
 
-    def projectEdgeC(self, shapeList, *args):
+    def projectEdgeC(self, shapeList, *args, geom=False):
         wp = self.win.activeWp
         if wp is None:
             return
@@ -484,17 +581,36 @@ class M2D:
                 self.win.statusBar().showMessage(
                     "That pick wasn't an edge -- try again.", 3000)
                 continue
-            kind = self._project_edge_onto_wp(wp, edge, verbose=True)
+            kind = self._project_edge_onto_wp(wp, edge, verbose=True,
+                                              geom=geom)
             print(f"[proj] edge -> {kind}")
             if kind is not None:
                 self.win.statusBar().showMessage(
-                    f"Edge projected ({kind}). Pick another edge "
-                    "(middle-click to end).")
+                    f"Edge projected ({kind}"
+                    + (", profile geometry" if geom else "")
+                    + "). Pick another edge (middle-click to end).")
             else:
                 self.win.statusBar().showMessage(
                     "Edge skipped (oblique circle or unsupported "
                     "type). Pick another edge.", 4000)
         self.win.draw_wp(self.win.activeWpUID)
+
+    def projectEdgeGeom(self):
+        """Like Project Edge, but the edge becomes PROFILE geometry
+        (Session 181)."""
+        if self.win.activeWp is None:
+            self.win.statusBar().showMessage(
+                "No active workplane -- activate one first.", 4000)
+            return
+        self.win.registerCallback(self.projectEdgeGeomC)
+        self.win.lineEdit.setFocus()
+        self.display.SetSelectionModeEdge()
+        self.win.statusBar().showMessage(
+            "Pick an edge to project onto the active workplane as "
+            "profile geometry (middle-click to end).")
+
+    def projectEdgeGeomC(self, shapeList, *args):
+        return self.projectEdgeC(shapeList, *args, geom=True)
 
     def gesture_uv_from_args(self, args):
         """GESTURE INPUT (Session 62, the second input class): return
