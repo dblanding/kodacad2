@@ -1260,6 +1260,35 @@ class WorkPlane():
                       f"workplane -- Loft needs exactly one closed "
                       f"profile per workplane")
 
+    def profile_wires(self):
+        """Return (outer_wire, hole_wires, err) for ONE loft section
+        (Session 181, the hollow loft): the single top-level closed
+        loop, plus every loop directly inside it (depth 1) as a hole,
+        in drawing order. Like outer_profile_wire() it errors on no
+        profile, an open chain, or several separate outer loops; it
+        also errors on an island inside a hole (depth 2 or more),
+        which a loft cannot express yet."""
+        loops, err = self._chain_profile_loops()
+        if err is not None:
+            return None, [], err
+        wires, polys, err = self._loops_to_wires_and_polys(loops)
+        if err is not None:
+            return None, [], err
+        depth, _ = self._classify_loop_depth(polys)
+        outers = [w for w, d in zip(wires, depth) if d == 0]
+        if not outers:
+            return None, [], "no profile geometry on the workplane"
+        if len(outers) > 1:
+            return None, [], (f"{len(outers)} separate profiles found "
+                              f"on this workplane -- Loft needs exactly "
+                              f"one outer profile per workplane")
+        if any(d >= 2 for d in depth):
+            return None, [], ("a profile inside a hole (an island) -- "
+                              "Loft handles an outer profile with holes, "
+                              "not islands")
+        holes = [w for w, d in zip(wires, depth) if d == 1]
+        return outers[0], holes, None
+
     def make_faces(self):
         """MULTI-PROFILE face builder (Session 63, the Mill/Pull
         dialog): chain edgeList into closed loops by endpoint

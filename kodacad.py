@@ -522,6 +522,26 @@ def makeWpSet():
     show_wp_set_dialog(win)
 
 
+def _loft_solid(wires):
+    """ThruSections solid through `wires` -> (shape, None) or (None,
+    message). OCCT's own point correspondence (CheckCompatibility);
+    IsDone() alone is not trusted, the shape is checked (Session 103)."""
+    ts = BRepOffsetAPI_ThruSections(True, False)  # isSolid, ruled=False
+    ts.CheckCompatibility(True)
+    for w in wires:
+        ts.AddWire(w)
+    try:
+        ts.Build()
+    except Exception as e:
+        return None, str(e)
+    if not ts.IsDone():
+        return None, "BRepOffsetAPI_ThruSections did not complete"
+    shape = ts.Shape()
+    if not BRepCheck_Analyzer(shape).IsValid():
+        return None, "result shape is not valid"
+    return shape, None
+
+
 def loftWpSet():
     """Loft through the profiles sketched on every workplane in a
     Workplane Set, in the set's own spacing order, producing one
@@ -534,9 +554,8 @@ def loftWpSet():
     Set node ('s1') or one of its workplanes, else from the ACTIVE
     workplane's set (Session 133); then choose Create/Modify -> Loft. Each member
     workplane must have exactly one closed profile sketched on it
-    (WorkPlane.outer_profile_wire() -- holes/multiple profiles per
-    plane aren't supported yet, same "simple and lean first" call
-    Doug made for Workplane Sets themselves).
+    (WorkPlane.profile_wires(): one outer loop, plus optional holes --
+    the same number on every workplane; Session 181).
 
     Uses BRepOffsetAPI_ThruSections(isSolid=True, ruled=False) with
     CheckCompatibility(True) -- OCCT's own automatic point
@@ -591,7 +610,13 @@ def loftWpSet():
             f"to loft.", 5000)
         return
 
-    wires = []
+    # Session 181 (hollow loft): each workplane gives an OUTER profile
+    # and its holes. The outer profiles are lofted into one solid; the
+    # k-th hole of every workplane is lofted into a "core" and cut out.
+    # Every workplane must have the same number of holes (matched in
+    # drawing order).
+    outers = []
+    holes_per_wp = []
     for wp_uid in wp_uids:
         wp = win.wp_dict.get(wp_uid)
         if wp is None:
@@ -599,34 +624,48 @@ def loftWpSet():
                 f"'{wp_uid}' is missing from the set -- aborting "
                 f"Loft.", 5000)
             return
-        wire, err = wp.outer_profile_wire()
+        outer, holes, err = wp.profile_wires()
         if err is not None:
             win.statusBar().showMessage(
                 f"Loft aborted -- {wp_uid}: {err}", 8000)
             return
-        wires.append(wire)
+        outers.append(outer)
+        holes_per_wp.append(holes)
+    n_holes = len(holes_per_wp[0])
+    for wp_uid, holes in zip(wp_uids, holes_per_wp):
+        if len(holes) != n_holes:
+            win.statusBar().showMessage(
+                f"Loft aborted -- {wp_uid} has {len(holes)} hole(s) "
+                f"but {wp_uids[0]} has {n_holes}; every workplane "
+                f"needs the same number.", 8000)
+            return
 
-    ts = BRepOffsetAPI_ThruSections(True, False)  # isSolid, ruled=False
-    ts.CheckCompatibility(True)
-    for w in wires:
-        ts.AddWire(w)
-    try:
-        ts.Build()
-    except Exception as e:
-        win.statusBar().showMessage(f"Loft failed: {e}", 8000)
+    tool, err = _loft_solid(outers)
+    if err:
+        win.statusBar().showMessage(f"Loft failed -- {err}", 8000)
         return
-    if not ts.IsDone():
-        win.statusBar().showMessage(
-            "Loft failed -- BRepOffsetAPI_ThruSections did not "
-            "complete.", 8000)
-        return
-    tool = ts.Shape()
-    if not BRepCheck_Analyzer(tool).IsValid():
-        # Session 103's own standing finding, still honored: IsDone()
-        # == True alone isn't trustworthy -- check the actual shape.
-        win.statusBar().showMessage(
-            "Loft failed -- result shape is not valid.", 8000)
-        return
+    for k in range(n_holes):
+        core, err = _loft_solid([h[k] for h in holes_per_wp])
+        if err:
+            win.statusBar().showMessage(
+                f"Loft failed -- hole {k + 1}: {err}", 8000)
+            return
+        try:
+            cut = BRepAlgoAPI_Cut(tool, core)
+            cut.Build()
+            if not cut.IsDone():
+                raise RuntimeError("cut not done")
+            tool = cut.Shape()
+        except Exception as e:
+            win.statusBar().showMessage(
+                f"Loft failed -- cutting hole {k + 1}: {e}", 8000)
+            return
+        if not BRepCheck_Analyzer(tool).IsValid():
+            win.statusBar().showMessage(
+                f"Loft failed -- result is not valid after hole "
+                f"{k + 1}.", 8000)
+            return
+    wires = outers
 
     uid = win.activePartUID
     part = win.activePart
@@ -652,7 +691,8 @@ def loftWpSet():
     _redraw_after_shape_replace(ref_entry, old_uids)
     win.setActivePart(uid)
     win.statusBar().showMessage(
-        f"Loft complete through {len(wires)} profiles in '{set_uid}' "
+        f"Loft complete through {len(wires)} profiles in '{set_uid}'"
+        f"{f' with {n_holes} hole(s)' if n_holes else ''} "
         f"(Ctrl+Z undoes).", 6000)
 
 
