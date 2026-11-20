@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                QComboBox, QLineEdit, QCheckBox,
                                QGridLayout)
 
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut
+import safe_boolean
 from OCP.GProp import GProp_GProps
 from OCP.BRepGProp import BRepGProp
 from OCP.TopExp import TopExp_Explorer
@@ -299,12 +299,13 @@ class BooleanDialog(QDialog):
                 tool = dm.part_dict[t]['shape']
                 tname = self._name(t)
                 if subtracting:
-                    op = BRepAlgoAPI_Cut(newPart, tool)
-                    if not op.IsDone():
-                        self._say(f"Subtract of '{tname}' failed -- the "
-                                  f"parts could not be combined.")
+                    res, msg = safe_boolean.run_boolean(
+                        "cut", newPart, tool, parent=win,
+                        label=f"Subtracting '{tname}'...")
+                    if res is None:
+                        self._say(f"'{tname}': {msg}")
                         return
-                    newPart = op.Shape()
+                    newPart = res
                     if _count(newPart, TopAbs_FACE) == 0:
                         self._say("Subtract would remove the entire "
                                   "blank -- nothing changed.")
@@ -312,12 +313,13 @@ class BooleanDialog(QDialog):
                 elif _count(newPart, TopAbs_FACE) == 0:
                     newPart = tool
                 else:
-                    op = BRepAlgoAPI_Fuse(newPart, tool)
-                    if not op.IsDone():
-                        self._say(f"Fuse of '{tname}' failed -- the "
-                                  f"parts could not be combined.")
+                    res, msg = safe_boolean.run_boolean(
+                        "fuse", newPart, tool, parent=win,
+                        label=f"Fusing '{tname}'...")
+                    if res is None:
+                        self._say(f"'{tname}': {msg}")
                         return
-                    newPart = op.Shape()
+                    newPart = res
         except Exception as e:
             self._say(f"{verb} failed: {e}")
             return
