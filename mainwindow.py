@@ -2706,6 +2706,15 @@ class MainWindow(QMainWindow):
         """Fit all displayed parts and wp's to the screen"""
         self.canvas._display.FitAll()
 
+    def levelView(self):
+        """Utility -> Level View: roll the view so world Z is up on
+        screen (Session 181)."""
+        if self.canvas.level_view():
+            self.statusBar().showMessage("View leveled (Z up).", 4000)
+        else:
+            self.statusBar().showMessage(
+                "Level View: not possible while looking along Z.", 5000)
+
     def redraw_after_shape_replace(self, ref_entry, old_uids):
         """After dm.replace_shape() (which calls parse_doc()), rebuild
         the tree and redraw the modified part AND every other instance

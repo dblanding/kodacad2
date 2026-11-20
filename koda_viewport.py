@@ -260,6 +260,11 @@ class KodaViewport(QWidget):
         self.on_middle_click = None
         self._drag_threshold = 4.0
         self._rmb_press_pos = None
+        # Spin (roll about the screen normal): MMB drag that STARTS in
+        # the outer ring of the view (Session 181, Doug). Not forwarded
+        # to AIS_ViewController, so it never orbits.
+        self._spin_active = False
+        self._spin_last = None
 
         # AIS_Manipulator ("Dynamic" Position method) state -- None
         # when not in dynamic-move mode. Ported from Basicad's
@@ -886,9 +891,79 @@ class KodaViewport(QWidget):
                     print(f"[manipulator] StartTransform failed: {e}")
             self._manip_dragging = False
 
+        # Plain MMB pressed in the outer ring: spin, not orbit.
+        if (event.button() == Qt.MouseButton.MiddleButton
+                and not (event.modifiers()
+                         & (Qt.KeyboardModifier.ControlModifier
+                            | Qt.KeyboardModifier.ShiftModifier))
+                and self._in_spin_ring(event.position())):
+            self._spin_active = True
+            self._spin_last = self._spin_angle(event.position())
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
         pt = self._vec2i(event.position())
         self._vc.UpdateMouseButtons(pt, self._qt_buttons_to_occt(event.buttons()), self._qt_modifiers_to_occt(event.modifiers()), False)
         self._flush()
+
+    # ── Spin (roll about the screen normal) and Level View ──────────────
+
+    SPIN_RING = 0.08      # ring width: fraction of the shorter side
+
+    def _in_spin_ring(self, pos):
+        w, h = self.width(), self.height()
+        m = min(w, h) * self.SPIN_RING
+        x, y = pos.x(), pos.y()
+        return x < m or y < m or x > w - m or y > h - m
+
+    def _spin_angle(self, pos):
+        """Angle (radians, counter-clockwise on screen) of `pos` about
+        the centre of the view."""
+        import math
+        return math.atan2(-(pos.y() - self.height() / 2.0),
+                          pos.x() - self.width() / 2.0)
+
+    def spin_view(self, delta):
+        """Turn the picture counter-clockwise by `delta` radians about
+        the line of sight (the camera's up vector turns the other way,
+        i.e. by +delta about the view direction). Never raises."""
+        if self.view is None:
+            return False
+        try:
+            from OCP.gp import gp_Ax1, gp_Pnt
+            cam = self.view.Camera()
+            d = cam.Direction()
+            up = cam.Up().Rotated(gp_Ax1(gp_Pnt(0, 0, 0), d), delta)
+            cam.SetUp(up)
+            self.view.Redraw()
+            self.update()
+            return True
+        except Exception as e:
+            print(f"[spin] failed: {e}")
+            return False
+
+    def level_view(self):
+        """Roll the view so world +Z points up on screen, keeping the
+        viewing direction (Session 181). Returns False (and does
+        nothing) when looking along Z, where 'up' is undefined."""
+        if self.view is None:
+            return False
+        try:
+            from OCP.gp import gp_Dir
+            cam = self.view.Camera()
+            d = cam.Direction()
+            dz = d.Z()
+            if abs(dz) > 0.9999:
+                return False
+            # world Z with its component along the view direction removed
+            ux, uy, uz = -dz * d.X(), -dz * d.Y(), 1.0 - dz * dz
+            cam.SetUp(gp_Dir(ux, uy, uz))
+            self.view.Redraw()
+            self.update()
+            return True
+        except Exception as e:
+            print(f"[level view] failed: {e}")
+            return False
 
     def mouseMoveEvent(self, event):
         if self._press_pos is not None:
@@ -907,6 +982,15 @@ class KodaViewport(QWidget):
                     cb(event.position().x(), event.position().y())
                 except Exception:
                     pass
+
+        if self._spin_active:
+            import math
+            a = self._spin_angle(event.position())
+            d = a - self._spin_last
+            d = (d + math.pi) % (2.0 * math.pi) - math.pi   # wrap
+            self._spin_last = a
+            self.spin_view(d)
+            return
 
         if self._manip_dragging and self._manipulator is not None:
             x, y = int(event.position().x()), int(event.position().y())
@@ -982,6 +1066,22 @@ class KodaViewport(QWidget):
                 pass
 
     def mouseReleaseEvent(self, event):
+        if (self._spin_active
+                and event.button() == Qt.MouseButton.MiddleButton):
+            self._spin_active = False
+            self._spin_last = None
+            self.unsetCursor()
+            # a middle CLICK (no drag) still ends the operation
+            if (self._press_pos is not None
+                    and self._drag_distance < self._drag_threshold
+                    and self.on_middle_click is not None):
+                try:
+                    self.on_middle_click()
+                except Exception:
+                    pass
+            self._press_pos = None
+            self._drag_distance = 0.0
+            return
         if (event.button() == Qt.MouseButton.LeftButton
                 and self._manip_dragging and self._manipulator is not None):
             final_delta = None

@@ -3986,6 +3986,7 @@ if __name__ == "__main__":
     win.add_function_to_menu("Utility", "set Units ->mm", setUnits_mm)
     win.add_function_to_menu("Utility", "set Units ->ft", setUnits_ft)
     win.add_function_to_menu("Utility", "set Units ->m", setUnits_m)
+    win.add_function_to_menu("Utility", "Level View (Z up)", win.levelView)
 
     # Session 179 (Doug): the View Cube now covers the view directions,
     # so the RMB menu entry is just 'Fit' (no 'Draw' submenu).
