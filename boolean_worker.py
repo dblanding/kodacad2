@@ -33,6 +33,14 @@ OPS = {"fuse": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut,
 
 
 def main(op_name, a_path, b_path, out_path):
+    # Test hook: KODACAD_BOOLEAN_TEST_SLEEP=<seconds> makes every Boolean
+    # wait first, to try the busy box / Cancel / time limit without
+    # needing a genuinely slow Boolean.
+    import os
+    import time
+    delay = os.environ.get("KODACAD_BOOLEAN_TEST_SLEEP")
+    if delay:
+        time.sleep(float(delay))
     a, b = TopoDS_Shape(), TopoDS_Shape()
     if not BRepTools.Read_s(a, a_path, BRep_Builder()) or \
             not BRepTools.Read_s(b, b_path, BRep_Builder()):
@@ -41,7 +49,13 @@ def main(op_name, a_path, b_path, out_path):
         return
     op = OPS[op_name](a, b)
     done = bool(op.IsDone())
-    errors = bool(op.HasErrors())
+    # HasErrors() is not exposed on every OCP build's Boolean classes
+    # (Doug's: AttributeError) -- IsDone() plus a valid, non-null result
+    # is what the caller relies on; the flag is informational only.
+    try:
+        errors = bool(op.HasErrors())
+    except Exception:
+        errors = False
     res = op.Shape() if done else None
     null = res is None or res.IsNull()
     if not null:
