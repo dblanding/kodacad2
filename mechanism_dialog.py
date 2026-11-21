@@ -40,8 +40,9 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QDialog, QDoubleSpinBox, QFileDialog,
-                               QHBoxLayout, QLabel, QPushButton, QSlider,
+from PySide6.QtWidgets import (QApplication, QDialog, QDoubleSpinBox,
+                               QFileDialog, QHBoxLayout, QLabel,
+                               QProgressDialog, QPushButton, QSlider,
                                QVBoxLayout)
 
 import trace_math
@@ -179,12 +180,18 @@ class MechanismDialog(QDialog):
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.clicked.connect(self._reset)
         btns.addWidget(self.reset_btn)
+        self.video_btn = QPushButton("Export video...")
+        self.video_btn.setToolTip(
+            "Record the whole motion as an .mp4 (1280 x 720, 30 fps); "
+            "a pingpong mechanism goes forward and back. Needs ffmpeg.")
+        self.video_btn.clicked.connect(self._export_video)
+        btns.addWidget(self.video_btn)
         self.done_btn = QPushButton("⏹ Done")
         self.done_btn.clicked.connect(self.close)
         btns.addWidget(self.done_btn)
         for b in (self.load_btn, self.reload_btn, self.play_btn,
                   self.reset_btn, self.done_btn, self.trace_btn,
-                  self.clear_trace_btn):
+                  self.clear_trace_btn, self.video_btn):
             b.setAutoDefault(False)
             b.setDefault(False)
         lay.addLayout(btns)
@@ -480,6 +487,109 @@ class MechanismDialog(QDialog):
         elif v > self.slider.maximum():
             v = self.slider.minimum()
         self.slider.setValue(v)
+
+    # ---- video -----------------------------------------------------
+    @staticmethod
+    def _dump_frame(view, path):
+        """Write the viewer's current picture to the PNG `path`
+        (window size; ffmpeg fits it to 1280 x 720 afterwards).
+        Raises RuntimeError with what went wrong."""
+        view.Redraw()
+        errors = []
+        try:
+            view.Dump(path)
+        except Exception as e:
+            errors.append(f"View.Dump: {type(e).__name__}: {e}")
+        if not os.path.exists(path):
+            try:                      # fallback: render to a pixmap
+                from OCP.Image import Image_AlienPixMap
+                pm = Image_AlienPixMap()
+                w, h = view.Window().Size()
+                if view.ToPixMap(pm, w, h):
+                    pm.Save(path)
+            except Exception as e:
+                errors.append(f"ToPixMap: {type(e).__name__}: {e}")
+        if not os.path.exists(path):
+            raise RuntimeError("could not capture a frame ("
+                               + "; ".join(errors or ["no file written"])
+                               + ")")
+
+    def _export_video(self):
+        """Move through the whole motion, capture a PNG per frame and
+        let ffmpeg make an .mp4 (Session 181)."""
+        import subprocess
+        import tempfile
+        import video_export as ve
+        if self._mod is None:
+            return
+        ffmpeg = ve.find_ffmpeg()
+        if not ffmpeg:
+            self.status_label.setText(
+                "Export video needs ffmpeg, which was not found. On "
+                "Ubuntu: sudo apt install ffmpeg")
+            return
+        base = os.path.splitext(os.path.basename(self._path))[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export video",
+            os.path.join(os.path.dirname(self._path), base + ".mp4"),
+            "MP4 video (*.mp4)")
+        if not path:
+            return
+        if not path.lower().endswith(".mp4"):
+            path += ".mp4"
+        self._stop_play()
+        lo, hi = self._range
+        units_per_s = float(getattr(self._mod, "VIDEO_UNITS_PER_SECOND",
+                                    30.0))
+        pingpong = getattr(self._mod, "LOOP", "wrap") == "pingpong"
+        thetas = ve.frame_values(lo, hi, units_per_s, ve.FPS, 0.5,
+                                 pingpong)
+        keep = self.slider.value()
+        view = self.win.canvas.view
+        prog = QProgressDialog("Capturing frames...", "Cancel", 0,
+                               len(thetas), self)
+        prog.setWindowTitle("Export video")
+        prog.setWindowModality(Qt.WindowModality.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+        message = ""
+        try:
+            with tempfile.TemporaryDirectory(prefix="kodacad_video_") as td:
+                for i, th in enumerate(thetas):
+                    if prog.wasCanceled():
+                        message = "Export cancelled."
+                        break
+                    self._apply(th)
+                    QApplication.processEvents()
+                    self._dump_frame(
+                        view, os.path.join(td, f"frame_{i + 1:05d}.png"))
+                    prog.setLabelText(f"Capturing frame {i + 1} of "
+                                      f"{len(thetas)}...")
+                    prog.setValue(i + 1)
+                if not message:
+                    prog.setLabelText("Encoding the video...")
+                    prog.setMaximum(0)         # busy indicator
+                    QApplication.processEvents()
+                    r = subprocess.run(
+                        ve.ffmpeg_command(ffmpeg, td, path),
+                        capture_output=True, text=True, timeout=900)
+                    if r.returncode != 0:
+                        message = ("ffmpeg failed: "
+                                   + (r.stderr or "").strip()[-300:])
+                    else:
+                        message = (f"Video written: {path} "
+                                   f"({len(thetas)} frames, "
+                                   f"{len(thetas) / ve.FPS:.1f} s)")
+        except Exception as e:
+            message = f"Export failed: {type(e).__name__}: {e}"
+            print(f"[video] {message}")
+        finally:
+            prog.reset()
+            prog.close()
+            self.slider.setValue(keep)
+        self.status_label.setText(message)
+        self.win.statusBar().showMessage(message, 8000)
 
     def closeEvent(self, event):
         self._stop_play()

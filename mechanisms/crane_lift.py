@@ -22,7 +22,7 @@ mechanism: nothing in the model changes.
 WHAT YOU MAY HAVE TO ADJUST (mm / degrees):
     SWING_DEG   + is counter-clockwise seen from above (+Z). The rotor
                 starts 55 deg CW of nominal and ends 45 deg CCW: 100.
-    SPIN_DEG    - is clockwise; about -10 to match the truck.
+    SPIN_DEG    - is clockwise; -15 matches the truck.
     LIFT        None = measured: the height of the copied lower load lines
                 (Rigging-lower_1/rope-pair_1). Type a number to override.
     LOWER       None = LOWER_FRACTION of the lift (the truck is higher
