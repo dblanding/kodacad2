@@ -57,21 +57,28 @@ class _Ctx:
     def __init__(self, dlg):
         self._dlg = dlg
 
+    def bbox(self, key):
+        """(xmin, ymin, zmin, xmax, ymax, zmax) in mm of everything the
+        PARTS-style `key` names (a part name, an assembly name -- all
+        parts beneath it -- or a 'parent / child' path), as displayed."""
+        roles, missing = self._dlg._resolve_parts({key: 1})
+        if missing:
+            raise KeyError(f"nothing named '{key}'")
+        box = Bnd_Box()
+        for uid in roles:
+            ais = self._dlg.win.ais_shape_dict.get(uid)
+            if ais is not None:
+                BRepBndLib.Add_s(ais.Shape(), box)
+        if box.IsVoid():
+            raise KeyError(f"'{key}' is not displayed")
+        lo, hi = box.CornerMin(), box.CornerMax()
+        return (lo.X(), lo.Y(), lo.Z(), hi.X(), hi.Y(), hi.Z())
+
     def center(self, part_name):
         """Centre (x, y, z) in mm of the bounding box of the displayed
-        part called part_name."""
-        uids = self._dlg._uids_named(part_name)
-        if not uids:
-            raise KeyError(f"no part named '{part_name}'")
-        ais = self._dlg.win.ais_shape_dict.get(uids[0])
-        if ais is None:
-            raise KeyError(f"part '{part_name}' is not displayed")
-        box = Bnd_Box()
-        BRepBndLib.Add_s(ais.Shape(), box)
-        lo, hi = box.CornerMin(), box.CornerMax()
-        return ((lo.X() + hi.X()) / 2.0, (lo.Y() + hi.Y()) / 2.0,
-                (lo.Z() + hi.Z()) / 2.0)
-
+        part (or assembly / path) called part_name."""
+        x0, y0, z0, x1, y1, z1 = self.bbox(part_name)
+        return ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0)
 
     def holes(self, part_name, radius=None, tol=1.0e-3):
         """Axis points (x, y, z) of the cylindrical faces of the
@@ -107,6 +114,7 @@ class MechanismDialog(QDialog):
         self.setWindowTitle("Animate Mechanism")
         self.setModal(False)
         self._mod = None
+        self._roles_map = {}
         self._path = DEFAULT_FILE
         self._axes = {}
         self._moved = set()           # uids currently displaced
@@ -216,7 +224,7 @@ class MechanismDialog(QDialog):
             return
         self.setWindowTitle(f"Animate Mechanism - "
                             f"{getattr(mod, 'NAME', 'mechanism')}")
-        missing = [n for n in mod.PARTS if not self._uids_named(n)]
+        self._roles_map, missing = self._resolve_parts(mod.PARTS)
         if missing:
             names = sorted({dm.part_dict[u].get("name", "?")
                             for u in dm.part_dict})
@@ -252,6 +260,42 @@ class MechanismDialog(QDialog):
             if w is not None:
                 w.setVisible(on)
         self.trace_label.setVisible(on)
+
+    def _chain_names(self, uid):
+        """Names from the part itself up to the root: [part, parent,
+        grandparent, ...]."""
+        names, cur, seen = [], uid, set()
+        while cur and cur in dm.label_dict and cur not in seen:
+            seen.add(cur)
+            names.append(dm.label_dict[cur].get("name") or "?")
+            cur = dm.label_dict[cur].get("parent_uid")
+        return names
+
+    def _resolve_parts(self, parts):
+        """({uid: role}, [keys that matched nothing]) for a PARTS dict
+        (Session 181). A key is a part name, an ASSEMBLY name (every
+        part beneath it), or a path 'rope-pair_1/rope_1' (a part inside
+        a named parent, to tell same-named parts apart). Where several
+        keys match a part the deepest (most specific) one wins, so
+        'rotor-asy_1' can swing everything and 'Rigging-lower_1'
+        override it for the load."""
+        segs = {k: [t.strip() for t in k.split("/")] for k in parts}
+        roles, matched = {}, set()
+        for uid in dm.part_dict:
+            chain = self._chain_names(uid)
+            best = None
+            for key, sg in segs.items():
+                n = len(sg)
+                for i in range(len(chain) - n + 1):
+                    if all(chain[i + j] == sg[n - 1 - j]
+                           for j in range(n)):
+                        if best is None or i < best[0]:
+                            best = (i, key)
+                        break
+            if best:
+                roles[uid] = parts[best[1]]
+                matched.add(best[1])
+        return roles, [k for k in parts if k not in matched]
 
     def _uids_named(self, part_name):
         return [u for u, d in dm.part_dict.items()
@@ -290,20 +334,29 @@ class MechanismDialog(QDialog):
             self.status_label.setText(f"{type(e).__name__}: {e}")
             return
         ctx = self.win.canvas._display.Context
-        for part_name, role in self._mod.PARTS.items():
+        trsfs = {}
+        for uid, role in self._roles_map.items():
             if role not in self._axes or role not in poses:
                 continue
-            loc = TopLoc_Location(self._trsf_for(role, poses[role]))
-            for uid in self._uids_named(part_name):
-                ais = self.win.ais_shape_dict.get(uid)
-                if ais is None:
-                    continue          # hidden or not drawn
-                ctx.SetLocation(ais, loc)
-                self._moved.add(uid)
+            if role not in trsfs:
+                trsfs[role] = TopLoc_Location(
+                    self._trsf_for(role, poses[role]))
+            ais = self.win.ais_shape_dict.get(uid)
+            if ais is None:
+                continue              # hidden or not drawn
+            ctx.SetLocation(ais, trsfs[role])
+            self._moved.add(uid)
         ctx.UpdateCurrentViewer()
         parts = ", ".join(f"{r} {p[0]:+.1f}\u00b0"
                           for r, p in poses.items())
-        self.angle_label.setText(f"Angle {theta:.1f}\u00b0   ({parts})")
+        if hasattr(self._mod, "describe"):
+            try:
+                self.angle_label.setText(str(self._mod.describe(theta)))
+            except Exception as e:
+                self.angle_label.setText(f"describe(): {e}")
+        else:
+            self.angle_label.setText(
+                f"Angle {theta:.1f}\u00b0   ({parts})")
         self.status_label.setText("")
 
     # ---- trace -----------------------------------------------------
