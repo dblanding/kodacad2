@@ -1,5 +1,38 @@
 """Single source of truth for the KodaCAD application version.
 
+2.5.0 -- 2026-11-21 (Sessions 176-181)
+* Built for the Linn Cove Viaduct model (one lofted deck through a
+  workplane every few segments), which also drove most of the rest:
+  - Project Edge / Project Face Edges AS GEOMETRY: two new 2D buttons
+    that put the projected edges on a workplane as profile geometry
+    (lines, circles, arcs), not just construction lines, with no
+    doubled edges. Profile edges that miss by up to 1e-4 are now
+    joined, so faces from imported STEP parts (stitched at ~3e-5) close.
+  - Make Workplane Set: select existing workplanes in the tree,
+    right-click -> a Workplane Set holding them in creation order.
+  - Loft makes HOLLOW sections: every workplane may carry holes (same
+    number on each); they are lofted and cut out.
+  - Making another workplane active ends the current 2D operation.
+* Create Array (tree right-click): Linear and Angular arrays of a part
+  or assembly, a Frame (World / Workplane / Pick) for the axis, a live
+  ghost preview and an RGB triad showing the axis.
+* Position: Frame = Pick (a gizmo on a picked cylinder, edge or flat
+  face).
+* View: MMB drag in the outer ring of the viewport spins the view about
+  the screen normal; Utility -> Level View (Z up); the View Cube changes
+  direction only (no fit) and RMB click is Fit.
+* Booleans run in a supervised worker (Boolean dialog): a Working box
+  with Cancel, a time limit and a memory limit, so a runaway Boolean
+  (equal-diameter round parts with crossing axes) is stopped instead of
+  freezing the computer. Pull and the Loft cut / fuse follow.
+* Dialogs in the new minimal style: Boolean, Pull, Defeaturing, Move
+  Face, Position, Shell, Color Faces, Create Array; the RPN calculator
+  can fill a dialog's numeric field. Workplanes can be named and are
+  numbered sequentially; an open profile marks where it is open.
+* Docs: tutorials/as1-oc-214/KNOWN_ISSUES.md explains why that test
+  assembly (all spline surfaces, loosely stitched) is a poor benchmark
+  for Defeaturing, Move Face, Shell and fillets.
+
 2.4.0 -- 2026-11-06 (Sessions 171-175)
 * Utility -> Animate Mechanism...: move the parts of an assembly with a
   slider to see how a mechanism works, park it in any pose, and trace
@@ -100,4 +133,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
