@@ -1859,12 +1859,16 @@ class DocModel:
             itr.Next()
         return None
 
-    def save_step_doc(self, *, fname=None):
+    def save_step_doc(self, *, fname=None, doc=None):
         """Export self.doc to STEP file. With fname=None, asks the user
         for a name; otherwise writes to fname without any dialog
         (Session 150: used by the .kcad session save). Keyword-only on
         purpose: a menu action's triggered(bool) must never be taken
-        for a file name."""
+        for a file name. `doc` (2026-11-22, export of one assembly)
+        writes some OTHER XCAF document instead of self.doc, through
+        the identical code path."""
+        if doc is None:
+            doc = self.doc
         if fname is None:
             prompt = 'Specify name for saved step file.'
             fname, __ = QFileDialog.getSaveFileName(
@@ -1882,7 +1886,7 @@ class DocModel:
         # corruption this round may be at any depth, not just top-level).
         from OCP.XCAFDoc import XCAFDoc_DocumentTool
         from OCP.TDF import TDF_Label, TDF_LabelSequence
-        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(self.doc.Main())
+        shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
 
         def _dump(label, depth):
             name = get_label_name(label)
@@ -1925,7 +1929,7 @@ class DocModel:
         # names from self.doc. If this ever prints for content
         # created THIS session, its output identifies a live
         # name-leak path worth fixing at source.
-        repair_unnamed_products(self.doc, context=" save")
+        repair_unnamed_products(doc, context=" save")
 
         WS = XSControl_WorkSession()
         # Disable PCURVE writing (Session 73, Doug's 2.5x STEP-save
@@ -1981,7 +1985,7 @@ class DocModel:
         # created in it at all has no real '/' label yet, since one
         # is only ever created lazily on first use -- is unaffected
         # by this and unrelated to the unwrap being removed here.
-        step_writer.Transfer(self.doc, STEPControl_AsIs)
+        step_writer.Transfer(doc, STEPControl_AsIs)
 
         # Customize the STEP header (Session 58, revised cont'd). The
         # first attempt produced OCCT's default header, silently --
@@ -2058,6 +2062,45 @@ class DocModel:
         except Exception:
             pass
         return True
+
+    def export_component_step(self, uid, fname):
+        """Write the assembly or part `uid` (and everything beneath it)
+        to its own STEP file, with its own frame at the ORIGIN
+        (2026-11-22, Doug: a saved assembly that was positioned far from
+        the origin in the model must come back at the origin when
+        loaded elsewhere). The component's placement in its parent is
+        simply not carried over: the referred prototype is rebuilt in a
+        fresh document with rebuild_imported_structure() (the same
+        validated route Load STEP uses, so names, child locations,
+        sharing inside the assembly and colours are kept) and that
+        document is written by the normal save_step_doc(). The model
+        itself is not touched. Returns (True, '') or (False, message)."""
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool
+        info = self.label_dict.get(uid)
+        if info is None:
+            return False, "unknown item"
+        ref_entry = info.get('ref_entry')
+        if not info.get('parent_uid') or not ref_entry:
+            return False, ("the root '/' cannot be saved this way -- use "
+                           "File > Export STEP for the whole model")
+        ref_label = self._find_label_by_entry(ref_entry)
+        if ref_label is None:
+            return False, "could not find the item's definition"
+        new_doc, new_app = create_doc()
+        try:
+            shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(new_doc.Main())
+            color_tool = XCAFDoc_DocumentTool.ColorTool_s(new_doc.Main())
+            top = rebuild_imported_structure(ref_label, shape_tool,
+                                             color_tool, {})
+            if not get_label_name(top):
+                set_label_name(top, info.get('name') or "exported")
+            ok = self.save_step_doc(fname=fname, doc=new_doc)
+        finally:
+            try:
+                new_app.Close(new_doc)
+            except Exception:
+                pass
+        return (True, "") if ok else (False, "the STEP writer failed")
 
     def open_doc(self):
         """Open a previously saved .xbf file (stub -- use load_stp_at_top instead)."""

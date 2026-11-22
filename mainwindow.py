@@ -960,6 +960,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Copy Part", self.copyPart)
         menu.addAction("Create Array...", self.createArray)
         menu.addAction("Make Workplane Set", self.makeWorkplaneSet)
+        menu.addAction("Save as STEP (at origin)...", self.saveItemAsStep)
         menu.addAction("Set Transparent", self.setTransparent)
         menu.addAction("Set Opaque", self.setOpaque)
         menu.addAction("Set Color...", self.setPartColor)
@@ -1902,6 +1903,48 @@ class MainWindow(QMainWindow):
             self._incremental_reconcile(old_uids)
         self.treeView.clearSelection()
         self.itemClicked = None
+
+    def saveItemAsStep(self):
+        """RMB: save the clicked assembly (or part) and everything
+        beneath it as its own STEP file, placed at the ORIGIN
+        regardless of where it sits in the model (2026-11-22, Doug:
+        as1-oc-214 loaded into the same model as a part 1000 ft away
+        -- a saved assembly should come back at the origin). The model
+        is not changed."""
+        import os
+        import re
+        from PySide6.QtWidgets import QFileDialog
+        from docmodel import ensure_step_extension
+        item = self._get_clicked_or_current_item()
+        if not item:
+            print("No item selected. Try first left clicking item then right clicking.")
+            return
+        uid = item.text(1)
+        info = dm.label_dict.get(uid)
+        self.itemClicked = None
+        if info is None or not info.get('parent_uid'):
+            self.statusBar().showMessage(
+                "Pick an assembly or part below '/' (use File > Export "
+                "STEP for the whole model).", 6000)
+            return
+        stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', info.get('name') or 'part')
+        fname, _ = QFileDialog.getSaveFileName(
+            self, f"Save '{info.get('name')}' as STEP",
+            f"./{stem}.stp", "STEP files (*.stp *.STP *.step *.STEP)")
+        if not fname:
+            return
+        fname = ensure_step_extension(fname)
+        try:
+            ok, msg = dm.export_component_step(uid, fname)
+        except Exception as e:
+            ok, msg = False, f"{type(e).__name__}: {e}"
+        if ok:
+            self.statusBar().showMessage(
+                f"Saved '{info.get('name')}' at the origin: "
+                f"{os.path.basename(fname)}", 8000)
+        else:
+            self.statusBar().showMessage(f"Save as STEP failed -- {msg}",
+                                         8000)
 
     def copyPart(self):
         """RMB: create a genuinely independent copy of the clicked
