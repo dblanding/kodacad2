@@ -54,8 +54,7 @@ except Exception as _e:   # logging must never stop the app starting
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder
-from OCP.BRepAlgoAPI import (BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse,
-                             BRepAlgoAPI_Defeaturing)
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Defeaturing
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import (BRepFilletAPI_MakeFillet,
                                BRepFilletAPI_MakeChamfer)
@@ -91,6 +90,7 @@ from OCCUtils import Topology
 import workplane
 from workplane import face_normal
 import isolated_features
+import safe_boolean
 import face_offset
 import offset_preview
 
@@ -650,15 +650,14 @@ def loftWpSet():
             win.statusBar().showMessage(
                 f"Loft failed -- hole {k + 1}: {err}", 8000)
             return
-        try:
-            cut = BRepAlgoAPI_Cut(tool, core)
-            cut.Build()
-            if not cut.IsDone():
-                raise RuntimeError("cut not done")
-            tool = cut.Shape()
-        except Exception as e:
+        # Guard rails: run in the supervised worker (busy box, Cancel,
+        # time/memory limits) so a runaway Boolean cannot freeze the app.
+        tool, msg = safe_boolean.run_boolean(
+            "cut", tool, core, parent=win,
+            label=f"Cutting hole {k + 1} out of the loft...")
+        if tool is None:
             win.statusBar().showMessage(
-                f"Loft failed -- cutting hole {k + 1}: {e}", 8000)
+                f"Loft failed -- cutting hole {k + 1}: {msg}", 8000)
             return
         if not BRepCheck_Analyzer(tool).IsValid():
             win.statusBar().showMessage(
@@ -676,12 +675,16 @@ def loftWpSet():
         exp.Next()
     part_is_empty = (n_faces == 0)
 
-    try:
-        newPart = (tool if part_is_empty
-                  else BRepAlgoAPI_Fuse(part, tool).Shape())
-    except Exception as e:
-        win.statusBar().showMessage(f"Loft fuse failed: {e}", 8000)
-        return
+    if part_is_empty:
+        newPart = tool
+    else:
+        newPart, msg = safe_boolean.run_boolean(
+            "fuse", part, tool, parent=win,
+            label="Adding the loft to the part...")
+        if newPart is None:
+            win.statusBar().showMessage(
+                f"Loft fuse failed: {msg}", 8000)
+            return
 
     ref_entry = dm.label_dict.get(uid, {}).get('ref_entry')
     old_uids = set(dm.part_dict.keys())

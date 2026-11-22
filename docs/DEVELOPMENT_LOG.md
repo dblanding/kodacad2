@@ -7711,3 +7711,8 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - (Doug: new log entries are headed by DATE rather than by session number -- easier to match against the git log.)
 - `pull_dialog.py`: its three Booleans now run through `safe_boolean.run_boolean` (worker process, busy box with Cancel, time and memory limits): the fuse of several profiles' prisms into one tool, Add Material (fuse part + tool) and Remove Material (cut tool from part). A refused or stopped Boolean says why in the dialog and changes nothing. The empty-part special case (the first prism becomes the part) needs no Boolean and is unchanged. `BRepAlgoAPI` is no longer imported there.
 - Left: the hollow loft's cut and the loft's fuse (kodacad.py), `face_offset.py`'s extrusion fallback; Common has no call site.
+
+### Boolean guard rails, step 3: Loft (Doug)
+- Pull dialog verified by Doug (all six tests; the worker's 0.1-0.3 s startup is not noticeable).
+- `kodacad.py` `loftWpSet()`: the hollow loft's cut of each hole core out of the outer loft, and the fuse of the lofted solid to a non-empty part, now run through `safe_boolean.run_boolean` (busy box, Cancel, time and memory limits). A refused or stopped Boolean reports in the status bar ('Loft failed -- cutting hole k: ...' / 'Loft fuse failed: ...') and changes nothing. Side effect: the loft fuse had no validity check at all before; the worker's success test (IsDone + non-null result) now applies. The existing `BRepCheck_Analyzer` check after each hole cut stays. `BRepAlgoAPI_Cut/Fuse` imports removed from kodacad.py (Defeaturing stays).
+- Left: `face_offset.py`'s extrusion fallback; Common has no call site.
