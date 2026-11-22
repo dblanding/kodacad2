@@ -56,7 +56,6 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
 import math
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
 from OCP.gp import gp_Ax1, gp_Dir, gp_Vec, gp_Trsf
@@ -64,6 +63,7 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 
 import docmodel
 import dialog_style
+import safe_boolean
 # dm is created in mainwindow (module-global there); importing it at
 # module level here would be circular-adjacent -- fetch lazily, same
 # precedent as the old, now-removed mill_pull_dialog.py.
@@ -552,8 +552,15 @@ class PullDialog(QDialog):
                         start = BRepBuilderAPI_Transform(
                             f, back, True).Shape()
                     piece = BRepPrimAPI_MakePrism(start, vec).Shape()
-                tool = piece if tool is None else \
-                    BRepAlgoAPI_Fuse(tool, piece).Shape()
+                if tool is None:
+                    tool = piece
+                else:
+                    tool, msg = safe_boolean.run_boolean(
+                        "fuse", tool, piece, parent=win,
+                        label="Combining the profiles...")
+                    if tool is None:
+                        self._say(msg)
+                        return
 
             # Session 90/91's own, verified fix: createEmptyPart()
             # means a part routinely starts genuinely empty (zero
@@ -578,9 +585,19 @@ class PullDialog(QDialog):
             elif part_is_empty:
                 newPart = tool
             elif adding:
-                newPart = BRepAlgoAPI_Fuse(part, tool).Shape()
+                newPart, msg = safe_boolean.run_boolean(
+                    "fuse", part, tool, parent=win,
+                    label="Adding material...")
+                if newPart is None:
+                    self._say(msg)
+                    return
             else:
-                newPart = BRepAlgoAPI_Cut(part, tool).Shape()
+                newPart, msg = safe_boolean.run_boolean(
+                    "cut", part, tool, parent=win,
+                    label="Removing material...")
+                if newPart is None:
+                    self._say(msg)
+                    return
         except Exception as be:
             self._say(f"Boolean failed: {be}")
             return

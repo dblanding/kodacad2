@@ -7704,3 +7704,10 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - Fix: `_mesh_deviation(shape)` in mainwindow.py = MESH_REL (1.5e-4) x bounding-box diagonal, clamped to MESH_MIN 0.001 .. MESH_MAX 2.0 mm (0.1 mm falls back if the size cannot be measured); draw_shape's pre-mesh uses it. Diagonal 7176 mm -> 1.08 mm (the 0.27 s case); 667 mm -> 0.1 mm (unchanged); smaller parts now finer than before, e.g. 200 mm -> 0.03 mm, 10 mm -> 0.0015 mm. Doug: small parts should scale the same way if it costs nothing, so MESH_MIN is 1 micron (not 0.02 mm); well above OCCT's 1e-7 tolerance. The angular deviation stays 0.5 rad, which governs small circles anyway.
 - Still open: NurbsConvert itself (2.4-3.4 s) and the 60,000 triangles the converted cylinders still need at 1 mm versus 760 for the analytic shape; the conversion exists only for the STEP-reader pick pathology (negative V range). Not touched.
 - Doug's summary, with one correction recorded: the slowness is display preparation, not the fuse; and what is converted is the cylinder WALLS (the analytic-selection workaround converts the whole part when > 30 % of its area is cylinder/cone faces with negative V range -- STEP-loaded geometry), not just the intersection edges.
+
+## 2026-11-22
+
+### Boolean guard rails, step 2: the Pull dialog (Doug)
+- (Doug: new log entries are headed by DATE rather than by session number -- easier to match against the git log.)
+- `pull_dialog.py`: its three Booleans now run through `safe_boolean.run_boolean` (worker process, busy box with Cancel, time and memory limits): the fuse of several profiles' prisms into one tool, Add Material (fuse part + tool) and Remove Material (cut tool from part). A refused or stopped Boolean says why in the dialog and changes nothing. The empty-part special case (the first prism becomes the part) needs no Boolean and is unchanged. `BRepAlgoAPI` is no longer imported there.
+- Left: the hollow loft's cut and the loft's fuse (kodacad.py), `face_offset.py`'s extrusion fallback; Common has no call site.
