@@ -3324,6 +3324,8 @@ class MainWindow(QMainWindow):
                 # keyed by source-shape identity (IsSame), so redraws
                 # reuse it; a changed/moved part self-invalidates and
                 # re-prepares alone.
+                _stg = {}                  # stage timings (s), shown if slow
+                _tm = _time.monotonic()
                 cached = self._display_prep_cache.get(uid)
                 if cached is not None and cached[0].IsSame(shape):
                     shape = cached[1]
@@ -3373,7 +3375,11 @@ class MainWindow(QMainWindow):
                                  f"mutations may leak into the saved "
                                  f"document")
                             self._copy_warned = True
+                    _stg["copy"] = _time.monotonic() - _tm
+                    _tm = _time.monotonic()
                     _needs_wa = _needs_analytic_workaround(shape)
+                    _stg["check"] = _time.monotonic() - _tm
+                    _tm = _time.monotonic()
                     if _needs_wa:
                         analytic_shape = shape  # the copy, pre-conversion --
                         # this is what shell()/fillet() should operate on
@@ -3383,6 +3389,8 @@ class MainWindow(QMainWindow):
                             nurbs_op = BRepBuilderAPI_NurbsConvert(
                                 shape, True)
                             shape = nurbs_op.Shape()
+                            _stg["nurbs"] = _time.monotonic() - _tm
+                            _tm = _time.monotonic()
                             # Session 91: build the surrogate-face ->
                             # analytic-face map right here, while nurbs_op
                             # (the operation object itself, not just its
@@ -3455,6 +3463,7 @@ class MainWindow(QMainWindow):
                                     eexp.Next()
                                 self._face_prep_map[uid] = (
                                     analytic_shape, face_pairs, edge_pairs)
+                                _stg["maps"] = _time.monotonic() - _tm
                             except Exception as fme:
                                 if not getattr(self, "_facemap_warned",
                                               False):
@@ -3492,6 +3501,7 @@ class MainWindow(QMainWindow):
                         # is the actual fix -- not a mapping-logic
                         # problem, a cache-invalidation one.
                         self._face_prep_map.pop(uid, None)
+                    _tm = _time.monotonic()
                     try:
                         from OCP.BRepMesh import BRepMesh_IncrementalMesh
                         BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5,
@@ -3500,6 +3510,7 @@ class MainWindow(QMainWindow):
                         if not getattr(self, "_mesh_warned", False):
                             print(f"[draw_shape] pre-mesh failed: {me}")
                             self._mesh_warned = True
+                    _stg["mesh"] = _time.monotonic() - _tm
                     self._display_prep_cache[uid] = (src_shape, shape)
                 _fc = self.face_colors.get(uid)
                 if _fc is not None and not _fc[0].IsSame(shape):
@@ -3608,6 +3619,25 @@ class MainWindow(QMainWindow):
                 print(f"[draw_shape] uid={uid!r} "
                      f"_needs_analytic_workaround={_wa_str} "
                      f"elapsed={_dt_shape:.2f}s")
+                # Session 181: WHERE the time went (a fused anchor took
+                # 19.5 s to draw). Stages that did not run are absent;
+                # 'display' is everything after the mesh (AIS object,
+                # Display, colours, Redisplay).
+                try:
+                    from OCP.TopExp import TopExp_Explorer as _TE
+                    from OCP.TopAbs import TopAbs_FACE as _TF
+                    _ex, _nf = _TE(shape, _TF), 0
+                    while _ex.More():
+                        _nf += 1
+                        _ex.Next()
+                except Exception:
+                    _nf = -1
+                _acc = sum(_stg.values())
+                _stages = ", ".join(f"{k} {v:.2f}s"
+                                    for k, v in _stg.items())
+                print(f"[draw_shape]   stages: {_stages or 'cached'}; "
+                     f"rest (display) {max(_dt_shape - _acc, 0.0):.2f}s; "
+                     f"{_nf} faces after conversion")
         context.UpdateCurrentViewer()
         self.canvas.update()
 
