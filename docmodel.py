@@ -2094,6 +2094,12 @@ class DocModel:
                                              color_tool, {})
             if not get_label_name(top):
                 set_label_name(top, info.get('name') or "exported")
+            # AddComponent does not refill the assembly's compound by
+            # itself; without this the writer sees an EMPTY assembly
+            # and writes only the product header (Doug's first try:
+            # hanger-asy_1.stp had no geometry). Every other place that
+            # builds structure calls it too.
+            shape_tool.UpdateAssemblies()
             ok = self.save_step_doc(fname=fname, doc=new_doc)
         finally:
             try:

@@ -7723,3 +7723,4 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - Origin = the assembly's OWN frame. If its children are themselves located far from that frame inside the assembly, the file will be far from the origin too; only the placement of the assembly in its parent (and above) is dropped.
 - Shared parts inside the exported assembly stay shared (memo). Not done: choice of keeping the world position.
 - UNTESTED with real OCP (offline: compiles only).
+- First real try (Doug, hanger-asy_1): the file held only the PRODUCT header, no geometry. Cause: `UpdateAssemblies()` was not called after the rebuild, so the new document's assembly compound was empty and the writer wrote just the product. Fixed (one line in `export_component_step`); lesson: every code path that builds structure with AddComponent needs it -- the other call sites all have it.
