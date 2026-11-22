@@ -402,6 +402,36 @@ def _clip_line_to_rect(cline, bounds):
     return best
 
 
+# Pre-mesh deviation for display (Session 181). It used to be a fixed
+# 0.1 mm. On a fused 15 ft / 8 in-bar part (7176 mm bounding diagonal)
+# the NurbsConvert'ed faces then took 16.7 s and 695,000 triangles
+# (probe_mesh_time.py); at 1 mm: 0.27 s, 60,000 triangles. So the
+# deviation is now proportional to the part's size, within limits.
+MESH_REL = 1.5e-4      # of the bounding-box diagonal (7176 mm -> 1.08 mm)
+MESH_MIN = 0.001       # mm (1 micron: parts down to ~7 mm scale alike;
+                       # OCCT's own tolerance is 1e-7, stay well above)
+MESH_MAX = 2.0         # mm
+
+
+def _mesh_deviation(shape):
+    """Absolute linear deviation (mm) for pre-meshing `shape`:
+    MESH_REL x bounding-box diagonal, kept within MESH_MIN..MESH_MAX.
+    Falls back to the old 0.1 mm if the size cannot be measured."""
+    try:
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+        box = Bnd_Box()
+        BRepBndLib.Add_s(shape, box, False)     # geometry, not a mesh
+        if box.IsVoid():
+            return 0.1
+        lo, hi = box.CornerMin(), box.CornerMax()
+        diag = ((hi.X() - lo.X()) ** 2 + (hi.Y() - lo.Y()) ** 2
+                + (hi.Z() - lo.Z()) ** 2) ** 0.5
+        return min(max(MESH_REL * diag, MESH_MIN), MESH_MAX)
+    except Exception:
+        return 0.1
+
+
 def _needs_analytic_workaround(shape):
     """True when the Session 60 pick pathology MATTERS for this part:
     pathological curved faces (cylinder/cone with negative V-range --
@@ -3504,8 +3534,9 @@ class MainWindow(QMainWindow):
                     _tm = _time.monotonic()
                     try:
                         from OCP.BRepMesh import BRepMesh_IncrementalMesh
-                        BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5,
-                                                 True)
+                        BRepMesh_IncrementalMesh(
+                            shape, _mesh_deviation(shape), False, 0.5,
+                            True)
                     except Exception as me:
                         if not getattr(self, "_mesh_warned", False):
                             print(f"[draw_shape] pre-mesh failed: {me}")
