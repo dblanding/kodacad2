@@ -1,5 +1,29 @@
 """Single source of truth for the KodaCAD application version.
 
+2.6.0 -- 2026-11-23
+* Booleans can no longer freeze KodaCAD anywhere: Pull (Add and Remove
+  Material) and the Loft's hollow-section cut and fuse now run in the
+  same supervised worker as the Boolean dialog (a Working box with
+  Cancel, a time limit and a memory limit). A refused or stopped
+  operation says why and changes nothing.
+* Tree right-click -> Save as STEP (at origin)...: writes a part or an
+  assembly to its own STEP file at the origin, with its structure,
+  names, colors and shared parts kept, so it can be used far from where
+  it sits in a big model.
+* Fixed: dragging an item onto '/' in the tree only moved the tree row;
+  the document was not changed, so a later delete took it away again.
+  It now re-parents in the document.
+* Animate Mechanism: PARTS keys may name an assembly (everything under
+  it) or a path such as 'rope-pair_1/rope_1', the most specific key
+  winning; a mechanism file may supply describe(theta) for a readout;
+  new example mechanisms/crane_lift.py; Export video... records the
+  motion as an .mp4 (needs ffmpeg).
+* Faster mesh-deviation check.
+* Docs refreshed for the minimal-style dialogs, Pull, Boolean, Loft and
+  arrays: README, tutorials, MECHANISMS, TESTING_CHECKLIST; new
+  tutorials/extract-roots/README.md. Some tutorial screenshots still
+  show the older dialogs and will be retaken.
+
 2.5.0 -- 2026-11-21 (Sessions 176-181)
 * Built for the Linn Cove Viaduct model (one lofted deck through a
   workplane every few segments), which also drove most of the rest:
@@ -133,4 +157,4 @@ save/reload analytic-selection pick fix, naming round-trips, STEP
 header customization.
 """
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
