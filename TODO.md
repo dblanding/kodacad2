@@ -19,4 +19,4 @@
             * Upgrading to this new version requires import statements to be extensively revised.
             * For both of the above reasons, I decided to stay with the previous known-good state and wait for OCP to mature a bit more before "upgrading".
             
-            * In the meantime, continue to use the workaround: Just save session (in .STEP format) and reload as next session. Workplanes are not saved.
+            * In the meantime, continue to use the workaround: save the session as a `.kcad` file (it keeps the workplanes and workplane sets) and reload it next session. A plain STEP file does not keep workplanes.

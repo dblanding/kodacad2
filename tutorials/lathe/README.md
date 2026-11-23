@@ -29,7 +29,7 @@ creating a shared instance of an assembly and reparenting it to a
 instance for the first time); Workplane -> Point & Direction, used to
 anchor a workplane's own origin to a specific piece of 3D geometry
 (a circular edge's own center point) rather than a face; and Dynamic
-positioning combined with Align Gizmo to Active Workplane for a
+positioning combined with Frame: Workplane for a
 rotation about that anchored axis -- Y this time, not the more usual
 W, as a reminder the choice isn't fixed to any one axis.
 
@@ -161,12 +161,11 @@ top face of the base for the +W direction, then a side face of the
 base for the +U direction. The resulting workplane's own Y axis is
 now colinear with the spindle's axis.
 
-Select `bearing-block-asy_3`, then **Position -> Position Selected**.
+Select `bearing-block-asy_3`, then **Position -> Part/Asy**.
 
 * Choose method **Dynamic**.
-* Click **Align Gizmo to Active Workplane** -- the gizmo gets
-  relocated from its default location to the origin of the active
-  workplane.
+* Set **Frame** to **Workplane** -- the gizmo gets relocated from its
+  default location to the origin of the active workplane.
 * Enter `180` in the **rY** field, then **Apply Nudge** to preview the
   rotation.
 * If it looks wrong, **Back** and try again; if it looks right,
@@ -176,7 +175,7 @@ Select `bearing-block-asy_3`, then **Position -> Position Selected**.
 
 After the nudge, the manipulator resets to its default position and
 orientation. Use one of its handles to move the part in Y, toward the
-center of the assembly, then click **Done** to commit.
+center of the assembly, then click **✔** (Done) to commit.
 
 ![Move complete](imgs/bb3-moved.png)
 

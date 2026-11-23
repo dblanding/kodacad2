@@ -115,6 +115,10 @@ silently come back.
 
 ## Position Dialog
 
+(Restyled in the minimal style on 2026-11-17: Frame row World/Workplane/Pick,
+icon bar with **✔** = Done, **✖** = Cancel. Older wording below that
+mentions "Done"/"Nudge" buttons means those icons/controls.)
+
 - [ ] Pre-select a part/assembly in the tree, open Position -- the
       full breadcrumb path (not just a bare name) shows at the top.
       (Session 16 -- disambiguates shared instances.)
@@ -214,9 +218,9 @@ silently come back.
       Click Done, or close the dialog, while a gizmo is attached --
       confirm it's removed.
 
-## Modify Active Part (fillet, shell, extrude, revolve, etc.)
+## Create/Modify (fillet, chamfer, shell, pull, loft, Boolean, etc.)
 
-- [ ] Try fillet, shell, mill, pull, rotateAP, and rev_rotateAP with NO
+- [ ] Try fillet, chamfer, shell, pull, loft, Boolean, Defeaturing and Move Face with NO
       Active Part set -- each must show a MODAL warning immediately
       (before any edge/face picking starts), not a console-only
       message, and not a crash. (Session 20: crash from catching the
@@ -226,12 +230,34 @@ silently come back.
       moment the menu item is clicked instead, and made modal so it
       can't be missed.)
 - [ ] Set an Active Part, fillet a batch of edges (the OCCT "Bottle"
-      tutorial's 12-edge fillet is a good stress case), shell, extrude,
-      revolve -- all still produce correct geometry and update the
+      tutorial's 12-edge fillet is a good stress case), shell, pull (add
+      and remove material) -- all still produce correct geometry and update the
       tree/display correctly.
 
-## Known Open Issues (not yet fixed -- don't re-report, do check they
-haven't gotten WORSE)
+## Added for 2.6.0 (features since 2.5.0)
+
+- [ ] Pull: set the 8 s test delay (`KODACAD_BOOLEAN_TEST_SLEEP=8`),
+      run an Add Material pull on an existing part -- a busy box with
+      Cancel appears after about half a second; Cancel leaves the part
+      unchanged and KodaCAD responsive. Repeat with Remove Material and
+      with Loft cut/fuse.
+- [ ] Boolean (Subtract / Add / Intersect, Keep Tool, Merge Seams) gives
+      the expected result; a hollow loft (outer minus inner) works.
+- [ ] Loft plain and hollow through a Workplane Set.
+- [ ] Create Array (Linear and Angular) from the tree RMB menu.
+- [ ] Make Workplane Set from the tree RMB menu; Workplane -> Set....
+- [ ] Save as STEP (at origin)... on a part and on an assembly that was
+      moved: the file opens elsewhere with the item at the origin and
+      the full structure (not just a header).
+- [ ] Drag an item onto "/" in the tree: it moves under the document
+      root, stays there after later deletes, and the terminal prints a
+      `[reparent]` line.
+- [ ] MMB drag in the outer ring of the viewport spins the view about the
+      line of sight; Utility -> Level View puts Z up.
+- [ ] Animate Mechanism: `crane_lift.py` plays; Export video... makes an
+      .mp4 (needs ffmpeg).
+
+## Known Open Issues (not yet fixed -- don't re-report, do check they haven't gotten WORSE)
 
 - **Imported top-level assemblies surviving save/reload -- FIXED
   Session 52, pending real-world verification.** The long-standing

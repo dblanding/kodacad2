@@ -126,8 +126,9 @@ catching.*
 * **Create/Modify -> Pull**. The Pull dialog is displayed. Set the parameters as follows:
     * Operation: Add Material
     * Mode: Linear
-    * Distance (mm): 70
-* Click Done
+    * Distance: 70 (typed in the current units; this tutorial assumes
+      **mm** -- see **Utility -> set Units**)
+* Click **✔** (Done)
 * Clicking a corner of the ViewCube in the viewport switches to an
 isometric view.
 
@@ -200,9 +201,9 @@ the tree):
 
 * **Create/Modify -> Pull**.
 * In the dialog: choose **Add Material**, **Linear**, direction **+W**, Distance **7**
-* Click Done
+* Click **✔** (Done)
 
-![Mill/Pull Dialog](imgs/pull.png)
+![The Pull dialog](imgs/pull.png)
 
 *Exercises: workplane-based circle sketching feeding directly into
 Pull; a second, feature-adding operation on an already-filleted
@@ -226,10 +227,12 @@ modification, now with two hidden workplanes at once rather than one.*
 The final step is to shell the bottle, leaving the top open. With the
 bottle still active:
 
-* **Create/Modify -> Shell**.
-* Select the top face of the neck (the opening the bottle should
-  keep).
-* Enter `1` as the wall thickness.
+* **Create/Modify -> Shell...**.
+* Click the top face of the neck (the opening the bottle should
+  keep); it is listed under **Faces**.
+* Enter `1` as the **Thickness**, with Wall: **Inward** (the outside of
+  the bottle stays as it is).
+* Click **✔** (Apply), then **✖** (Done) to end the Shell session.
 
 ![Shelled Bottle](imgs/shell.png)
 

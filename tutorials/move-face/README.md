@@ -17,7 +17,7 @@ material**: a wall gets thinner, a slot or hole gets *wider*.
 Move Face shows you the answer *before* you commit. While you type, a
 translucent ghost of the result is drawn over the part, together with
 colored lines that mark what changes. Nothing is applied until you press
-**Apply**.
+**✔** (Apply).
 
 ## What you'll need
 
@@ -65,11 +65,11 @@ Open **Create/Modify -> Move Face...**. The dialog has:
 * **Distance** -- how far to move, in the current units (mm here). Type a
   number, or use the up/down keys or the mouse wheel to step it. Positive
   adds material, negative removes it.
-* **Live preview** -- draws the ghost and the colored lines as you type.
+* **Live Preview** -- draws the ghost and the colored lines as you type.
   Turn it off if a very large part makes it slow.
-* **Apply** -- performs the move on the picked faces.
-* **Clear Selection** -- unpicks everything.
-* **Done** -- closes the dialog.
+* **✔** (Apply) -- performs the move on the picked faces.
+* **Clear Picks** -- unpicks everything.
+* **✖** (Done) -- closes the dialog.
 
 The dialog stays open across several Apply presses, and **each Apply is
 its own undo step** (Ctrl+Z).
@@ -93,7 +93,7 @@ get only a short green stub, the 3 mm they grow by, not a line the whole
 length of the part. The dialog reports the volume change before you commit:
 **+3667 mm³**, which is the face area times 3.
 
-Click **Apply**.
+Click **✔** (Apply).
 
 ![Applied](imgs/s1b.png)
 
@@ -112,7 +112,7 @@ Rotate to look at the **underside** of the base. Click the underside face,
 type **2**, and watch the preview: **+3324 mm³**, with green lines around
 the new outline and at each of the four holes.
 
-Click **Apply**.
+Click **✔** (Apply).
 
 ![Applied](imgs/s2b.png)
 
@@ -156,19 +156,19 @@ Fix it with **Defeaturing**, the tool from the previous tutorial:
 
 ![Four countersinks selected](imgs/s3b1.png)
 
-* Click **Apply**, then **Done** to close Defeaturing.
+* Click **✔** (Apply), then **✖** (Done) to close Defeaturing.
 
 ![Countersinks removed](imgs/s3b2.png)
 
-Back in the Move Face dialog, click **Clear Selection** so it starts
+Back in the Move Face dialog, click **Clear Picks** so it starts
 fresh on the changed part, pick the slot wall again, and type **-0.5**.
-This time the ghost appears. (If you had closed Move Face with **Done**,
+This time the ghost appears. (If you had closed Move Face with **✖** (Done),
 just reopen it from **Create/Modify -> Move Face...**.)
 
 ![Slot widened: preview](imgs/s3c-preview.png)
 
 The **magenta** lines outline the new slot, on the front face and where
-the walls will end up, and the volume is **-211 mm³**. Click **Apply**.
+the walls will end up, and the volume is **-211 mm³**. Click **✔** (Apply).
 
 A slot can also be made *narrower*. Type **1** instead of **-0.5**:
 
@@ -206,7 +206,7 @@ closely).
 ![Preview: four holes, one dropped](imgs/s4.png)
 
 Magenta rings appear in the three holes that will change. The hole you
-unpicked is left alone. Click **Apply**.
+unpicked is left alone. Click **✔** (Apply).
 
 ![Applied](imgs/s4b.png)
 
@@ -221,7 +221,7 @@ one distance.*
 
 Rotate to the outside of the upright, the face with the six holes and the
 slot. Click it and type **-1**. The magenta lines show the new, thinner
-outline, and the volume is **-1410 mm³**. Click **Apply**.
+outline, and the volume is **-1410 mm³**. Click **✔** (Apply).
 
 ![Applied](imgs/s5apply.png)
 
@@ -243,7 +243,7 @@ offset treats the whole skin as one thing: **move any one face of it and
 they all move**.
 
 That is why Move Face shows the yellow faces before you commit. If the
-answer is not what you intended, press **Clear Selection**, or Ctrl+click
+answer is not what you intended, press **Clear Picks**, or Ctrl+click
 the face to unpick it, and nothing changes. If you do want a part of a
 tangent skin to move by itself, remove the blends first with
 **Defeaturing**, move the face, and put the blends back (with Fillet).

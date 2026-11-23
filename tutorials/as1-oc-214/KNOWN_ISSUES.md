@@ -71,6 +71,15 @@ That is a limit of the *file's* geometry, not of Defeaturing.
 - A failure here may be worth fixing anyway (parts from other CAD systems
   often have spline holes), but it is a separate item, listed below.
 
+## Update (2026-11-23): a small gap in a half-hole, and the chaining tolerance
+
+- One of the half-holes in the file has a gap of about 2.87e-5 between the
+  ends of its two edges -- far smaller than anything visible, but enough
+  to stop a profile being chained into a closed wire when the tolerance
+  was tighter than that. Profile chaining now accepts gaps up to 1e-4.
+- Not yet done: probing the other seams of this model for similar gaps
+  (`probe_step_files.py` is the place to start).
+
 ## Possible follow-ups (none started)
 
 1. Remove Hole: accept a hole whose wall is several tangent faces (pick

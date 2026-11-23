@@ -155,13 +155,13 @@ opens the Boolean dialog.
 
 1. **Operation:** Subtract.
 2. **Tool part:** `inner-loft_1`.
-3. Leave **Merge seam faces** checked. This heals "scar lines" that can
+3. Leave **Merge Seams** checked. This heals "scar lines" that can
    appear where the edges of the original parts land on what should be
    one smooth, continuous face of the result.
 
 ![Boolean dialog, Subtract](imgs/subtract-dialog.png)
 
-Click **Done**. The tool part is consumed by the operation, so only the
+Click **✔** (Done). The tool part is consumed by the operation, so only the
 hollow `outer-loft_1` remains.
 
 ![The lofted part after subtraction](imgs/subtract-done.png)
@@ -215,17 +215,17 @@ Now, with the new workplane and the lofted part both active, click
 * **Operation:** Remove Material
 * **Mode:** Linear
 * **Direction:** +W
-* **Total Distance:** 35
+* **Distance:** 35
 
 ![The Pull dialog](imgs/pull-dialog.png)
 
-Click **Done**. The hole goes through the front wall of the part, as the
+Click **✔** (Done). The hole goes through the front wall of the part, as the
 section view below shows.
 
 ![The lofted part in section view](imgs/section-view.png)
 
 *Tip:* choose **Direction: Both** to cut through both walls at once. The
-Total Distance is split equally between +W and -W, so a Total Distance
+Distance is split equally between +W and -W, so a Distance
 above 70 clears both walls.
 
 *Exercises: Workplane -> By 3 points; projecting faces onto a workplane;
@@ -245,7 +245,7 @@ thick, so choose a radius comfortably under that (1.5 mm, say).
 
 Now check that the fillets can be taken back off. Open
 **Create/Modify -> Defeaturing...**, choose **Manual (pick every face)**,
-click the faces of one fillet, then Apply. Repeat for the others.
+click the faces of one fillet, then click **✔** (Apply). Repeat for the others.
 
 Two things to notice:
 
@@ -256,7 +256,7 @@ Two things to notice:
   be left on the lofted face along the circle where each fillet met it.
   Removing the fillets one at a time does not leave them. If a seam does
   remain, pick the smaller of the two faces with the **Manual** method
-  and Apply, and the seam is gone.
+  and click **✔** (Apply), and the seam is gone.
 
 *Exercises: Defeaturing (Manual); fillets next to a lofted surface; seam
 cleanup.*

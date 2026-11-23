@@ -158,9 +158,9 @@ remaining occurrence still refers to it. Also exercises Undo.*
   * Operation: **Remove Material** (Mill) -- Direction defaults to
     **-W** automatically once Remove Material is selected (milling straight down
     into the part), unless you touch the Direction field yourself.
-  * Distance (mm): enter something less than the plate's own
+  * Distance: enter something less than the plate's own
     thickness.
-  * Click **✅ Done**.
+  * Click **✔** (Done).
 * Confirm the hole appears in the viewport, cut straight down into
   the plate.
 

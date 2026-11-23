@@ -3,8 +3,8 @@
 The [Assembly Structure tutorial](../as1-oc-214/README.md) explored an
 assembly that already exists. This one goes the other direction:
 starting from the five loose, un-positioned parts produced by
-`extract_prototypes.py` (see that script, or ask about it if you don't
-have the file), we rebuild the real `as1-oc-214` assembly from
+`extract_prototypes.py` (see [extract-roots](../extract-roots/README.md);
+the result is `as1-oc-214-kit-of-parts.stp` there), we rebuild the real `as1-oc-214` assembly from
 scratch -- exercising sibling-assembly creation, shared instances, and
 nearly every method the Position dialog offers, all in one continuous
 build.
@@ -61,7 +61,7 @@ nested into each other.*
 ## Step 3 -- Add and position the L-bracket
 
 * Drag `l-bracket` into `L-brkt-asy` in the tree.
-* Select l-bracket in the tree, then **Position -> Position Selected**.
+* Select l-bracket in the tree, then **Position -> Part/Asy**.
   * Choose method **Mate Align**.
     1. Constraint **Mate** -- click the bottom face of the bracket,
        then the top face of the plate.
@@ -82,18 +82,18 @@ never the last of the three).*
 ## Step 4 -- Position the bolt and nut
 
 * Hide the rod first, to make the bolt easier to pick.
-* Select `bolt` in the tree, then **Position -> Position Selected**.
+* Select `bolt` in the tree, then **Position -> Part/Asy**.
   * Choose method **Mate Align**.
     1. Constraint **Align Axis** -- click the bolt's cylindrical
        face, then the cylindrical surface of the target hole in the
        L-bracket.
     2. Constraint **Mate** -- click the underside of the bolt head,
        then the top face of the plate.
-    3. Click Done.
+    3. Click **✔** (Done).
 
 * Position the nut in two stages -- first out of the way, then
   precisely:
-  * Select `nut` in the tree, then **Position -> Position Selected**.
+  * Select `nut` in the tree, then **Position -> Part/Asy**.
   * Stage 1, method **Dynamic** -- drag the nut a short distance away
     from the plate using the gizmo's handles, just far enough to make
     picking easier.
@@ -103,7 +103,7 @@ never the last of the three).*
        edge finds its center, not a point on the edge itself.)
     2. Second point: hold **Ctrl+Shift** and click the edge of the
        matching hole in the underside of the plate.
-    3. Click Done.
+    3. Click **✔** (Done).
 
 ![Bolt & Nut Positioned](imgs/b4.png)
 
@@ -133,7 +133,7 @@ first and populating it before positioning anything.*
   toggle the two instances' checkboxes independently in the tree.
 * Move `bolt-nut-asy_2` to the next hole:
   * With both instances hidden, select the new one.
-  * **Position -> Position Selected**, method **2 Points**.
+  * **Position -> Part/Asy**, method **2 Points**.
   * Holding Ctrl+Shift, click the circular edge of the hole the
     assembly currently occupies, then the target hole.
 * Repeat to create `bolt-nut-asy_3` and position it in the third hole.
@@ -157,20 +157,20 @@ instance rather than a single component.*
 
 ![Workplane placed on the plate](imgs/b8.png)
 
-* Select `L-brkt-asy_2` in the tree, then **Position -> Position
-  Selected**.
+* Select `L-brkt-asy_2` in the tree, then **Position -> Part/Asy**.
   * Choose method **Dynamic**.
-  * Click **Align Gizmo to Active Workplane**.
+  * Set **Frame** to **Workplane** -- the gizmo moves to the origin of
+    the active workplane.
   * Enter `180` in the **rZ** field, then **Apply Nudge** to preview
     the move.
   * If it looks wrong, **Back** and try again; if it looks right,
-    **Done**.
+    **✔** (Done).
 
 ![L-brkt-asy_2 mid-rotation](imgs/b12.png)
 ![L-brkt-asy_2 in its final position](imgs/b9.png)
 
-*Exercises: workplane-on-face combined with Align Gizmo to Active
-Workplane, so a nudge rotation happens about a specific, meaningful
+*Exercises: workplane-on-face combined with the Dynamic page's
+Frame: Workplane option, so a nudge rotation happens about a specific, meaningful
 axis (through the plate's center) rather than the part's own default
 pivot.*
 
@@ -181,14 +181,14 @@ dropped into a new assembly -- in either order.
 
 * RMB click `as2` and select **Create New Assembly**. Name it
   `rod-asy`. Drag `rod` into it.
-* Select `rod`, then **Position -> Position Selected**.
+* Select `rod`, then **Position -> Part/Asy**.
   * Method **Mate Align**.
   * Constraint **Align Axis** -- click the rod's cylindrical face,
     then the cylindrical face of the target hole in one of the
     L-brackets.
   * Constraint **Align** -- click an end face of the rod, then the
     corresponding end face of the plate.
-  * **Done**.
+  * **✔** (Done).
 * At this point the rod isn't quite centered -- it extends farther
   past one L-bracket than the other. **Utility -> Calculator**, use
   **Dist** to measure exactly how far the rod needs to move in X to be

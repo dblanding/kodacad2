@@ -48,8 +48,8 @@ Open **Create/Modify -> Defeaturing...**. The dialog has:
 
 * **Method** -- how you identify the feature's faces (the subject of
   Steps 2-6).
-* **Apply** -- performs one removal using the faces currently picked.
-* **Done** -- ends the Defeaturing session and closes the dialog.
+* **✔** (Apply) -- performs one removal using the faces currently picked.
+* **✖** (Done) -- ends the Defeaturing session and closes the dialog.
 
 The dialog is non-modal: it stays open across several Apply presses, so
 you can remove feature after feature without reopening it, and you can
@@ -69,8 +69,8 @@ coming out the other side.
 
 * In the dialog, choose **Method: Remove Hole**.
 * Pick the yellow hole (click on its cylindrical wall) and click
-  **Apply**.
-* Now pick the blue hole and click **Apply**.
+  **✔** (Apply).
+* Now pick the blue hole and click **✔** (Apply).
 
 Both holes are removed, even though the second one is blind. Remove Hole
 handles that automatically:
@@ -87,7 +87,7 @@ handles that automatically:
 
 When you are finished, use **Edit -> Undo (Ctrl+Z)** twice to bring the
 holes back, then **Edit -> Redo (Ctrl+Y)** twice to remove them again.
-Leave the dialog open for the next step, or click **Done** and reopen it
+Leave the dialog open for the next step, or click **✖** (Done) and reopen it
 when you need it.
 
 *Exercises: Remove Hole; blind and through holes; Undo/Redo of
@@ -102,13 +102,13 @@ individual blend (a single rounded face). Once a blend is removed, the adjacent 
 to the sharp-cornered configuration they would have had without it.
 
 * In the dialog, choose **Method: Manual (pick every face)**.
-* Pick one of the two highlighted faces and click **Apply**.
-* Pick the other one and click **Apply**.
-* Click **Done**.
+* Pick one of the two highlighted faces and click **✔** (Apply).
+* Pick the other one and click **✔** (Apply).
+* Click **✖** (Done).
 * Undo twice.
 
 Now go through it again, but this time pick **both** faces first and click
-**Apply** once. The result is the same, but it is now a single undo step.
+**✔** (Apply) once. The result is the same, but it is now a single undo step.
 
 *Exercises: Manual method; one face per Apply versus several; Done.*
 
@@ -123,9 +123,9 @@ Defeaturing...** if you clicked Done.
 
 * In the dialog, choose **Method: Manual (pick every face)**.
 * Pick **every** face of one of the two features (the floor, every wall
-  and any rounded end), then click **Apply**.
+  and any rounded end), then click **✔** (Apply).
 * Do the same for the other feature.
-* Click **Done**.
+* Click **✖** (Done).
 * Undo twice, then Redo twice.
 
 Manual is tedious, and unforgiving: if you skip a face of the feature, the
@@ -153,9 +153,9 @@ Rotate to the view above. The blue face caps the two pocket features cut
 into it. The purple face caps the ring of nine blind holes.
 
 * In the dialog, choose **Method: Auto (pick capping face(s))**.
-* Click the blue face and click **Apply**.
-* Click the purple face and click **Apply**.
-* Click **Done**.
+* Click the blue face and click **✔** (Apply).
+* Click the purple face and click **✔** (Apply).
+* Click **✖** (Done).
 * Undo twice, then Redo twice.
 
 ### How it works
@@ -201,8 +201,8 @@ faces breaks both connections at once.
 * Click the purple top face, then rotate to the view above and click the
   purple bottom face. (Both should be selected: the dialog says
   "2 face(s) selected".)
-* Click **Apply**.
-* Click **Done**.
+* Click **✔** (Apply).
+* Click **✖** (Done).
 * Undo, then Redo.
 
 *Exercises: Auto with two capping faces; through-features.*
@@ -217,7 +217,7 @@ Auto has nothing to grow from, so it leaves that feature alone.
 
 To see this, undo back to the original part, rotate to the view from
 Step 4, and choose **Method: Auto**. Pick the face(s) that the slot and
-the D-shaped pocket open into, and click **Apply**. Only the D-shaped
+the D-shaped pocket open into, and click **✔** (Apply). Only the D-shaped
 pocket is removed (3 faces: the part goes from 86 faces to 83); the
 open-ended slot is still there. A loop of edges fully inside a face is
 what Auto needs, and the pocket has one while the slot does not.

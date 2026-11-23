@@ -6,20 +6,26 @@ A from-scratch 3D CAD application
     [OCCT](https://www.opencascade.com/)) -- see below for how this
     differs from other Python CAD libraries
 * Patterned after HP's dynamic modeling lineage (ME-30 → SolidDesigner)
-* Part creation workflow: workplane → sketch → extrude/revolve → modify 
+* Part creation workflow: workplane → sketch → **Pull** (add or remove
+  material, straight or around an axis) → modify
 * Intended to meet the basic requirements in a typical CAD workflow:
     * Start a new session or load a previous one (saved as a `.kcad`
       file: the STEP model plus your workplanes)
     * Import components in STEP format
     * Position them within an assembly structure
     * Create simple mounting plates & brackets
+    * Loft a solid -- or a hollow section -- through a set of
+      workplanes, combine parts with **Boolean** (Fuse / Subtract), and
+      make linear or angular **arrays** of parts and assemblies
     * Modify parts directly, even ones you didn't build: remove
       features (**Defeaturing**) and push or pull faces (**Move Face**)
       with a live preview
     * Select, recolor, move and delete whole groups of parts with a box
-    * Animate a mechanism (Geneva drive, four-bar linkage) with a
-      slider and trace the path of a point
-    * Save session as `.kcad`, or export the 3D model as plain STEP
+    * Animate a mechanism (Geneva drive, four-bar linkage, a crane lift)
+      with a slider, trace the path of a point, and export the motion as
+      an mp4 video
+    * Save session as `.kcad`, export the 3D model as plain STEP, or save
+      any one assembly or part as its own STEP file, placed at the origin
 
 Designed for users who want to assemble, modify, and create
 3D mechanical parts and assemblies using a scriptable, open-source
@@ -99,13 +105,37 @@ cd kodacad2
 Dependencies (managed automatically by uv):
 - `ocp` -- OCCT Python bindings (replaces PythonOCC)
 - `pyside6` -- Qt6 Python bindings (replaces PyQt5)
-- `build123d` -- used for geometry utilities
+- `build123d` -- geometry helpers used by the viewport and the Position
+  dialog
+
+Optional: **`ffmpeg`** on your PATH, needed only by *Export video...* in
+Animate Mechanism (on Ubuntu: `sudo apt install ffmpeg`). Everything
+else works without it.
 
 ---
 
 ## How to use it
 
 ### Loading a STEP file
+
+Two menu items bring a STEP file in: **File → Load Session** *replaces*
+the whole 3D document with the file, and **File → Import STEP** *adds*
+the file as a new component alongside whatever is open. Both are
+described below under *Saving and loading*.
+
+### Navigating the view
+
+| Gesture | What it does |
+|---|---|
+| **MMB drag** | orbit |
+| **Ctrl + MMB drag** | pan |
+| **Shift + MMB drag** | zoom |
+| **MMB drag near the edge** of the viewport (the outer ring) | spin the view about the line of sight, like turning a map |
+| **LMB click** / **LMB drag** | select / box-select |
+| **RMB click** | fit everything in the window |
+| **Utility → Level View (Z up)** | roll the view so the model's Z axis points up the screen again |
+
+A middle *click* (no drag) ends the current operation, wherever it lands.
 
 ### Saving and loading
 
@@ -150,6 +180,14 @@ Writes the 3D model alone, as a plain STEP file, for opening in other
 CAD applications or sharing with people who don't use KodaCAD. No
 workplanes are included.
 
+**Save as STEP (at origin)...** (right-click an assembly or part in the
+tree)
+Writes just that assembly or part -- with everything beneath it -- as its
+own STEP file. It is saved with its own frame at the **origin**, however
+far from the origin it sits in your model, so it loads cleanly into
+another session. Shared parts inside it stay shared. The model itself is
+not changed.
+
 **File → Import STEP**
 *Adds* a STEP file as a new component under the current `/`, alongside
 whatever's already open, ready to be positioned and dragged into an
@@ -170,8 +208,8 @@ which it does automatically (see below).
 #### Undo and Redo apply to the 3D model only
 
 Undo (Ctrl+Z) and Redo (Ctrl+Y) step through changes to the **3D
-model** -- extrudes, pulls, fillets, shells, positioning, renaming and
-so on. **Workplanes and their sketch geometry are not part of that
+model** -- pulls, fillets, shells, Booleans, lofts, arrays, face moves,
+positioning, renaming and so on. **Workplanes and their sketch geometry are not part of that
 history.** Drawing a line, deleting an element, or repositioning a
 workplane cannot be undone with Ctrl+Z, and undoing a 3D operation
 will not rewind your sketches. Workplanes are your construction
@@ -226,10 +264,37 @@ WP              ← workplanes (2D construction geometry)
 - **Left-click** — select item (Ctrl+click / Shift+click select several)
 - **Right-click** — context menu: Item Info, Set Active, Rename,
   Create New Assembly, Create Empty Part, Create Shared Instance,
-  Copy Part, Set Transparent, Set Opaque, Set Color..., Take Color as
+  Copy Part, Create Array..., Make Workplane Set, Save as STEP (at
+  origin)..., Set Transparent, Set Opaque, Set Color..., Take Color as
   Pen, Paint with Pen Color, Color Faces (display only)..., Delete.
   Set Color, Paint with Pen Color and Delete act on **every selected
   part** when you right-click one of several selected rows.
+
+### Combining and shaping parts
+
+* **Create/Modify → Pull** -- pull a sketched profile out of its
+  workplane. *Add Material* builds, *Remove Material* cuts; the mode is
+  *Linear* (a distance along +W, −W or both) or *Angular* (around an
+  axis you pick).
+* **Create/Modify → Boolean...** -- Fuse or Subtract one part from
+  another (*Keep Tool* leaves the second part in place, *Merge Seams*
+  heals the scar lines a Boolean can leave).
+* **Create/Modify → Loft** -- loft through a **Workplane Set** (made with
+  *Workplane → Set...* or, from workplanes you already have, *Make
+  Workplane Set* in the tree). Draw an outer profile and any number of
+  inner profiles on each workplane and the loft comes out hollow.
+* **Create Array...** (right-click a part or assembly) -- linear or
+  angular arrays of instances.
+* **Fillet, Chamfer, Shell..., Defeaturing..., Move Face...** -- modify
+  the active part.
+
+**Booleans can't freeze KodaCAD.** Every Boolean that Pull, Boolean and
+Loft perform runs in a separate helper process. If one takes longer than
+half a second a *Working* box appears with a **Cancel** button; a
+Boolean that runs too long or uses too much memory is stopped, and
+nothing changes. (Operations that OpenCascade cannot finish -- for
+example two round bars of exactly equal diameter crossing at right
+angles -- are better avoided by changing one diameter slightly.)
 
 ### Working on groups of parts
 
@@ -279,10 +344,12 @@ workplane label stays a sensible size at any scale.
 a slider so you can see how a mechanism works, stop it in any pose
 (then project faces onto a workplane to get a snapshot) and **Trace**
 the path of a point. The motion is defined by a short Python file you
-choose and can edit; `mechanisms/` has a 4-slot Geneva drive and a
-pin-jointed four-bar. It is display only: the model, tree and undo
-history are untouched, and *Done* puts every part back. How to write a
-mechanism file: [docs/MECHANISMS.md](docs/MECHANISMS.md).
+choose and can edit; `mechanisms/` has a 4-slot Geneva drive, a
+pin-jointed four-bar and a crane lift (`crane_lift.py`). It is display
+only: the model, tree and undo history are untouched, and *Done* puts
+every part back. **Export video...** records the motion as an mp4 (it
+needs `ffmpeg`, see *Installation*). How to write a mechanism file:
+[docs/MECHANISMS.md](docs/MECHANISMS.md).
 
 ### If KodaCAD crashes
 
@@ -302,7 +369,7 @@ what it exercises in KodaCAD's own code.
 
 - **[The OCC Bottle](tutorials/occ-bottle/README.md)** -- builds the
   classic OpenCascade tutorial bottle entirely from scratch: sketching,
-  Extrude, Fillet, Mill/Pull, Shell, and Undo/Redo, all on a single
+  Pull (adding material), Fillet, Shell, and Undo/Redo, all on a single
   part.
 - **[Assembly Structure with `as1-oc-214.stp`](tutorials/as1-oc-214/README.md)** --
   loading a pre-built, multi-part assembly two different ways, the XDE
@@ -324,7 +391,7 @@ what it exercises in KodaCAD's own code.
   of functional subassemblies, making it easier to navigate. 
 - **[Sketching a Jack-o'-Lantern](tutorials/jack/README.md)** --
   a full workout of the 2D sketch toolbar building a jack-o'-lantern
-  face, then reusing the OCC Bottle's extrude-then-heavily-fillet
+  face, then reusing the OCC Bottle's pull-then-heavily-fillet
   technique to carve that same face into a pumpkin with a real,
   multi-profile Pull operation.
 - **[Defeaturing a Part](tutorials/defeaturing/README.md)** --
@@ -332,7 +399,9 @@ what it exercises in KodaCAD's own code.
   adjacent faces to heal the gap.
 - **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** -- building a simple lofted part then working it over:
   subtracting one lofted part from another, a transverse hole, fillets,
-  and finally defeaturing to take the fillets back off.
+  and finally defeaturing to take the fillets back off. (Loft can also
+  cut the hollow section directly; the tutorial shows the subtraction
+  route, which is still useful for odd shapes.)
 - **[Moving Faces](tutorials/move-face/README.md)** --
   pushing and pulling the faces of an imported L-bracket (`L-brkt.stp`)
   with a live preview: thickening a wall, opening up a slot, widening
@@ -355,9 +424,9 @@ what it exercises in KodaCAD's own code.
 1. Load `as1-oc-214.stp`
 2. Place workplane on top face of right L-bracket
 3. Create a new part
-    * RMB click on '/' iin tree; select "Create Empty Part"; name "button"
+    * RMB click on '/' in tree; select "Create Empty Part"; name "button"
     * Draw 5mm circle on workplane
-    * **Creare/Modify -> Pull**; Distance: 3mm
+    * **Create/Modify -> Pull**; Distance: 3mm
 4. Button appears under `/` alongside `as1`
 5. Drag button to `l-bracket-assembly_2`
 6. Button appears in BOTH L-bracket assemblies (shared instance)
@@ -381,18 +450,46 @@ kodacad2/
   face_offset_server.py  persistent worker that computes the live preview
   face_offset_worker.py  one-shot worker used by Apply
   offset_preview.py   Qt client for the preview worker
-  mechanism_dialog.py Animate Mechanism dialog (slider, Trace)
+  mechanism_dialog.py Animate Mechanism dialog (slider, Trace, video)
+  video_export.py     frame list + ffmpeg command for Export video...
   trace_math.py       straight-section finder for Trace (plain Python)
-  mechanisms/         mechanism files (Geneva drive, four-bar) + STEP models
+  mechanisms/         mechanism files (Geneva drive, four-bar, crane lift)
+                      + STEP models
+  dialog_style.py     the minimal dialog theme shared by the dialogs below
+  frame_chooser.py    the shared Frame row (World | Workplane | Pick)
+  pull_dialog.py      Create/Modify -> Pull
+  boolean_dialog.py   Create/Modify -> Boolean...
+  safe_boolean.py     Fuse / Cut / Common with guard rails (busy box,
+                      Cancel, time and memory limits)
+  boolean_worker.py   the helper process safe_boolean runs one Boolean in
+  position_dialog.py  Position -> Part/Asy (Dynamic, Mate Align, 2 Points)
+  position_math.py    the arithmetic behind it (plain Python)
+  wp_position_dialog.py  Position -> Workplane
+  wp_set_dialog.py    Workplane -> Set... (create a Workplane Set)
+  wp_sets.py          group existing workplanes into a set (tree menu)
+  array_dialog.py     Create Array... (linear and angular)
+  array_math.py       the arithmetic behind it (plain Python)
+  face_color_dialog.py  Color Faces (display only)
+  isolated_features.py  finds isolated features for Defeaturing's Auto mode
+  xde_tree_dialog.py  Utility -> XDE Label Hierarchy viewer
+  snap_engine.py      the 2D sketch engine
   rpnCalculator.py    RPN calculator widget
-  version.py          version string
+  version.py          version string and changelog
   OCCUtils/           OCC geometry utilities (ported from PythonOCC)
   icons/              toolbar icons
-  step/               sample STEP files
+  imgs/               images used by this README
+  tests/              smoke tests and the STEP files they use
+  test_all.py, test_docmodel.py, probe_*.py, minimal_repro.py
+                      small diagnostic scripts (not needed to run KodaCAD)
+  src/                small label / location checking scripts
+  TODO.md             broken items + future ideas
   docs/
-    DEVELOPMENT_LOG.md  session-by-session development history
+    DEVELOPMENT_LOG.md  development history, newest entries last
     MECHANISMS.md       how Animate Mechanism works; writing a mechanism file
-    TODO.md             broken items + future ideas
+    PICKING_ARCHITECTURE.md  the two picking pipelines
+    SKETCH_ENGINE_DESIGN.md  design of the 2D sketch engine
+    TESTING_CHECKLIST.md     manual regression checklist
+    UNDO-REDO.md        what Undo/Redo covers and how
   tutorials/
     occ-bottle/         build the OCC bottle from scratch
     as1-oc-214/         load and explore a pre-built assembly
@@ -403,6 +500,7 @@ kodacad2/
     defeaturing/        remove holes and features, heal the gap
     lofting/            loft through a workplane set, then work it over
     move-face/          push/pull faces of an L-bracket, with live preview
+    extract-roots/      script that splits as1-oc-214 into its loose parts
   pyproject.toml      uv project file
 ```
 

@@ -156,7 +156,7 @@ the face into it.
     * Mode: Linear
     * Direction: +W
     * Distance: 380
-    * Click Done
+    * Click **✔** (Done)
 * Pumpkin has taken the form of a large block and has been set **Active**.
 
 ![Block](imgs/j11.png)
@@ -175,8 +175,10 @@ operation turns that box into a rounded, pumpkin-like solid.*
 
 ## Step 5 -- Shell the pumpkin
 
-* **Modify Active Part -> Shell**: click the small square top face,
-  enter `20` for the shell thickness.
+* **Create/Modify -> Shell...**: with the dialog open, click the small
+  square top face (it is listed under **Faces**), enter `20` as the
+  **Thickness** (Wall: **Inward**), and click **✔** (Apply). Click **✖**
+  (Done) to end the Shell session.
 
 Worth knowing going in: that top face is entirely bounded by tangent
 fillets rather than genuine sharp edges shared with other faces, so
@@ -224,7 +226,7 @@ clipping plane.*
   * Mode: Linear
   * Direction: **-W**
   * Distance: 150
-  * Click **✅ Done**
+  * Click **✔** (Done)
 * You can now hide (or delete) the workplane.
 
 ![Jack-o'-Lantern Complete](imgs/j14.png)

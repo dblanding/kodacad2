@@ -3,12 +3,14 @@
 **Utility -> Animate Mechanism...** moves the parts of an assembly on
 screen with a slider, so you can see how a mechanism works, park it in
 any pose, and trace the path of a point. It was built in Sessions
-171-172 and proved on two examples:
+171-172 and extended in Session 181 (assembly-level `PARTS` keys, a
+`describe()` readout, a third example and video export). Examples:
 
 | File | Mechanism | Shows |
 |------|-----------|-------|
 | `mechanisms/geneva4.py` (+ `geneva4.stp`) | 4-slot Geneva drive | rotation of each part about a fixed shaft |
 | `mechanisms/scott_russell.py` (+ the STEP) | pin-jointed four-bar | a floating coupler, a slider range, Trace |
+| `mechanisms/crane_lift.py` (+ `crane-lift.stp`) | derrick lifting, swinging and lowering a segment | assembly-level `PARTS` keys with overrides, `poses()`, multi-phase slider, `describe()` |
 
 ## What it does (and does not do)
 
@@ -38,10 +40,11 @@ A plain `.py` file. KodaCAD reads these names (all but `PARTS` and
 | Name | Meaning |
 |------|---------|
 | `NAME` | Title shown in the dialog. |
-| `PARTS` | `{part name as shown in the tree: role}`. Every part with a role is moved; the others stay put. Several parts may share a role. |
+| `PARTS` | `{key: role}`. A key is a part name as shown in the tree, an **assembly** name (every part beneath it), or a path such as `rope-pair_1/rope_1` (a part inside a named parent, to tell same-named parts apart). Where several keys match a part, the deepest (most specific) one wins, so one key can swing a whole rotor and another override it for the load. Every part with a role is moved; the others stay put. Several parts may share a role. |
 | `setup(ctx)` | Called once on load; returns `{role: (point, direction)}`, each role's axis in world mm. Raise an error here if the model isn't what the file expects. |
 | `angles(theta)` | Simple form: `{role: degrees}`, rotation about the role's axis **relative to the modelled pose**. |
 | `poses(theta)` | General form (used if present, instead of `angles`): `{role: (degrees, (tx, ty, tz))}` -- rotate about the role's axis point, **then** translate. Needed for a coupler that moves bodily. |
+| `describe(theta)` | Optional. Returns a string shown in the dialog's readout beside the slider (for example the name of the current phase). |
 | `START` | Slider angle at which the parts sit exactly as modelled. Default 0. |
 | `RANGE` | `(low, high)` slider range in degrees. Default `(0, 360)`. |
 | `LOOP` | `"pingpong"`: Play runs back and forth. Default wraps. |
@@ -124,6 +127,14 @@ slider stops at -44.9.)
   about a world axis is all that is needed.
 * Word-wrapped labels don't make a QDialog grow; a long message is
   clipped unless the dialog is grown to fit (`_fit_height`).
+
+## Exporting a video
+
+The dialog's **Export video...** button records the whole slider range
+as an `.mp4` (1280 x 720, 30 fps): the viewer dumps a PNG per frame and
+`ffmpeg` joins them (`video_export.py`). It needs `ffmpeg` on the PATH;
+without it the button explains what is missing. Like the animation
+itself, it changes nothing in the model.
 
 ## Ideas, not done
 
