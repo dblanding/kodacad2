@@ -389,6 +389,11 @@ def remove_shape_and_orphaned_descendants(shape_tool, label):
     for child_ref in child_refs:
         users = TDF_LabelSequence()
         n_users = shape_tool.GetUsers_s(child_ref, users, False)
+        # Trace (2026-11-22): which prototypes a delete cascades into,
+        # and why -- for the 'reparented hanger got deleted too' report.
+        print(f"[delete] cascade: {get_label_entry(child_ref)} "
+              f"users={n_users} -> "
+              f"{'removed' if n_users == 0 else 'kept'}")
         if n_users == 0:
             remove_shape_and_orphaned_descendants(shape_tool, child_ref)
 
@@ -807,7 +812,7 @@ class DocModel:
         comp_label = self._find_label_by_entry(self.label_dict[uid]['entry'])
         if comp_label is None:
             print(f"[reparent] Could not find component label for {uid}")
-            return
+            return False
 
         ref_label_entry = self.label_dict[uid].get('ref_entry')
         if ref_label_entry:
@@ -817,7 +822,7 @@ class DocModel:
             ref_label = comp_label
         if ref_label is None:
             print(f"[reparent] Could not find ref label for {uid}")
-            return
+            return False
 
         # Find target assembly's ROOT label (ref_entry) so both shared
         # instances of the target assembly receive the new component
@@ -826,7 +831,7 @@ class DocModel:
         target_label = self._find_label_by_entry(target_entry)
         if target_label is None:
             print(f"[reparent] Could not find target label")
-            return
+            return False
 
         # Add component to target with correct local transform, by
         # LABEL (preserves ref_label's full existing name/substructure)
@@ -871,7 +876,21 @@ class DocModel:
             shape_tool.RemoveShape(comp_label, True)
 
         shape_tool.UpdateAssemblies()
+        # Diagnostic (2026-11-22, Doug: hanger-asy_1 dropped on '/'
+        # showed under '/', yet vanished with the things deleted later):
+        # say where the document now has it, and how many users the
+        # prototype has.
+        try:
+            from OCP.TDF import TDF_LabelSequence as _LS
+            users = _LS()
+            n_users = shape_tool.GetUsers_s(new_ref, users, False)
+            print(f"[reparent] '{part_name}' now under entry "
+                  f"{get_label_entry(target_label)}; its definition "
+                  f"{get_label_entry(new_ref)} has {n_users} user(s)")
+        except Exception as e:
+            print(f"[reparent] (diagnostic failed: {e})")
         self.parse_doc()
+        return True
 
     def delete_component(self, uid):
         """Delete a part or assembly component from the XDE document.

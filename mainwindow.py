@@ -124,6 +124,19 @@ class TreeView(QTreeWidget):
         if parent_index in selection:
             return False
         new_parent_uid = parent.text(1) if parent else None
+        # The '/' row of the tree is the scaffolding item created by
+        # create_root_items() (uid "0"), not a document label. Dropping
+        # onto it means "make a child of the document's real root '/'";
+        # until 2026-11-22 the drop moved the tree item but the
+        # document reparent was silently skipped ("0" is not in
+        # label_dict), so the model never changed (Doug: hanger-asy_1
+        # dropped on '/', then deleted along with its old parent).
+        if new_parent_uid == "0":
+            root_uid = next((u for u, d in dm.label_dict.items()
+                             if not d.get('parent_uid')), None)
+            if root_uid is None:
+                return False
+            new_parent_uid = root_uid
         # Session 99 safeguard (Doug: has accidentally reparented onto
         # a plain PART when meaning to drop onto an assembly, only
         # recoverable via Undo -- nothing here ever checked the
@@ -135,7 +148,7 @@ class TreeView(QTreeWidget):
         # underlying document (the XDE-level reparent used to be the
         # only thing checked, well after the tree items had already
         # been physically moved).
-        if new_parent_uid and new_parent_uid != "0":
+        if new_parent_uid:
             if not dm.label_dict.get(new_parent_uid, {}).get('is_assy'):
                 target_name = parent.text(0) if parent else "?"
                 main_win = self.parent()
@@ -192,12 +205,22 @@ class TreeView(QTreeWidget):
                     )
         # After visual tree update, perform XDE reparent with inverse transform
         for drag_uid, new_parent_uid in drag_items:
+            if (drag_uid in dm.label_dict and new_parent_uid in dm.label_dict
+                    and dm.label_dict[drag_uid].get('parent_uid')
+                    == new_parent_uid):
+                continue    # already a child of that parent: nothing to do
+            if not (drag_uid and new_parent_uid
+                    and drag_uid in dm.label_dict
+                    and new_parent_uid in dm.label_dict):
+                print(f"[reparent] skipped: {drag_uid!r} -> "
+                      f"{new_parent_uid!r} is not a document item")
             if drag_uid and new_parent_uid and drag_uid in dm.label_dict:
                 if new_parent_uid in dm.label_dict:
                     try:
                         old_uids = set(dm.part_dict.keys())
                         with undo_transaction(dm):
-                            dm.reparent_component(drag_uid, new_parent_uid)
+                            moved = dm.reparent_component(drag_uid,
+                                                          new_parent_uid)
                         # Session 101 (Doug's own report: each reparent
                         # made the app unresponsive for minutes, and
                         # the timing summary never appeared at all).
@@ -220,11 +243,30 @@ class TreeView(QTreeWidget):
                         if main_win is not None and hasattr(main_win, "ais_shape_dict"):
                             main_win.build_tree()
                             main_win._incremental_reconcile(old_uids)
+                            if moved is False:
+                                main_win.statusBar().showMessage(
+                                    "Move failed -- see the terminal; "
+                                    "the model was not changed.", 8000)
 
                     except Exception as e:
                         import traceback
                         print(f"[reparent] failed: {e}")
                         traceback.print_exc()
+                        # The tree items were already moved visually
+                        # before the document was touched; rebuild the
+                        # tree from the document so it never shows a
+                        # move that did not happen (2026-11-22).
+                        try:
+                            mw = self.parent()
+                            while (mw is not None
+                                   and not hasattr(mw, "ais_shape_dict")):
+                                mw = mw.parent()
+                            if mw is not None:
+                                mw.build_tree()
+                                mw.statusBar().showMessage(
+                                    f"Move failed -- {e}", 8000)
+                        except Exception as e2:
+                            print(f"[reparent] tree resync failed: {e2}")
         return True
 
 
