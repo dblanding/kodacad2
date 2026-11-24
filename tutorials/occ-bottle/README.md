@@ -160,9 +160,9 @@ Then:
 * Select all 12 edges of the bottle
   * You can click them one at a time -- the status bar
   acknowledges each one that is selected.
-  * Or alternatively, you can box select them all at once. KodaCAD recognizes two different **Box Selection Modes**.
-    * If the mouse gesture starts on the left and ends on the right, only edges that are completely contained in the box are selected. This is called **window selection**.
-    * On the other hand, it the box is drawn using a mouse gesture that starts on the right and finishes on the left, any edge which is even partly inside the box is selected. This is called **crossing selection**.
+  * Alternatively, you can box select them all at once. KodaCAD recognizes two different **Box Selection Modes**.
+    * If the mouse gesture starts on the top-left and ends on the b0ttom-right, only edges that are completely contained in the box are selected. This is called **window selection**.
+    * On the other hand, it the box is drawn using a mouse gesture that starts on the bottomm-right and finishes on the top-left, any edge which is even partly inside the box is selected. This is called **crossing selection**.
 * Enter `3` as the radius.
 * **Check the tree: confirm the first workplane is still hidden.**
   Any modification rebuilds the tree, which is exactly the moment a

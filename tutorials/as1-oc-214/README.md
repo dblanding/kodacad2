@@ -92,7 +92,9 @@ import cleanly without ever ending up with `/` nested inside `/`.*
 **Utility -> XDE Label Hierarchy...** Walk the tree that opens.
 
 Note which labels are components (occurrences, referring to a
-prototype) versus the prototypes themselves.
+prototype) versus the prototypes themselves. To understand what prototypes
+are, have a look at the [Quaoar Chassis tutorial](../chassis/README.md),
+which dives into the topic more deeply.
 
 Format: component  name-of-component => prototype
 
