@@ -115,8 +115,7 @@ With an active part, and with a workplane of the set active, click
 **Create/Modify -> Loft**. The loft passes a smooth surface through the
 five outer profiles, then lofts the five inner profiles the same way
 and cuts that inner shape out of the outer one. The result is a hollow
-vase with a 5 mm wall, open at both ends. If the cut takes a while, the
-Working box offers **Cancel** (see "Booleans can't freeze KodaCAD" in the main README).
+vase with a 5 mm wall, open at both ends. This operation proceeds pretty quickly, but for lofts that are slower, a Working box would appear displaying a **Cancel** button. (see "Booleans can't freeze KodaCAD" in the main README).
 
 ![Select lofted](imgs/select-lofted.png)
 
