@@ -17,9 +17,9 @@ exercise the same mechanisms.
 
 ## Why `/` is guaranteed, and why that's worth knowing
 
-KodaCAD has no native save format of its own -- every session is
-loaded and saved through STEP. Because of that, KodaCAD holds to one
-strict guarantee: once a document exists at all, `/` is always the
+A session file holds its 3D model as STEP (see
+[Sessions and files](../../docs/concepts/sessions-and-files.md)). Because
+of that, KodaCAD holds to one strict guarantee: once a document exists at all, `/` is always the
 top assembly, full stop, through any number of save/reload cycles.
 Everything else in this tutorial -- and in KodaCAD generally --
 depends on that being reliably true.
@@ -77,15 +77,11 @@ Load file `as1-oc-214.stp` as session | Import file `as1-oc-214.stp` into empty 
 -------------|--------------
 ![as1-oc-214 Session](imgs/session.png) | ![as1-oc-214 Import](imgs/import.png)
 
-*Exercises: the two loading mechanisms documented in the README's
-"Loading a STEP file" section, and why they behave differently --
-Load Session replaces the whole document, so the loaded file's own
-`/` simply becomes the session's `/` directly, nothing to reconcile.
-Import STEP keeps the current session intact and nests the new
-content under its existing `/`, first unwrapping any `/` the incoming
-file carries of its own (recursively, however many levels deep) --
-exactly what lets this file, or any other KodaCAD-produced STEP file,
-import cleanly without ever ending up with `/` nested inside `/`.*
+*Exercises: the two loading mechanisms, and why they behave
+differently -- Load Session replaces the whole document; Import STEP
+keeps the current session and nests the new content under its `/`,
+unwrapping any `/` the incoming file carries. The full explanation is
+in [Sessions and files](../../docs/concepts/sessions-and-files.md).*
 
 ## Step 2 -- Explore the structure
 

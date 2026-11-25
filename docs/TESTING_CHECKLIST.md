@@ -16,8 +16,11 @@ silently come back.
       part's real name shows in the tree (not blank / not auto-numbered).
       (Session 9)
 - [ ] Import the SAME file twice into one session. Both copies show
-      correct names; editing a shared part inside one copy shows the
-      edit in the other too (see Shared Instances below).
+      correct names, and the two copies are **independent**: each import
+      brings its own prototypes, so editing a part inside one copy (say
+      filleting an l-bracket) does NOT change the other copy. (Sharing
+      happens only *within* one imported file, e.g. the two l-bracket
+      assemblies inside as1 -- see Shared Instances below.)
 
 ## Session Save / Reload (do this after ANY document-mutating feature)
 
@@ -423,9 +426,9 @@ DEVELOPMENT_LOG Session 60.
 ## Undo/Redo (Session 61, option (b))
 
 - Each of these, done then Ctrl+Z then Ctrl+Y, must restore/re-apply
-  exactly (tree AND viewport): create part (extrude), rename, delete,
-  create assembly, shared instance, drag-reparent, import STEP
-  component, modify active part (mill/add material).
+  exactly (tree AND viewport): create part, pull (add and remove
+  material), rename, delete, create assembly, shared instance,
+  drag-reparent, import STEP component, fillet/shell/Boolean/loft.
 - Position dialog: several moves + Back steps, then Done -- ONE
   Ctrl+Z afterward must undo the WHOLE placement as a unit. Back
   inside the dialog must still step moves individually.

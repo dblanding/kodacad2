@@ -253,12 +253,16 @@ fast path.*
 
 ## Step 12 -- Save and reload
 
-Save the session as a STEP file, then reload it (or open it in a
-second viewer) and confirm the geometry, and file size, both look
-right.
+Use **File -> Save Session** to save the bottle as a `.kcad` file. It
+keeps your workplanes and their sketches along with the model (see
+[Sessions and files](../../docs/concepts/sessions-and-files.md)). Then
+reload it with **File -> Load Session** and confirm the geometry, the
+workplanes, and the file size all look right. To check the STEP output
+that other CAD programs read, also use **File -> Export STEP** and open
+that file in a second viewer.
 
 *Exercises: the STEP writer's PCURVE-suppression setting; general
-save/reload fidelity.*
+save/reload fidelity, including workplanes.*
 
 ---
 

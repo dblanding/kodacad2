@@ -181,8 +181,8 @@ center of the assembly, then click **✔** (Done) to commit.
 
 *Exercises: Workplane -> Point & Direction, anchoring a workplane's
 own origin to a piece of 3D geometry (a circular edge's own center
-point) rather than a face; Dynamic positioning combined with Align
-Gizmo to Active Workplane, so a nudge rotation happens about that
+point) rather than a face; Dynamic positioning combined with
+Frame: Workplane, so a nudge rotation happens about that
 anchored axis rather than the part's own default pivot.*
 
 ---

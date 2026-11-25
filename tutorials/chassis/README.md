@@ -4,11 +4,11 @@ This tutorial is based on Lesson 12 of the [Quaoar Workshop Tutorials](https://w
 series, in which a simple chassis example (`chassis.step`) is used to
 explore how parts, components, instances, prototypes, and
 subassemblies are represented in a hierarchical assembly in Open
-Cascade. In this video, Quaoar uses a chalkboard to provide a gentle introduction to how parts and assemblies are arranged hierarchically and the role prototypes play in being able to share instances. However, his code examples are in C++, so if the C++ code presents a barrier to being able to follow along, fear not.
+Cascade.
 
-We will use KodaCAD (built on Python bindings for OpenCascade's OCCT) to explore this assembly, thus benchmarking KodaCAD's abilty to do all the steps in the C++ tutorial.
-
-If `chassis.step` is loaded into KodaCAD as a session, the resulting
+KodaCAD is built on the Open Cascade kernel, so it makes sense to
+benchmark its own ability to construct this chassis exactly. If
+`chassis.step` is loaded into KodaCAD as a session, the resulting
 assembly hierarchy corresponds exactly to the one shown in Quaoar's
 Lesson 12 video.
 
@@ -120,8 +120,8 @@ NurbsConverted) 3D edge.*
 
 ## Step 4 -- Save the session
 
-KodaCAD doesn't have its own native save format -- it depends entirely
-on saving and loading a session as a STEP file.
+**File -> Save Session** writes a `.kcad` file (the 3D model as STEP,
+plus any workplanes); see [Sessions and files](../../docs/concepts/sessions-and-files.md).
 
 *Exercises: STEP save on a from-scratch, multi-level assembly with two
 shared instances.*

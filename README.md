@@ -121,7 +121,7 @@ else works without it.
 Two menu items bring a STEP file in: **File → Load Session** *replaces*
 the whole 3D document with the file, and **File → Import STEP** *adds*
 the file as a new component alongside whatever is open. Both are
-described below under *Saving and loading*.
+described under [Saving and loading](#saving-and-loading).
 
 ### Navigating the view
 
@@ -139,71 +139,20 @@ A middle *click* (no drag) ends the current operation, wherever it lands.
 
 ### Saving and loading
 
-KodaCAD's native session file is a **`.kcad`** file. It is an ordinary
-zip archive holding two things side by side, in the spirit of NumPy's
-`.npz`:
+KodaCAD's native session file is a **`.kcad`** file: a zip holding the 3D
+model (as a standard STEP file) and your workplanes.
 
-```
-mypart.kcad
-  mypart.stp        the 3D model -- a standard STEP file
-  workplanes.json   the workplanes, plain text
-```
+| Menu item | What it does |
+|---|---|
+| **File → Save Session** | Writes a `.kcad` file: the model *and* your workplanes. |
+| **File → Load Session** | Opens a `.kcad` (or plain STEP) file, *replacing* the whole 3D document. |
+| **File → Import STEP** | *Adds* a STEP file as a new component under the current `/`. |
+| **File → Export STEP** | Writes the 3D model alone, as plain STEP, for other CAD programs. |
+| **Save as STEP (at origin)...** (tree right-click) | Writes one assembly or part to its own STEP file, with its frame at the origin. |
 
-The STEP half carries everything a STEP file can: the assembly
-structure, part names, colors, shared instances. The JSON half carries
-what STEP has no place for: each workplane's position in 3D, its
-sketched profile geometry (lines, circles, arcs), its construction
-geometry, which workplanes are hidden, and which one was active. The
-file is plain data -- nothing in it is executed when it loads -- and
-because it is a zip, you can always open it with any archive tool and
-pull out the `.stp` by hand.
-
-**File → Save Session**
-Writes a `.kcad` file holding the model *and* your workplanes. The file
-is written to a temporary name and swapped into place only when
-complete, so a failed save never damages an existing file.
-
-**File → Load Session**
-Opens a `.kcad` file -- or any plain `.stp` / `.step` file with
-assembly structure. *Replaces the entire 3D document* -- whatever was
-open before is gone. The loaded file's own content becomes the session,
-with no wrapping or nesting involved.
-
-What happens to workplanes depends on the file. A `.kcad` file brings
-its own workplanes and replaces the ones on screen. A plain STEP file
-has no workplanes to bring, so it **leaves your current workplanes
-alone** -- handy for loading a part or assembly and sketching on it
-with the workplanes you already have set up.
-
-**File → Export STEP**
-Writes the 3D model alone, as a plain STEP file, for opening in other
-CAD applications or sharing with people who don't use KodaCAD. No
-workplanes are included.
-
-**Save as STEP (at origin)...** (right-click an assembly or part in the
-tree)
-Writes just that assembly or part -- with everything beneath it -- as its
-own STEP file. It is saved with its own frame at the **origin**, however
-far from the origin it sits in your model, so it loads cleanly into
-another session. Shared parts inside it stay shared. The model itself is
-not changed.
-
-**File → Import STEP**
-*Adds* a STEP file as a new component under the current `/`, alongside
-whatever's already open, ready to be positioned and dragged into an
-assembly. This is the one operation that nests a file's content under
-an existing root, so it's the one that needs to guard against a saved
-session's own `/` wrapper getting nested under the current one --
-which it does automatically (see below).
-
-#### What a session does *not* save
-
-- **Undo/Redo history.** Loading starts you with a clean history.
-- **Display-only face colors** (Color Faces...), which are an
-  illustration aid, not part of the model.
-- **A workplane's link to the face it was placed on.** The workplane
-  keeps its position in space; it just no longer remembers which face
-  it came from.
+The details -- what is and is not saved, what happens to workplanes on
+load, and why `/` stays clean through repeated cycles -- are in
+[Sessions and files](docs/concepts/sessions-and-files.md).
 
 #### Undo and Redo apply to the 3D model only
 
@@ -222,27 +171,6 @@ the opposite edit yourself. Since a workplane's state is only stored
 when you save, **Save Session before experimenting** with sketch work
 you might want back -- the `.kcad` file is your safety net for
 workplanes.
-
-#### Why repeated save/load/import cycles stay clean
-
-Save strips any
-redundant `/` wrapper before writing, so a saved file never contains
-one to begin with. Load Session replaces the whole document rather
-than nesting anything, so there's nothing for a wrapper to accumulate
-into. Import STEP is the one path that adds content under an existing
-root, so it explicitly unwraps any `/`-named root in the file being
-imported before adding its children -- composing locations through any
-already-nested legacy wrapper levels in one pass, so even an older
-file saved before this existed unwraps completely on import.
-
-**Note on the tree's own `/` label:** the tree view always shows a `/`
-under the `3D` header, whether or not anything is loaded -- that's
-just the tree's own organizing scaffolding, not part of any document.
-The document's actual root assembly label is *also* named `/` by
-convention (visible in the tree as its child), which is why a
-freshly-built, never-saved session can show what looks like `/` nested
-under `/` -- two different things that happen to share a name, not an
-accumulation bug.
 
 ### Assembly tree
 
@@ -397,11 +325,10 @@ what it exercises in KodaCAD's own code.
 - **[Defeaturing a Part](tutorials/defeaturing/README.md)** --
   demonstrating the ability to remove holes and faces and to extend
   adjacent faces to heal the gap.
-- **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** -- building a simple lofted part then working it over:
-  subtracting one lofted part from another, a transverse hole, fillets,
-  and finally defeaturing to take the fillets back off. (Loft can also
-  cut the hollow section directly; the tutorial shows the subtraction
-  route, which is still useful for odd shapes.)
+- **[Lofting a Hollow Part Through a Workplane Set](tutorials/lofting/README.md)** -- building a simple hollow lofted part (outer and inner profiles on each
+  workplane) then working it over: a transverse hole, fillets, and
+  finally defeaturing to take the fillets back off; plus building a
+  Workplane Set from existing workplanes and lofting onto an existing part.
 - **[Moving Faces](tutorials/move-face/README.md)** --
   pushing and pulling the faces of an imported L-bracket (`L-brkt.stp`)
   with a live preview: thickening a wall, opening up a slot, widening
@@ -409,6 +336,10 @@ what it exercises in KodaCAD's own code.
   OpenCascade cannot build an offset -- the red "suspect" faces, and
   Defeaturing to fix them.
   
+
+**Looking for how something works?** The [documentation index](docs/INDEX.md)
+lists the tutorials, the one-page explanations of key ideas, and the
+reference notes.
 
 ## Tested workflows
 
@@ -483,7 +414,12 @@ kodacad2/
                       small diagnostic scripts (not needed to run KodaCAD)
   src/                small label / location checking scripts
   TODO.md             broken items + future ideas
+  tools/
+    check_docs.py       checks the Markdown docs (links, layering, stale phrases)
   docs/
+    INDEX.md            where to find everything
+    concepts/           one page per idea (how it works)
+    WRITING_DOCS.md     rules for keeping the docs tidy
     DEVELOPMENT_LOG.md  development history, newest entries last
     MECHANISMS.md       how Animate Mechanism works; writing a mechanism file
     PICKING_ARCHITECTURE.md  the two picking pipelines
