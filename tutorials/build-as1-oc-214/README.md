@@ -65,8 +65,8 @@ nested into each other.*
   * Choose method **Mate Align**.
     1. Constraint **Mate** -- click the bottom face of the bracket,
        then the top face of the plate.
-    2. Constraint **Align Axis** -- click the cylindrical face of one
-       of the holes in the bracket, then the cylindrical face of the
+    2. Constraint **Align Axis** -- click the cylindrical edge of one
+       of the holes in the bracket, then the cylindrical edge of the
        corresponding hole in the plate.
     3. Constraint **Align** (a third constraint, not always strictly
        needed) -- click the bracket's back (vertical) face, then the
@@ -169,10 +169,8 @@ instance rather than a single component.*
 ![L-brkt-asy_2 mid-rotation](imgs/b12.png)
 ![L-brkt-asy_2 in its final position](imgs/b9.png)
 
-*Exercises: workplane-on-face combined with the Dynamic page's
-Frame: Workplane option, so a nudge rotation happens about a specific, meaningful
-axis (through the plate's center) rather than the part's own default
-pivot.*
+*Exercises: workplane-on-face combined with the Dynamic page's Frame: Workplane option, so a nudge rotation happens about a specific,
+meaningful axis (through the plate's center) rather than the part's own default pivot.*
 
 ## Step 8 -- Create the rod assembly
 
