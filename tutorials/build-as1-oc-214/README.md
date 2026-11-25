@@ -79,6 +79,15 @@ sequence -- Mate, then Align Axis, then Align. Align Axis is valid
 here as the second constraint applied (it can be first or second, but
 never the last of the three).*
 
+> **What Align Axis lets you pick depends on where it falls in the
+> sequence.** As the **second** constraint (this step), one rotation
+> is already fixed by the Mate, so Align Axis only needs to know where
+> the holes are: you pick circular **edges** -- the rim of a hole. As
+> the **first** constraint (Step 4), nothing is fixed yet, so it needs
+> the whole axis line: you pick **cylindrical faces** -- a bolt shaft
+> or the wall of a hole. If you can't highlight what you're aiming at,
+> check which of the two cases you are in.
+
 ## Step 4 -- Position the bolt and nut
 
 * Hide the rod first, to make the bolt easier to pick.
@@ -86,7 +95,8 @@ never the last of the three).*
   * Choose method **Mate Align**.
     1. Constraint **Align Axis** -- click the bolt's cylindrical
        face, then the cylindrical surface of the target hole in the
-       L-bracket.
+       L-bracket. (Faces here, not edges: Align Axis is the first
+       constraint this time -- see the note at the end of Step 3.)
     2. Constraint **Mate** -- click the underside of the bolt head,
        then the top face of the plate.
     3. Click **✔** (Done).

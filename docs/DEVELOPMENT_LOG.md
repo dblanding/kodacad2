@@ -7759,3 +7759,8 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 - Stale text fixed: chassis Step 4, as1-oc-214 intro and Step 1 exercise paragraph, OCC bottle Step 12 (Export STEP, then Load Session); README lofting blurb and File structure.
 - Corrections after Doug's review: TESTING_CHECKLIST wrongly said an edit to a part in one import of a file shows in a second import of the same file (each import brings its own prototypes; sharing is only within one file) -- fixed. OCC bottle Step 12 now uses Save Session (.kcad, keeps workplanes). check_docs.py now finds retired phrases wrapped across lines, which exposed two more stale passages (checklist Undo/Redo list, lathe exercises) -- fixed. It still cannot catch a new sentence that is simply wrong.
 - Candidate next concept pages: Undo/Redo scope (README section), workplanes and sets, active part, Booleans and guard rails, Position frames, units.
+
+## 2026-11-25
+
+### build-as1-oc-214: Align Axis pick types (Doug)
+- Doug found that Align Axis as the second constraint (Step 3) accepts only circular edges, not faces, while as the first constraint (Step 4) it accepts cylindrical faces. This is by design (position_dialog.py, Sessions 35-36): the chained pin step uses edge picking ("pick a hole on the moving part"); standalone Align Axis uses face picking ("pick a cylindrical face..."). Tutorial text corrected by Doug (faces -> edges in Step 3); a note explaining the difference added at the end of Step 3, with a pointer from Step 4.
