@@ -61,14 +61,59 @@ def read_shape():
     return shape, faces
 
 
+def _flatten(shape):  # FLATTEN-S182
+    """STEP round trip: bakes every sub-shape location into the geometry."""
+    import shutil
+    import tempfile
+    from OCP.STEPControl import (STEPControl_AsIs, STEPControl_Reader,
+                                 STEPControl_Writer)
+    td = tempfile.mkdtemp(prefix="kodacad_flat_")
+    try:
+        fp = os.path.join(td, "flat.stp")
+        w = STEPControl_Writer()
+        w.Transfer(shape, STEPControl_AsIs)
+        w.Write(fp)
+        r = STEPControl_Reader()
+        r.ReadFile(fp)
+        r.TransferRoots()
+        return r.OneShape()
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _same_face_in(shape, face):  # FLATTEN-S182
+    """The face of `shape` with the same area and centre as `face`, or
+    None if there is none or more than one."""
+    def key(f):
+        p = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(f, p)
+        c = p.CentreOfMass()
+        return p.Mass(), c.X(), c.Y(), c.Z()
+    a, x, y, z = key(face)
+    best = None
+    ex = TopExp_Explorer(shape, TopAbs_FACE)
+    while ex.More():
+        f = TopoDS.Face_s(ex.Current())
+        m, fx, fy, fz = key(f)
+        if (abs(m - a) <= 1e-6 * max(a, 1.0) + 1e-6
+                and abs(fx - x) < 1e-4 and abs(fy - y) < 1e-4
+                and abs(fz - z) < 1e-4):
+            if best is not None:
+                return None
+            best = f
+        ex.Next()
+    return best
+
+
 def try_offsets(shape, faces, idx, value, tol0):
     """Offset attempts in order of increasing desperation; returns
     (result_or_None, done, label). Session 161: the wheel's top face
     returned a NULL result on a plain attempt, so retry with looser/
     tighter tolerances and on a ShapeFix_Shape-healed copy."""
-    tries = [("tol", tol0), ("tol", 1.0e-3), ("tol", 1.0e-5),
-             ("healed", tol0), ("healed", 1.0e-3)]
+    tries = [("tol", tol0), ("flat", tol0), ("tol", 1.0e-3),
+             ("tol", 1.0e-5), ("healed", tol0), ("healed", 1.0e-3)]
     healed = None
+    flat = None
     any_done = False
     for kind, tol in tries:
         s, fs = shape, faces
@@ -86,11 +131,27 @@ def try_offsets(shape, faces, idx, value, tol0):
                 print(f"[offset] heal attempt skipped: {e}",
                       file=sys.stderr, flush=True)
                 continue
+        elif kind == "flat":  # FLATTEN-S182
+            try:
+                if flat is None:
+                    fshape = _flatten(shape)
+                    flat = (fshape, {i: _same_face_in(fshape, faces[i])
+                                     for i in idx})
+                s, fs = flat
+                if any(f is None for f in fs.values()):
+                    print("[offset] flat attempt skipped: picked face not "
+                          "found after the round trip",
+                          file=sys.stderr, flush=True)
+                    continue
+            except Exception as e:
+                print(f"[offset] flat attempt skipped: {e}",
+                      file=sys.stderr, flush=True)
+                continue
         mk = BRepOffset_MakeOffset()
         mk.Initialize(s, 0.0, tol, BRepOffset_Skin, False, False,
                       GeomAbs_Intersection, False, False)
         for i in idx:
-            mk.SetOffsetOnFace(fs[i] if kind == "healed" else faces[i],
+            mk.SetOffsetOnFace(fs[i] if kind != "tol" else faces[i],
                                value)
         mk.MakeOffsetShape()
         done = bool(mk.IsDone())

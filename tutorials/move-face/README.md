@@ -235,6 +235,35 @@ slot too. Undo it (Ctrl+Z) if you want the thickness back.
 
 *Exercises: negative distance on a large face; the volume read-out.*
 
+## Step 7 -- A face tangent to others moves its neighbours
+
+![Tangent skin](imgs/s6preview.png)
+
+The top of the upright is semicircular. Click that large curved face and
+type **3**. This time many faces turn **yellow**: **5 more face(s) will
+move with them**. The curved top is tangent to the flat sides of the
+upright, which are tangent to the rounded corners of the base and to its
+end face. They are all one smooth skin, and OpenCascade's offset treats the
+whole skin as one thing: **move any one face of it and they all move**.
+(Clicking the end face of the base instead picks the same skin.)
+
+That is why Move Face shows the yellow faces before you commit. If the
+answer is not what you intended, press **Clear Picks**, or Ctrl+click
+the face to unpick it, and nothing changes. If you do want a part of a
+tangent skin to move by itself, remove the blends first with
+**Defeaturing**, move the face, and put the blends back (with Fillet).
+
+Look at the outside of the upright in the ghost. The two countersunk holes
+that Step 4 did not remove are still there, and the preview leaves them as
+they are. Step 4 removed the four countersinks that cut into the slot;
+these two are not in the way of this move.
+
+Do not Apply here, or undo it.
+
+*Exercises: tangent chains; why yellow faces matter.*
+
+---
+
 ## Limits
 
 - **Faces bounded by fillets (blends).** Move Face is not for these: the
@@ -243,12 +272,6 @@ slot too. Undo it (Ctrl+Z) if you want the thickness back.
 - **A failed preview means this offset failed.** The dialog says so and
   marks the suspect faces red. Trying a different distance sometimes
   helps. Removing the red faces usually does.
-- **Tangent faces move together.** A face that meets a picked face
-  tangentially (yellow) moves with it, so a rounded corner or a slot end
-  cannot be moved on its own; remove the blends first (Defeaturing), move
-  the face, then re-fillet. The preview shows the yellow faces before you
-  commit. On this bracket, moving the end face of the base (a tangent
-  chain) currently gives no preview.
 - **The part must be one solid.** A part with several solids is not
   previewed.
 
@@ -275,6 +298,12 @@ slot too. Undo it (Ctrl+Z) if you want the thickness back.
   a 2.7 mm leftover chamfer facet. The dialog's red "suspect" faces find
   faces that are very narrow or touch a very short edge. That is a good
   guide, but not a proof: the red faces are where to start looking.
+- **A live part can fail where the same part works after Save and Load.**
+  Parts that went through earlier moves can carry placement locations on
+  their faces and edges, and `BRepOffset_MakeOffset` then returned a null
+  shape with no error. A STEP round trip removes them, so when the plain
+  attempt fails the preview server retries once on a round-tripped copy
+  (`flat` in the log). Why only some shapes fail is not fully understood.
 - **Yellow faces are an estimate.** They are our own tangency test,
   computed from the face normals along each shared edge (a stored
   continuity flag is not trusted, since Defeaturing and some STEP files
