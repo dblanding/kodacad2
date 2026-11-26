@@ -166,16 +166,15 @@ Select `bearing-block-asy_3`, then **Position -> Part/Asy**.
 * Choose method **Dynamic**.
 * Set **Frame** to **Workplane** -- the gizmo gets relocated from its
   default location to the origin of the active workplane.
-* Enter `180` in the **rY** field, then **Apply Nudge** to preview the
+* Enter `180` in the **rV°** field, then **Apply Nudge** to preview the
   rotation.
 * If it looks wrong, **Back** and try again; if it looks right,
   continue.
 
 ![Dynamic Nudge](imgs/nudge.png)
 
-After the nudge, the manipulator resets to its default position and
-orientation. Use one of its handles to move the part in Y, toward the
-center of the assembly, then click **✔** (Done) to commit.
+After the nudge, use the green handle on the manipulator to move the part
+in Y, toward the center of the assembly, then click **✔** (Done) to commit.
 
 ![Move complete](imgs/bb3-moved.png)
 
