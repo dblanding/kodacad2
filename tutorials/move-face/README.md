@@ -206,14 +206,16 @@ closely).
 ![Preview: four holes, one dropped](imgs/s4.png)
 
 Magenta rings appear in the three holes that will change. The hole you
-unpicked is left alone. Click **✔** (Apply).
+unpicked is left alone. The dialog reports the volume change. Each picked
+hole would become 0.7 mm wider in diameter (0.35 mm on each side).
 
-![Applied](imgs/s4b.png)
-
-Each picked hole is now 0.7 mm wider in diameter (0.35 mm on each side).
+**Do not click Apply here.** This step is a preview, to show how several
+faces move at once. Press **Clear Picks** instead. (Applying it can make
+OpenCascade refuse the offset in Step 6, even though the holes are far
+from that face. If you did apply it, press **Ctrl+Z** once.)
 
 *Exercises: box select; Ctrl+click to unpick; moving several faces with
-one distance.*
+one distance (previewed, not applied).*
 
 ## Step 6 -- Remove material from a face
 
@@ -221,7 +223,10 @@ one distance.*
 
 Rotate to the outside of the upright, the face with the six holes and the
 slot. Click it and type **-1**. The magenta lines show the new, thinner
-outline, and the volume is **-1410 mm³**. Click **✔** (Apply).
+outline. Click **✔** (Apply).
+
+> If the dialog says *No preview*, check that you did not Apply the hole
+> change in Step 5; if you did, press **Ctrl+Z** and try again.
 
 ![Applied](imgs/s5apply.png)
 
@@ -229,30 +234,6 @@ The upright is 1 mm thinner. Any hole through it is 1 mm shorter, and the
 slot too. Undo it (Ctrl+Z) if you want the thickness back.
 
 *Exercises: negative distance on a large face; the volume read-out.*
-
-## Step 7 -- A face tangent to others moves its neighbours
-
-![Tangent skin](imgs/s6preview.png)
-
-The base has rounded corners, and the end of the upright is round too.
-Click the end face of the base and type **3**. This time many faces turn
-**yellow**: **5 more face(s) will move with them**. The end face is
-tangent to the rounded corners, which are tangent to the side faces and to
-the rim of the upright. They are all one smooth skin, and OpenCascade's
-offset treats the whole skin as one thing: **move any one face of it and
-they all move**.
-
-That is why Move Face shows the yellow faces before you commit. If the
-answer is not what you intended, press **Clear Picks**, or Ctrl+click
-the face to unpick it, and nothing changes. If you do want a part of a
-tangent skin to move by itself, remove the blends first with
-**Defeaturing**, move the face, and put the blends back (with Fillet).
-
-Do not Apply here, or undo it.
-
-*Exercises: tangent chains; why yellow faces matter.*
-
----
 
 ## Limits
 
@@ -262,6 +243,12 @@ Do not Apply here, or undo it.
 - **A failed preview means this offset failed.** The dialog says so and
   marks the suspect faces red. Trying a different distance sometimes
   helps. Removing the red faces usually does.
+- **Tangent faces move together.** A face that meets a picked face
+  tangentially (yellow) moves with it, so a rounded corner or a slot end
+  cannot be moved on its own; remove the blends first (Defeaturing), move
+  the face, then re-fillet. The preview shows the yellow faces before you
+  commit. On this bracket, moving the end face of the base (a tangent
+  chain) currently gives no preview.
 - **The part must be one solid.** A part with several solids is not
   previewed.
 

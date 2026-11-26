@@ -7764,3 +7764,16 @@ Doug built the American S-20 crane and took twelve unordered notes. Agreed first
 
 ### build-as1-oc-214: Align Axis pick types (Doug)
 - Doug found that Align Axis as the second constraint (Step 3) accepts only circular edges, not faces, while as the first constraint (Step 4) it accepts cylindrical faces. This is by design (position_dialog.py, Sessions 35-36): the chained pin step uses edge picking ("pick a hole on the moving part"); standalone Align Axis uses face picking ("pick a cylindrical face..."). Tutorial text corrected by Doug (faces -> edges in Step 3); a note explaining the difference added at the end of Step 3, with a pointer from Step 4.
+
+## 2026-11-26
+
+### move-face tutorial: Step 6 fails after Step 5's hole change (Doug)
+- Doug's Step 6 (-1 on the outside face) failed: every offset attempt (three tolerances, plain and healed) ended with a NULL result and the dialog showed no red suspect faces. Doug found that undoing the Step 5 hole change (the +/-0.35 on base holes) makes Step 6 work. (He had also left three of the four holes unpicked in Step 5, where the tutorial unpicks one, so his part differed from the tutorial's.) The offset code has not changed since 2026-11-06, so it is not a regression.
+- First guess (wrong): the Step 4 +1 mm slot-narrowing preview had been applied. Not the cause; the "do not Apply" paragraph that guess produced was removed from Step 4.
+- Decision (Doug): Step 5 (open up the base holes by 0.35 mm) becomes preview-only -- "Do not click Apply here", Clear Picks instead -- so Step 6 works on the part as it stands. The Applied screenshot imgs/s4b.png is no longer referenced (git rm when convenient). Step 6 keeps a two-line note: if there is no preview, check that Step 5 was not applied; Ctrl+Z if it was.
+- Cause not understood: OpenCascade's whole-part offset refuses the upright's face after the base holes change, although they are far from it. Possible follow-up for the offset / move-face-to-congruence work.
+
+### move-face tutorial: Step 7 (tangent skin) removed (Doug)
+- Step 7 (move the end face of the base by +3; many yellow faces) gave "No preview" with two red suspect faces (the two remaining countersinks on the upright, smallest size 1.41 mm) even with Step 5 not applied. Rather than keep patching the tutorial around a fragile Move Face, Doug decided to delete Step 7 and return to it once the offset fragility is understood. The tangent-skin lesson survives as a "Tangent faces move together" bullet under Limits (it notes this case currently gives no preview). Unused now: imgs/s6preview.png.
+- Doug also removed the volume figure from Step 6 (it did not agree with the dialog's value).
+- For the fragility work: the dialog's own advice here was to fix the two red countersinks with Defeaturing; untested whether that makes Step 7 work. Four countersinks were already removed in Step 4, which is the same "clips its neighbour" pattern. Together with the Step 5/6 interaction, this suggests the whole-part offset needs a more local approach (offset only the picked face and its tangent neighbours, then rebuild), or a move-into-congruence method that does not use BRepOffset at all.
