@@ -256,7 +256,7 @@ mentions "Done"/"Nudge" buttons means those icons/controls.)
       root, stays there after later deletes, and the terminal prints a
       `[reparent]` line.
 - [ ] MMB drag in the outer ring of the viewport spins the view about the
-      line of sight; Utility -> Level View puts Z up.
+      line of sight; RMB menu -> Level View (Z up) puts Z up.
 - [ ] Animate Mechanism: `crane_lift.py` plays; Export video... makes an
       .mp4 (needs ffmpeg).
 

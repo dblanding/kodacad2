@@ -132,8 +132,7 @@ described under [Saving and loading](#saving-and-loading).
 | **Shift + MMB drag** | zoom |
 | **MMB drag near the edge** of the viewport (the outer ring) | spin the view about the line of sight, like turning a map |
 | **LMB click** / **LMB drag** | select / box-select |
-| **RMB click** | fit everything in the window |
-| **Utility → Level View (Z up)** | roll the view so the model's Z axis points up the screen again |
+| **RMB click** | opens the viewport menu: **Fit** fits everything in the window; **Level View (Z up)** rolls the view so the model's Z axis points up the screen again |
 
 A middle *click* (no drag) ends the current operation, wherever it lands.
 

@@ -2822,7 +2822,7 @@ class MainWindow(QMainWindow):
         self.canvas._display.FitAll()
 
     def levelView(self):
-        """Utility -> Level View: roll the view so world Z is up on
+        """Viewport RMB menu -> Level View: roll the view so world Z is up on
         screen (Session 181)."""
         if self.canvas.level_view():
             self.statusBar().showMessage("View leveled (Z up).", 4000)
