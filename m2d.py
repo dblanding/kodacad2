@@ -1281,6 +1281,10 @@ class M2D:
             self.win.statusBar().showMessage(
                 "Parallel cline created. Pick a straight element "
                 "(same offset) or enter a new offset distance")
+            # the click that just created the line gave the focus to
+            # the viewport; hand it back so a typed offset goes to the
+            # line edit (same fix as _catch_pt, Session 63)
+            self.win.lineEdit.setFocus()
         else:  # mode 2: through a CATCH point
             p = self._catch_pt(args)
             if p is None:
@@ -1294,6 +1298,7 @@ class M2D:
             self.win.draw_wp(self.win.activeWpUID)
             self.win.statusBar().showMessage(
                 "Pick a straight element or enter an offset distance")
+            self.win.lineEdit.setFocus()
 
     # ---- Perpendicular construction line (pyurcad perpcl) ----
 
