@@ -3150,22 +3150,6 @@ def printInSync():
     print(win.inSync())
 
 
-def setUnits_in():
-    win.setUnits("in")
-
-
-def setUnits_mm():
-    win.setUnits("mm")
-
-
-def setUnits_ft():
-    win.setUnits("ft")
-
-
-def setUnits_m():
-    win.setUnits("m")
-
-
 def _visible_bbox():
     """Bnd_Box of every part that is actually SHOWN (not hidden in the
     tree). Session 179 (Doug, note #9): this used to loop over all of
@@ -3985,10 +3969,6 @@ if __name__ == "__main__":
     win.add_function_to_menu(
         "Utility", "Clear Line Edit Stack", win.clearLEStack)
     win.add_function_to_menu("Utility", "Calculator", win.launchCalc)
-    win.add_function_to_menu("Utility", "set Units ->in", setUnits_in)
-    win.add_function_to_menu("Utility", "set Units ->mm", setUnits_mm)
-    win.add_function_to_menu("Utility", "set Units ->ft", setUnits_ft)
-    win.add_function_to_menu("Utility", "set Units ->m", setUnits_m)
 
     # Session 179 (Doug): the View Cube now covers the view directions,
     # so the RMB menu starts with 'Fit' (no 'Draw' submenu).

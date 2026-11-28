@@ -259,8 +259,8 @@ is empty at the start of each session.
 
 ### Units
 
-**Utility -> set Units** switches between inches, millimeters, feet and
-meters (the status bar shows the current choice). Everything is held in
+The **Units** button at the right of the status bar shows the current
+units; click it to switch between millimeters, inches, feet and meters. Everything is held in
 millimeters internally; typed distances, measurements and the Move Face
 distance are converted. Pick feet or meters for large models; the
 workplane label stays a sensible size at any scale.

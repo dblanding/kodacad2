@@ -9,7 +9,7 @@
 from collections import defaultdict
 import logging
 from PySide6.QtCore import Qt, QPersistentModelIndex, QModelIndex, Signal
-from PySide6.QtGui import QAction, QBrush, QColor
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -597,9 +597,30 @@ class MainWindow(QMainWindow):
         self._unitDict = {"mm": 1.0, "in": 25.4, "ft": 304.8, "m": 1000.0}
         self.units = "mm"
         self.unitscale = self._unitDict[self.units]
-        self.unitsLabel = QLabel()
-        self.unitsLabel.setText("Units: %s " % self.units)
-        self.unitsLabel.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        # The status-bar Units box is a button: it shows the current
+        # units and drops down a menu to change them (Doug, Nov 27;
+        # replaces Utility -> set Units).
+        self.unitsButton = QToolButton()
+        self.unitsButton.setPopupMode(QToolButton.InstantPopup)
+        self.unitsButton.setToolTip("Click to change the units")
+        self.unitsMenu = QMenu(self.unitsButton)
+        self.unitsGroup = QActionGroup(self)
+        self.unitsGroup.setExclusive(True)
+        for _u, _name in (("mm", "Millimeters (mm)"),
+                          ("in", "Inches (in)"),
+                          ("ft", "Feet (ft)"),
+                          ("m", "Meters (m)")):
+            _act = QAction(_name, self)
+            _act.setMenuRole(QAction.NoRole)
+            _act.setCheckable(True)
+            _act.setData(_u)
+            _act.setChecked(_u == self.units)
+            _act.triggered.connect(
+                lambda _checked=False, u=_u: self.setUnits(u))
+            self.unitsGroup.addAction(_act)
+            self.unitsMenu.addAction(_act)
+        self.unitsButton.setMenu(self.unitsMenu)
+        self.unitsButton.setText("Units: %s " % self.units)
 
         self.endOpButton = QToolButton()
         self.endOpButton.setText("End Operation")
@@ -628,7 +649,7 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.lineEdit)
         status.addPermanentWidget(self.currOpLabel)
         status.addPermanentWidget(self.endOpButton)
-        status.addPermanentWidget(self.unitsLabel)
+        status.addPermanentWidget(self.unitsButton)
         # Session 173: the 'pen' -- a color picked up from a part
         # (RMB 'Take Color as Pen') that 'Paint with Pen Color' applies.
         self.penColor = None
@@ -3784,7 +3805,9 @@ class MainWindow(QMainWindow):
         if units in self._unitDict.keys():
             self.units = units
             self.unitscale = self._unitDict[self.units]
-            self.unitsLabel.setText("Units: %s " % self.units)
+            self.unitsButton.setText("Units: %s " % self.units)
+            for _a in self.unitsGroup.actions():
+                _a.setChecked(_a.data() == self.units)
 
     def _clear_pick_highlight(self):
         """Clear the OCCT selection highlight (Session 74, Doug's

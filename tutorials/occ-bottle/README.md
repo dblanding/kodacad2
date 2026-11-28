@@ -127,7 +127,7 @@ catching.*
     * Operation: Add Material
     * Mode: Linear
     * Distance: 70 (typed in the current units; this tutorial assumes
-      **mm** -- see **Utility -> set Units**)
+      **mm** -- see the **Units** button on the status bar)
 * Click **✔** (Done)
 * Clicking a corner of the ViewCube in the viewport switches to an
 isometric view.
